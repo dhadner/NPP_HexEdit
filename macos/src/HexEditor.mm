@@ -62,30 +62,54 @@ static NSDictionary<NSString *, NSString *> *hexLoadStringsForLanguage(NSString 
     return [NSDictionary dictionaryWithContentsOfURL:[NSURL fileURLWithPath:path]];
 }
 
-static NSDictionary<NSString *, NSString *> *hexActiveStrings()
+// Build the ORDERED chain of strings dictionaries L() will consult per key, most
+// specific first. A regional variant file (e.g. Localizable.en-GB.strings) only
+// needs to override the keys whose spelling/wording differs from the generic
+// language file (e.g. Localizable.en.strings) — every key it omits cascades
+// down to en, then to the embedded English defaults.
+//
+// Example with `en-GB` preferred:
+//   1. Localizable.en-GB.strings        ← override layer (might contain only
+//                                         "compare.summaryDifferPlural" with
+//                                         "%d bytes differ. (Use Clear …)")
+//   2. Localizable.en.strings           ← canonical English (US-style spellings)
+//   3. embedded English defaults        ← last-resort safety net
+//
+// Without the chain, a partial en-GB file would orphan every non-overridden key
+// (they'd skip en.strings entirely and land on the embedded defaults), defeating
+// the point of regional variants.
+static NSArray<NSDictionary<NSString *, NSString *> *> *hexActiveStringsChain()
 {
-    static NSDictionary<NSString *, NSString *> *cached = nil;
+    static NSArray<NSDictionary<NSString *, NSString *> *> *cached = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
+        NSMutableArray *chain = [NSMutableArray array];
+        NSMutableSet<NSString *> *seen = [NSMutableSet set];
         for (NSString *raw in [NSLocale preferredLanguages]) {
-            // Try the exact tag first ("de-DE"), then the bare language code ("de").
-            NSDictionary *exact = hexLoadStringsForLanguage(raw);
-            if (exact != nil && exact.count > 0) {
-                cached = exact;
-                return;
-            }
-            NSString *base = [raw componentsSeparatedByString:@"-"].firstObject;
-            if (base != nil && ![base isEqualToString:raw]) {
-                NSDictionary *fallback = hexLoadStringsForLanguage(base);
-                if (fallback != nil && fallback.count > 0) {
-                    cached = fallback;
-                    return;
+            // For each preferred language we add (in order) the exact tag and its
+            // base language code, so e.g. "en-GB" pulls both en-GB and en into
+            // the chain — en-GB on top, en immediately below.
+            for (NSString *tag in @[ raw, [raw componentsSeparatedByString:@"-"].firstObject ?: @"" ]) {
+                if (tag.length == 0 || [seen containsObject:tag]) {
+                    continue;
+                }
+                [seen addObject:tag];
+                NSDictionary *layer = hexLoadStringsForLanguage(tag);
+                if (layer != nil && layer.count > 0) {
+                    [chain addObject:layer];
                 }
             }
         }
-        // Final fallback: explicit English file. If even that is missing the
-        // embedded English defaults below carry the UI.
-        cached = hexLoadStringsForLanguage(@"en");
+        // Final layer: explicit English file. Already covered above when "en"
+        // is in preferredLanguages, but ensure the chain always falls through to
+        // it even on locales like "fr-CA" that never reach English directly.
+        if (![seen containsObject:@"en"]) {
+            NSDictionary *en = hexLoadStringsForLanguage(@"en");
+            if (en != nil && en.count > 0) {
+                [chain addObject:en];
+            }
+        }
+        cached = [chain copy];
     });
     return cached;
 }
@@ -254,15 +278,19 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
     return defaults;
 }
 
-// Look up a localized string by key, falling back to the embedded English default
-// if the active strings file doesn't contain the key. Returns the key itself only
-// as a last-resort safety so a missing-from-everywhere key is visible during dev.
+// Look up a localized string by walking the chain of strings layers. The first
+// layer that contains a non-empty value for the key wins. Layers are ordered from
+// most specific (e.g. en-GB) to most general (en); the embedded English defaults
+// are the final fallback so a missing key is never user-visible. Returns the key
+// itself only when nothing in the chain or defaults has it — that case shows up
+// as a literal "menu.context.foo" string in the UI, intentional dev signal.
 static NSString *L(NSString *key)
 {
-    NSDictionary *active = hexActiveStrings();
-    NSString *value = active[key];
-    if (value != nil && value.length > 0) {
-        return value;
+    for (NSDictionary<NSString *, NSString *> *layer in hexActiveStringsChain()) {
+        NSString *value = layer[key];
+        if (value != nil && value.length > 0) {
+            return value;
+        }
     }
     NSString *fallback = hexEnglishDefaults()[key];
     return fallback != nil ? fallback : key;

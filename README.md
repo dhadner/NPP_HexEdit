@@ -45,14 +45,43 @@ pass `-DNPP_MACOS_DIR=/absolute/path/to/notepad-plus-plus-macos` when configurin
 
 ## Adding a language
 
-Copy `macos/resources/Localizable.en.strings` to `Localizable.<lang>.strings`, translate the
-right-hand sides, register the new file in `macos/CMakeLists.txt`, and reinstall. The plugin
-matches the user's preferred languages (`[NSLocale preferredLanguages]`) against the shipped
-files in order — exact tag (`de-DE`) → language code (`de`) → English fallback. If no file
-matches, the embedded English defaults render the UI.
+The plugin reads `Localizable.<lang>.strings` files installed alongside the dylib. Tags follow
+[BCP 47](https://datatracker.ietf.org/doc/html/rfc5646) — `de`, `de-AT`, `en-GB`, `zh-Hans`, etc.
 
-Supported tests of the localization path can be exercised by running Notepad++ macOS with a
-language argument: `Notepad++.app/Contents/MacOS/Notepad++ -AppleLanguages '(de)'`.
+**Full translation.** Copy `macos/resources/Localizable.en.strings` to
+`Localizable.<lang>.strings`, translate every right-hand side, then register the new file
+in `macos/CMakeLists.txt`'s `HEX_LOCALIZATION_FILES` list and reinstall.
+
+**Regional override (e.g. en-US vs en-GB).** Create
+`Localizable.en-GB.strings` containing **only** the keys whose value differs from
+`Localizable.en.strings` — for example, anywhere we say "color" you might say "colour".
+The lookup walks layers most-specific → most-general, so every key the override file
+omits cascades to the base language file, then to the embedded English defaults. No need
+to mirror keys you're not changing.
+
+```text
+/* Localizable.en-GB.strings — only the overrides */
+"compare.summaryDifferPlural" = "%d bytes differ. (Use Clear Compare Result to remove the highlight.)";
+```
+
+**Selection.** The plugin consults `[NSLocale preferredLanguages]` in order. For each
+preferred language it checks the exact tag *and* its base code. Example with the user's
+preferred languages set to `["en-GB", "de"]`:
+
+| Layer | Source |
+| --- | --- |
+| 1 | `Localizable.en-GB.strings` (overrides only) |
+| 2 | `Localizable.en.strings` (the base English) |
+| 3 | `Localizable.de.strings` (only used for keys missing from layers 1 + 2) |
+| 4 | embedded English defaults compiled into the dylib |
+
+To force a specific language for testing or a one-off run, launch Notepad++ macOS with
+the AppleLanguages argument:
+
+```sh
+Notepad++.app/Contents/MacOS/Notepad++ -AppleLanguages '(de)'
+Notepad++.app/Contents/MacOS/Notepad++ -AppleLanguages '(en-GB)'
+```
 
 ## Tests
 
