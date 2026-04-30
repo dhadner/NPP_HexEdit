@@ -2,7 +2,49 @@
 
 This file tracks the macOS port of the HEX-Editor plugin against the original Windows baseline preserved in [HexEditor/](HexEditor/). The Windows plugin's own historical change log lives at [HexEditor/change.log](HexEditor/change.log) and is unchanged by the porting work.
 
-## macOS port — in progress
+## v1.0.0 — first macOS release
+
+First public release of the native macOS port. Ships as `HexEditor.dylib` for [Notepad++ macOS](https://github.com/notepad-plus-plus-macos), with English and German localization, dark-mode-aware semantic colours, and feature parity with the Windows plugin's plugin-menu surface (View in HEX, Compare HEX, Clear Compare Result, Insert Columns, Pattern Replace, Help).
+
+### What works
+
+- **Hex view** — inline `NSTableView` overlay swaps the active Scintilla view for an offset / hex bytes / ASCII grid with direct overwrite + append editing, range selection across both panes, bookmark toggling on the offset gutter, and Cmd+Home / Cmd+End navigation to document edges.
+- **Clipboard** — Cut / Copy / Paste / Delete with Windows-faithful semantics (Copy emits lowercase `de ad be ef` text, Copy Binary emits raw bytes; Paste auto-detects). Edit menu integration via responder-chain routing.
+- **View modes** — 8/16/32/64-bit grouping, hex / binary notation, big / little-endian display, configurable address width (4–16 digits) and columns (1..128/bpc). Bit-precise editing in binary notation. Display-order arrow-key navigation in little-endian and multi-byte modes. All settings persist via `NSUserDefaults` suite `org.notepad-plus-plus.HexEditor`.
+- **Search** — Find (Cmd+F), Find and Replace (Cmd+Alt+F), Find Next (Cmd+G), Find Previous (Cmd+Shift+G). Auto-detects ASCII vs hex byte patterns; match-case (ASCII only) and wrap-around toggles persist. Replace All wraps in a single Scintilla undo group.
+- **Navigation** — Go to Offset (Cmd+L) accepts decimal, `0x`-prefixed hex, and relative `+`/`-` offsets with underscore / comma separators.
+- **Compare** — pick any file via the system Open panel; differing bytes highlight in red; Clear Compare Result drops the mask.
+- **Pattern editing** — Insert Columns (inject a repeating hex pattern into every row at a chosen column position) and Pattern Replace (fill a selection with a repeating pattern). Both apply as one undo group.
+- **Localization** — English (`Localizable.en.strings`) and German (`Localizable.de.strings`) shipped. New languages plug in by adding a `Localizable.<lang>.strings` file. `[NSLocale preferredLanguages]` selects the active file at startup.
+- **Appearance** — semantic `NSColor` values (`unemphasizedSelectedContentBackgroundColor`, `selectedContentBackgroundColor`, `systemRedColor`) auto-flip in dark mode and follow the user's accent colour. The plugin inherits the host's font and theme; there is no Options dialog (the host owns appearance).
+
+### Tests
+
+Three tiers, all green at release:
+
+- **HexCore unit tests** — 24 suites, ~700 assertions covering cursor math, edit planners, clipboard format/parse helpers, view-mode mappings, byte-pattern search, byte-diff computation, and localization-independent logic. Run via `ctest -L unit`.
+- **Plugin smoke** — `dlopen`s the dylib, asserts the 5 NPP exports, the `getName()` value, and the 6 `funcItem` entries with English titles. Forces `AppleLanguages = en` so the assertions stay valid on any locale. Run via `ctest -L smoke`.
+- **XCTest UI** — 25 cases against the running Notepad++.app: hex-toggle, undo/redo, append-at-EOF, cut/copy/paste round-trips, view-submode rendering, dialog flows for Find / Find-Replace / Goto / Address Width / Columns / Insert Columns / Pattern Replace / Compare HEX, bit-precise binary editing, validation-error paths, and the bookmark click. Run via `macos/ui-tests-xcode/run-tests.sh`.
+
+### Documented divergences from Windows
+
+The macOS port deliberately diverges from the Windows plugin in a handful of places — every divergence preserves Windows feature semantics while adopting the platform-native shape:
+
+- **No Options dialog** — Windows manages bold/italic/underline + RGB pickers in `Hex.cpp`; the macOS host owns appearance via `NSAppearance` + the host's Style Configurator. Plugin colours are semantic and follow the host automatically.
+- **Compare HEX picks a file**, not a second split view. The macOS host has no plugin API for Notepad++ split views; "diff against the saved version on disk" is also a real workflow the Windows feature didn't directly cover.
+- **Pattern Replace operates on the linear selection only** — the rectangular `eSel::HEX_SEL_BLOCK` branch isn't ported because the macOS hex view has only the linear selection model.
+- **Goto offset** is reached via Cmd+L in the hex view (matches macOS browser/Pages convention) and a context-menu entry; the host's `IDM_SEARCH_GOTOLINE` plumbing isn't intercepted yet.
+- **No `.cmp` cache file** for Compare results — the diff mask lives in memory (`std::vector<bool>`) and is rebuilt on each Compare invocation.
+- **Copy emits lowercase hex text** by default (matching Windows `hexMaskNorm`); on-screen rendering also lowercase (matching Windows default unless the `Capital` pref is set). The macOS port has no `Capital` pref.
+- **macOS-only context-menu additions**: Undo / Redo (the Windows version doesn't show these in its context menu) and Zoom In/Out/Restore. These are useful on macOS where typing `Cmd-Plus` to zoom is universally expected.
+
+### Internal port mechanics
+
+The body below documents the per-pass dev work — kept for future translators, contributors, and anyone wanting the *why* behind a specific divergence.
+
+---
+
+## macOS port — engineering notes
 
 The macOS port is a from-scratch native plugin. Source lives in [macos/](macos/) and does not share build artifacts, headers, or runtime code with the Windows tree.
 

@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdint>
+#include <dlfcn.h>
 #include <iomanip>
 #include <set>
 #include <sstream>
@@ -16,6 +17,256 @@
 
 static const char *PLUGIN_NAME = "HEX-Editor";
 static const int NB_FUNC = 6;
+
+// MARK: - Localization
+//
+// User-facing strings are looked up by key against `Localizable.<lang>.strings`
+// files installed alongside the dylib. If the user's preferred language file
+// is missing or doesn't contain the key, the embedded English fallback is used,
+// so the plugin always renders something — never a bare key.
+//
+// Language selection: the first hit from [NSLocale preferredLanguages] that
+// has a corresponding strings file. Match is "exact (e.g. de-DE) → language
+// code (e.g. de) → English fallback".
+//
+// Adding a new language: copy `Localizable.en.strings` to
+// `Localizable.<lang>.strings`, translate the values, install via CMake.
+// The macOS-native .strings format (`"key" = "value";`) is parsed by the
+// system via `[NSDictionary dictionaryWithContentsOfURL:]`.
+
+static NSString *hexPluginInstallDir()
+{
+    // dladdr resolves the path of the dylib that contains the supplied symbol.
+    // We pass the address of a static function (`hexPluginInstallDir` itself)
+    // and ask dyld which loaded image it lives in. The resulting path looks like
+    // `~/.notepad++/plugins/HexEditor/HexEditor.dylib` on a normal install.
+    Dl_info info;
+    if (dladdr(reinterpret_cast<const void *>(&hexPluginInstallDir), &info) == 0 || !info.dli_fname) {
+        return nil;
+    }
+    NSString *dylibPath = [NSString stringWithUTF8String:info.dli_fname];
+    return dylibPath.stringByDeletingLastPathComponent;
+}
+
+static NSDictionary<NSString *, NSString *> *hexLoadStringsForLanguage(NSString *language)
+{
+    NSString *dir = hexPluginInstallDir();
+    if (dir == nil || language == nil || language.length == 0) {
+        return nil;
+    }
+    NSString *path = [dir stringByAppendingPathComponent:
+        [NSString stringWithFormat:@"Localizable.%@.strings", language]];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+        return nil;
+    }
+    return [NSDictionary dictionaryWithContentsOfURL:[NSURL fileURLWithPath:path]];
+}
+
+static NSDictionary<NSString *, NSString *> *hexActiveStrings()
+{
+    static NSDictionary<NSString *, NSString *> *cached = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        for (NSString *raw in [NSLocale preferredLanguages]) {
+            // Try the exact tag first ("de-DE"), then the bare language code ("de").
+            NSDictionary *exact = hexLoadStringsForLanguage(raw);
+            if (exact != nil && exact.count > 0) {
+                cached = exact;
+                return;
+            }
+            NSString *base = [raw componentsSeparatedByString:@"-"].firstObject;
+            if (base != nil && ![base isEqualToString:raw]) {
+                NSDictionary *fallback = hexLoadStringsForLanguage(base);
+                if (fallback != nil && fallback.count > 0) {
+                    cached = fallback;
+                    return;
+                }
+            }
+        }
+        // Final fallback: explicit English file. If even that is missing the
+        // embedded English defaults below carry the UI.
+        cached = hexLoadStringsForLanguage(@"en");
+    });
+    return cached;
+}
+
+// Embedded English defaults — mirror Localizable.en.strings exactly. The strings
+// file is the canonical source for translators; this table is a safety net for
+// builds that ship with a missing or corrupted .strings file.
+static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
+{
+    static NSDictionary<NSString *, NSString *> *defaults = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        defaults = @{
+            // Plugin menu (Plugins > HEX-Editor > …)
+            @"menu.plugin.viewInHex":            @"View in HEX",
+            @"menu.plugin.compareHex":           @"Compare HEX",
+            @"menu.plugin.clearCompareResult":   @"Clear Compare Result",
+            @"menu.plugin.insertColumns":        @"Insert Columns...",
+            @"menu.plugin.patternReplace":       @"Pattern Replace...",
+            @"menu.plugin.help":                 @"Help...",
+
+            // Right-click context menu on the hex view
+            @"menu.context.undo":                @"Undo",
+            @"menu.context.redo":                @"Redo",
+            @"menu.context.cut":                 @"Cut",
+            @"menu.context.copy":                @"Copy",
+            @"menu.context.paste":               @"Paste",
+            @"menu.context.delete":              @"Delete",
+            @"menu.context.cutBinary":           @"Cut Binary Content",
+            @"menu.context.copyBinary":          @"Copy Binary Content",
+            @"menu.context.pasteBinary":         @"Paste Binary Content",
+            @"menu.context.find":                @"Find…",
+            @"menu.context.findReplace":         @"Find and Replace…",
+            @"menu.context.findNext":            @"Find Next",
+            @"menu.context.findPrevious":        @"Find Previous",
+            @"menu.context.gotoOffset":          @"Go to Offset…",
+            @"menu.context.viewIn":              @"View in",
+            @"menu.context.addressWidth":        @"Address Width...",
+            @"menu.context.columns":             @"Columns...",
+            @"menu.context.zoomIn":              @"Zoom In",
+            @"menu.context.zoomOut":             @"Zoom Out",
+            @"menu.context.zoomReset":           @"Restore Default Zoom",
+
+            // View-in submenu
+            @"menu.viewIn.bits8":                @"8-Bit",
+            @"menu.viewIn.bits16":               @"16-Bit",
+            @"menu.viewIn.bits32":               @"32-Bit",
+            @"menu.viewIn.bits64":               @"64-Bit",
+            @"menu.viewIn.toBinary":             @"to Binary",
+            @"menu.viewIn.toHex":                @"to Hex",
+            @"menu.viewIn.toBigEndian":          @"to BigEndian",
+            @"menu.viewIn.toLittleEndian":       @"to LittleEndian",
+
+            // Common buttons
+            @"button.ok":                        @"OK",
+            @"button.cancel":                    @"Cancel",
+
+            // App / dialog identity
+            @"app.title":                        @"HEX-Editor",
+            @"app.titleMac":                     @"HEX-Editor for macOS",
+            @"app.titleCompare":                 @"HEX-Editor Compare",
+
+            // Address Width dialog
+            @"addressWidth.title":               @"Address Width",
+            @"addressWidth.message":             @"Number of digits in the offset column (%d–%d).",
+            @"addressWidth.invalidRange":        @"Only values between %d and %d possible.",
+
+            // Columns dialog
+            @"columns.title":                    @"Columns",
+            @"columns.message":                  @"Number of cells per row (1–%d at the current bit width).",
+            @"columns.invalidMaximum":           @"Maximum of %d bytes can be shown in a row.",
+
+            // Go to Offset dialog
+            @"goto.title":                       @"Go to Offset",
+            @"goto.message":                     @"Enter a byte offset.\n  • Decimal: 1234\n  • Hex: 0x4A2 (or 0X4A2)\n  • Relative: +0x10 jumps forward, -100 jumps back\n\nCurrent: 0x%0*zx    End: 0x%0*zx",
+            @"goto.button":                      @"Go",
+            @"goto.placeholder":                 @"e.g. 0x1F or +16",
+            @"goto.errorParse":                  @"Could not parse the offset. Use a decimal value, a 0x-prefixed hex value, or a + / - prefix for relative jumps.",
+
+            // Find / Find and Replace dialog
+            @"find.titleFind":                   @"Find in Hex",
+            @"find.titleReplace":                @"Find and Replace",
+            @"find.message":                     @"Plain text searches the buffer as ASCII bytes.\nUse 0x-prefix or space-separated hex (e.g. 0xDEADBEEF or DE AD BE EF) for byte patterns.",
+            @"find.button.findNext":             @"Find Next",
+            @"find.button.replaceAll":           @"Replace All",
+            @"find.placeholder.find":            @"Find: text or 0xDEADBEEF",
+            @"find.placeholder.replace":         @"Replace with: text or hex bytes",
+            @"find.toggle.matchCase":            @"Match case (ASCII only)",
+            @"find.toggle.wrap":                 @"Wrap around end of buffer",
+            @"find.errorNotFound":               @"Pattern not found.",
+            @"find.errorNoPriorSearch":          @"No prior search. Use Find (Cmd+F) first.",
+            @"find.errorParseFind":              @"Could not parse the find pattern.",
+            @"find.errorParseReplace":           @"Could not parse the replace pattern.",
+            @"find.errorPatternEmpty":           @"Find pattern is empty.",
+            @"find.errorNoBuffer":               @"No active hex buffer.",
+            @"find.errorNoEditor":               @"No active editor.",
+            @"find.errorReplaceFailed":          @"Replace failed.",
+            @"find.errorReplaceCurrent":         @"No selection to replace. Use Find Next first.",
+            @"find.errorReplaceLength":          @"Current selection does not match the find pattern's length.",
+            @"find.errorReplaceFailedShort":    @"Replacement failed.",
+            @"find.replacedSingular":            @"Replaced 1 occurrence.",
+            @"find.replacedPlural":              @"Replaced %d occurrences.",
+
+            // Compare HEX
+            @"compare.openHexFirstCompare":      @"Open the hex view (View in HEX) before using Compare HEX.",
+            @"compare.openHexFirstRun":          @"Open the hex view (View in HEX) before running Compare.",
+            @"compare.errorNoFile":              @"No comparison file selected.",
+            @"compare.errorReadFile":            @"Could not read %@: %@",
+            @"compare.errorReadUnknown":         @"unknown error",
+            @"compare.errorFailed":              @"Compare failed.",
+            @"compare.openPanelTitle":           @"Compare HEX with…",
+            @"compare.openPanelMessage":         @"Pick a file to compare against the current buffer.",
+            @"compare.summaryMatch":             @"Files match.",
+            @"compare.summaryDifferSingular":    @"1 byte differs.\nUse Clear Compare Result to remove the highlight.",
+            @"compare.summaryDifferPlural":      @"%d bytes differ.\nUse Clear Compare Result to remove the highlight.",
+            @"compare.noActiveResult":           @"No active comparison to clear.",
+
+            // Insert Columns
+            @"insertColumns.openHexFirst":       @"Open the hex view (View in HEX) before using Insert Columns.",
+            @"insertColumns.title":              @"Insert Columns",
+            @"insertColumns.message":            @"Insert a hex pattern into every row at a chosen column position. Each row grows by (count × %d) bytes; the column count grows by `count`.\n\nPattern: hex bytes only (e.g. 0x00 or DE AD).\nCount: 1 to %d at the current %d-bit grouping.\nPosition: 0 to %d (current column count).",
+            @"insertColumns.button":             @"Insert",
+            @"insertColumns.placeholder.pattern": @"Pattern (hex): 0xFF or DE AD",
+            @"insertColumns.placeholder.count":   @"Count (columns to insert)",
+            @"insertColumns.placeholder.position": @"Position (column index, 0 = left edge)",
+            @"insertColumns.errorEmptyPattern":  @"Pattern is empty.",
+            @"insertColumns.errorParsePattern":  @"Pattern must be a sequence of hex bytes (e.g. 0x00, DE AD BE EF).",
+            @"insertColumns.errorRangeCount":    @"Column count must be between 1 and %d at the current bit width.",
+            @"insertColumns.errorRangePosition": @"Insert position must be between 0 and %d (the current column count).",
+            @"insertColumns.errorBufferEmpty":   @"Buffer is empty — nothing to insert into.",
+            @"insertColumns.errorRowSize":       @"Invalid current row size.",
+            @"insertColumns.errorFailed":        @"Insert failed.",
+            @"insertColumns.summarySingularRows": @"Inserted %d column%@ across 1 row.",
+            @"insertColumns.summaryPluralRows":   @"Inserted %d column%@ across %d rows.",
+
+            // Pattern Replace
+            @"patternReplace.openHexFirst":      @"Open the hex view (View in HEX) before using Pattern Replace.",
+            @"patternReplace.requireSelection": @"Select something in the hex view first — Pattern Replace fills the selection.",
+            @"patternReplace.title":             @"Pattern Replace",
+            @"patternReplace.message":           @"Fill the current %zu-byte selection with a repeating hex pattern.\n\nPattern: hex bytes only (e.g. 0xFF or DE AD).",
+            @"patternReplace.button":            @"Replace",
+            @"patternReplace.placeholder":       @"Pattern (hex): 0xFF or DE AD",
+            @"patternReplace.errorEmptyPattern": @"Pattern is empty.",
+            @"patternReplace.errorParsePattern": @"Pattern must be a sequence of hex bytes (e.g. 0xFF or DE AD BE EF).",
+            @"patternReplace.errorFailed":       @"Pattern Replace failed.",
+            @"patternReplace.summarySingular":   @"Replaced 1 byte with the pattern.",
+            @"patternReplace.summaryPlural":     @"Replaced %d bytes with the pattern.",
+
+            // Status bar (substring-matched by UI tests, so wording is contractual)
+            @"status.empty":                     @"Current document is empty.",
+            @"status.showing":                   @"Showing %zu bytes.",
+            @"status.showingTruncated":          @"Showing %zu of %zu bytes. Preview is truncated for responsiveness.",
+
+            // About / help dialog
+            @"about.body":                       @"Native macOS port of the Notepad++ HEX-Editor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.",
+
+            // Generic error path used when toggling between Scintilla / hex view
+            @"editor.noActiveBuffer":            @"No active editor buffer is available.",
+            @"editor.noActiveView":              @"Could not find the active editor view to replace.",
+
+            // Column headers in the hex table
+            @"table.header.offset":              @"Offset",
+            @"table.header.ascii":               @"ASCII",
+        };
+    });
+    return defaults;
+}
+
+// Look up a localized string by key, falling back to the embedded English default
+// if the active strings file doesn't contain the key. Returns the key itself only
+// as a last-resort safety so a missing-from-everywhere key is visible during dev.
+static NSString *L(NSString *key)
+{
+    NSDictionary *active = hexActiveStrings();
+    NSString *value = active[key];
+    if (value != nil && value.length > 0) {
+        return value;
+    }
+    NSString *fallback = hexEnglishDefaults()[key];
+    return fallback != nil ? fallback : key;
+}
 
 // Accessibility identifiers — must match the strings hard-coded in
 // macos/ui-tests-xcode/Tests/HexEditorUITests.swift.
@@ -475,7 +726,7 @@ static HexTableDataSource *hexTableDataSource = nil;
             ? hexedit::SearchDirection::Backward
             : hexedit::SearchDirection::Forward;
         if (!executeHexFindNext(dir, &err)) {
-            presentHexValidationError(err ?: @"Pattern not found.");
+            presentHexValidationError(err ?: L(@"find.errorNotFound"));
         }
         return YES;
     }
@@ -658,56 +909,56 @@ static HexTableDataSource *hexTableDataSource = nil;
         [self setNeedsDisplay:YES];
     }
 
-    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"HEX-Editor"];
-    NSMenuItem *undoItem = [menu addItemWithTitle:@"Undo" action:@selector(undo:) keyEquivalent:@""];
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:L(@"app.title")];
+    NSMenuItem *undoItem = [menu addItemWithTitle:L(@"menu.context.undo") action:@selector(undo:) keyEquivalent:@""];
     undoItem.target = self;
-    NSMenuItem *redoItem = [menu addItemWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@""];
+    NSMenuItem *redoItem = [menu addItemWithTitle:L(@"menu.context.redo") action:@selector(redo:) keyEquivalent:@""];
     redoItem.target = self;
     [menu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *cutItem = [menu addItemWithTitle:@"Cut" action:@selector(hexCut:) keyEquivalent:@""];
+    NSMenuItem *cutItem = [menu addItemWithTitle:L(@"menu.context.cut") action:@selector(hexCut:) keyEquivalent:@""];
     cutItem.target = self;
-    NSMenuItem *copyItem = [menu addItemWithTitle:@"Copy" action:@selector(hexCopy:) keyEquivalent:@""];
+    NSMenuItem *copyItem = [menu addItemWithTitle:L(@"menu.context.copy") action:@selector(hexCopy:) keyEquivalent:@""];
     copyItem.target = self;
-    NSMenuItem *pasteItem = [menu addItemWithTitle:@"Paste" action:@selector(hexPaste:) keyEquivalent:@""];
+    NSMenuItem *pasteItem = [menu addItemWithTitle:L(@"menu.context.paste") action:@selector(hexPaste:) keyEquivalent:@""];
     pasteItem.target = self;
-    NSMenuItem *deleteItem = [menu addItemWithTitle:@"Delete" action:@selector(hexDelete:) keyEquivalent:@""];
+    NSMenuItem *deleteItem = [menu addItemWithTitle:L(@"menu.context.delete") action:@selector(hexDelete:) keyEquivalent:@""];
     deleteItem.target = self;
     [menu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *cutBinaryItem = [menu addItemWithTitle:@"Cut Binary Content" action:@selector(hexCutBinary:) keyEquivalent:@""];
+    NSMenuItem *cutBinaryItem = [menu addItemWithTitle:L(@"menu.context.cutBinary") action:@selector(hexCutBinary:) keyEquivalent:@""];
     cutBinaryItem.target = self;
-    NSMenuItem *copyBinaryItem = [menu addItemWithTitle:@"Copy Binary Content" action:@selector(hexCopyBinary:) keyEquivalent:@""];
+    NSMenuItem *copyBinaryItem = [menu addItemWithTitle:L(@"menu.context.copyBinary") action:@selector(hexCopyBinary:) keyEquivalent:@""];
     copyBinaryItem.target = self;
-    NSMenuItem *pasteBinaryItem = [menu addItemWithTitle:@"Paste Binary Content" action:@selector(hexPasteBinary:) keyEquivalent:@""];
+    NSMenuItem *pasteBinaryItem = [menu addItemWithTitle:L(@"menu.context.pasteBinary") action:@selector(hexPasteBinary:) keyEquivalent:@""];
     pasteBinaryItem.target = self;
     [menu addItem:[NSMenuItem separatorItem]];
 
-    NSMenuItem *findItem = [menu addItemWithTitle:@"Find…" action:@selector(hexShowFindDialog:) keyEquivalent:@"f"];
+    NSMenuItem *findItem = [menu addItemWithTitle:L(@"menu.context.find") action:@selector(hexShowFindDialog:) keyEquivalent:@"f"];
     findItem.target = self;
     findItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
-    NSMenuItem *findReplaceItem = [menu addItemWithTitle:@"Find and Replace…" action:@selector(hexShowFindReplaceDialog:) keyEquivalent:@"f"];
+    NSMenuItem *findReplaceItem = [menu addItemWithTitle:L(@"menu.context.findReplace") action:@selector(hexShowFindReplaceDialog:) keyEquivalent:@"f"];
     findReplaceItem.target = self;
     findReplaceItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
-    NSMenuItem *findNextItem = [menu addItemWithTitle:@"Find Next" action:@selector(hexFindNext:) keyEquivalent:@"g"];
+    NSMenuItem *findNextItem = [menu addItemWithTitle:L(@"menu.context.findNext") action:@selector(hexFindNext:) keyEquivalent:@"g"];
     findNextItem.target = self;
     findNextItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
-    NSMenuItem *findPrevItem = [menu addItemWithTitle:@"Find Previous" action:@selector(hexFindPrevious:) keyEquivalent:@"g"];
+    NSMenuItem *findPrevItem = [menu addItemWithTitle:L(@"menu.context.findPrevious") action:@selector(hexFindPrevious:) keyEquivalent:@"g"];
     findPrevItem.target = self;
     findPrevItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
     [menu addItem:[NSMenuItem separatorItem]];
 
-    NSMenuItem *gotoItem = [menu addItemWithTitle:@"Go to Offset…" action:@selector(hexShowGotoDialog:) keyEquivalent:@"l"];
+    NSMenuItem *gotoItem = [menu addItemWithTitle:L(@"menu.context.gotoOffset") action:@selector(hexShowGotoDialog:) keyEquivalent:@"l"];
     gotoItem.target = self;
     gotoItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
     [menu addItem:[NSMenuItem separatorItem]];
 
-    NSMenuItem *viewItem = [menu addItemWithTitle:@"View in" action:nil keyEquivalent:@""];
-    NSMenu *viewSubmenu = [[NSMenu alloc] initWithTitle:@"View in"];
+    NSMenuItem *viewItem = [menu addItemWithTitle:L(@"menu.context.viewIn") action:nil keyEquivalent:@""];
+    NSMenu *viewSubmenu = [[NSMenu alloc] initWithTitle:L(@"menu.context.viewIn")];
     struct BitsEntry { NSString *title; int bytesPerCell; SEL selector; };
     BitsEntry entries[] = {
-        { @"8-Bit",  1, @selector(hexViewSet8Bit:) },
-        { @"16-Bit", 2, @selector(hexViewSet16Bit:) },
-        { @"32-Bit", 4, @selector(hexViewSet32Bit:) },
-        { @"64-Bit", 8, @selector(hexViewSet64Bit:) },
+        { L(@"menu.viewIn.bits8"),  1, @selector(hexViewSet8Bit:) },
+        { L(@"menu.viewIn.bits16"), 2, @selector(hexViewSet16Bit:) },
+        { L(@"menu.viewIn.bits32"), 4, @selector(hexViewSet32Bit:) },
+        { L(@"menu.viewIn.bits64"), 8, @selector(hexViewSet64Bit:) },
     };
     for (const auto &entry : entries) {
         NSMenuItem *bitsItem = [viewSubmenu addItemWithTitle:entry.title action:entry.selector keyEquivalent:@""];
@@ -715,28 +966,32 @@ static HexTableDataSource *hexTableDataSource = nil;
         bitsItem.state = (g_bytesPerCell == entry.bytesPerCell) ? NSControlStateValueOn : NSControlStateValueOff;
     }
     [viewSubmenu addItem:[NSMenuItem separatorItem]];
-    NSString *binaryTitle = (g_notation == hexedit::CellNotation::Binary) ? @"to Hex" : @"to Binary";
+    NSString *binaryTitle = (g_notation == hexedit::CellNotation::Binary)
+        ? L(@"menu.viewIn.toHex")
+        : L(@"menu.viewIn.toBinary");
     NSMenuItem *binaryItem = [viewSubmenu addItemWithTitle:binaryTitle action:@selector(hexViewToggleBinary:) keyEquivalent:@""];
     binaryItem.target = self;
     if (g_bytesPerCell > 1) {
-        NSString *endianTitle = g_littleEndian ? @"to BigEndian" : @"to LittleEndian";
+        NSString *endianTitle = g_littleEndian
+            ? L(@"menu.viewIn.toBigEndian")
+            : L(@"menu.viewIn.toLittleEndian");
         NSMenuItem *endianItem = [viewSubmenu addItemWithTitle:endianTitle action:@selector(hexViewToggleEndian:) keyEquivalent:@""];
         endianItem.target = self;
     }
     viewItem.submenu = viewSubmenu;
 
     [menu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *addrItem = [menu addItemWithTitle:@"Address Width..." action:@selector(hexShowAddressWidthDialog:) keyEquivalent:@""];
+    NSMenuItem *addrItem = [menu addItemWithTitle:L(@"menu.context.addressWidth") action:@selector(hexShowAddressWidthDialog:) keyEquivalent:@""];
     addrItem.target = self;
-    NSMenuItem *colsItem = [menu addItemWithTitle:@"Columns..." action:@selector(hexShowColumnsDialog:) keyEquivalent:@""];
+    NSMenuItem *colsItem = [menu addItemWithTitle:L(@"menu.context.columns") action:@selector(hexShowColumnsDialog:) keyEquivalent:@""];
     colsItem.target = self;
 
     [menu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *zoomInItem = [menu addItemWithTitle:@"Zoom In" action:@selector(hexZoomIn:) keyEquivalent:@""];
+    NSMenuItem *zoomInItem = [menu addItemWithTitle:L(@"menu.context.zoomIn") action:@selector(hexZoomIn:) keyEquivalent:@""];
     zoomInItem.target = self;
-    NSMenuItem *zoomOutItem = [menu addItemWithTitle:@"Zoom Out" action:@selector(hexZoomOut:) keyEquivalent:@""];
+    NSMenuItem *zoomOutItem = [menu addItemWithTitle:L(@"menu.context.zoomOut") action:@selector(hexZoomOut:) keyEquivalent:@""];
     zoomOutItem.target = self;
-    NSMenuItem *zoomResetItem = [menu addItemWithTitle:@"Restore Default Zoom" action:@selector(hexZoomReset:) keyEquivalent:@""];
+    NSMenuItem *zoomResetItem = [menu addItemWithTitle:L(@"menu.context.zoomReset") action:@selector(hexZoomReset:) keyEquivalent:@""];
     zoomResetItem.target = self;
     return menu;
 }
@@ -865,15 +1120,15 @@ static HexTableDataSource *hexTableDataSource = nil;
 - (void)hexShowAddressWidthDialog:(id)sender
 {
     const int value = promptHexInteger(
-        @"Address Width",
-        [NSString stringWithFormat:@"Number of digits in the offset column (%d–%d).",
+        L(@"addressWidth.title"),
+        [NSString stringWithFormat:L(@"addressWidth.message"),
             HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH],
         g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH);
     if (value == -1) {
         return;
     }
     if (value == -2) {
-        presentHexValidationError([NSString stringWithFormat:@"Only values between %d and %d possible.",
+        presentHexValidationError([NSString stringWithFormat:L(@"addressWidth.invalidRange"),
             HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH]);
         return;
     }
@@ -884,14 +1139,14 @@ static HexTableDataSource *hexTableDataSource = nil;
 {
     const int limit = columnsLimitForBytesPerCell(g_bytesPerCell);
     const int value = promptHexInteger(
-        @"Columns",
-        [NSString stringWithFormat:@"Number of cells per row (1–%d at the current bit width).", limit],
+        L(@"columns.title"),
+        [NSString stringWithFormat:L(@"columns.message"), limit],
         g_columns, 1, limit);
     if (value == -1) {
         return;
     }
     if (value == -2) {
-        presentHexValidationError([NSString stringWithFormat:@"Maximum of %d bytes can be shown in a row.",
+        presentHexValidationError([NSString stringWithFormat:L(@"columns.invalidMaximum"),
             HEX_MAX_BYTES_PER_ROW]);
         return;
     }
@@ -917,7 +1172,7 @@ static HexTableDataSource *hexTableDataSource = nil;
 {
     NSString *err = nil;
     if (!executeHexFindNext(hexedit::SearchDirection::Forward, &err)) {
-        presentHexValidationError(err ?: @"Pattern not found.");
+        presentHexValidationError(err ?: L(@"find.errorNotFound"));
     }
 }
 
@@ -925,7 +1180,7 @@ static HexTableDataSource *hexTableDataSource = nil;
 {
     NSString *err = nil;
     if (!executeHexFindNext(hexedit::SearchDirection::Backward, &err)) {
-        presentHexValidationError(err ?: @"Pattern not found.");
+        presentHexValidationError(err ?: L(@"find.errorNotFound"));
     }
 }
 
@@ -1114,7 +1369,7 @@ static HexTableDataSource *hexTableDataSource = nil;
                     ? hexedit::SearchDirection::Backward
                     : hexedit::SearchDirection::Forward;
                 if (!executeHexFindNext(dir, &err)) {
-                    presentHexValidationError(err ?: @"Pattern not found.");
+                    presentHexValidationError(err ?: L(@"find.errorNotFound"));
                 }
                 return;
             }
@@ -1292,7 +1547,9 @@ static CGFloat offsetColumnWidth(NSFont *font)
 {
     const int width = std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH);
     NSString *sample = [@"" stringByPaddingToLength:static_cast<NSUInteger>(width) withString:@"0" startingAtIndex:0];
-    return std::max(paddedTextWidth(sample, font), paddedTextWidth(@"Offset", font));
+    // Measure against the localized header so wider translations (e.g. a future
+    // "Adresse" / "Adresák" in some language) don't clip.
+    return std::max(paddedTextWidth(sample, font), paddedTextWidth(L(@"table.header.offset"), font));
 }
 
 static CGFloat cellColumnWidth(NSFont *font, const hexedit::ViewMode &mode)
@@ -1317,7 +1574,7 @@ static CGFloat asciiColumnWidth(NSFont *font)
 {
     const int bpr = std::max(currentBytesPerRow(), 1);
     NSString *sample = [@"" stringByPaddingToLength:static_cast<NSUInteger>(bpr) withString:@"." startingAtIndex:0];
-    return std::max(paddedTextWidth(sample, font), paddedTextWidth(@"ASCII", font));
+    return std::max(paddedTextWidth(sample, font), paddedTextWidth(L(@"table.header.ascii"), font));
 }
 
 static CGFloat tableContentWidth(NSFont *font)
@@ -2080,7 +2337,7 @@ static void showMessage(NSString *title, NSString *text)
         NSAlert *alert = [[NSAlert alloc] init];
         alert.messageText = title;
         alert.informativeText = text;
-        [alert addButtonWithTitle:@"OK"];
+        [alert addButtonWithTitle:L(@"button.ok")];
         [alert runModal];
     }
 }
@@ -2092,8 +2349,8 @@ static int promptHexInteger(NSString *title, NSString *informative, int currentV
         NSAlert *alert = [[NSAlert alloc] init];
         alert.messageText = title;
         alert.informativeText = informative;
-        [alert addButtonWithTitle:@"OK"];
-        [alert addButtonWithTitle:@"Cancel"];
+        [alert addButtonWithTitle:L(@"button.ok")];
+        [alert addButtonWithTitle:L(@"button.cancel")];
 
         NSTextField *input = [[NSTextField alloc] initWithFrame:NSMakeRect(0.0, 0.0, 120.0, 24.0)];
         input.stringValue = [NSString stringWithFormat:@"%d", currentValue];
@@ -2123,7 +2380,7 @@ static int promptHexInteger(NSString *title, NSString *informative, int currentV
 
 static void presentHexValidationError(NSString *message)
 {
-    showMessage(@"HEX-Editor", message);
+    showMessage(L(@"app.title"), message);
 }
 
 static NSString *promptHexGotoExpression(NSString *defaultText, std::size_t currentOffset, std::size_t totalLength)
@@ -2131,23 +2388,17 @@ static NSString *promptHexGotoExpression(NSString *defaultText, std::size_t curr
     __block NSString *result = nil;
     @autoreleasepool {
         NSAlert *alert = [[NSAlert alloc] init];
-        alert.messageText = @"Go to Offset";
-        alert.informativeText = [NSString stringWithFormat:
-            @"Enter a byte offset.\n"
-            @"  • Decimal: 1234\n"
-            @"  • Hex: 0x4A2 (or 0X4A2)\n"
-            @"  • Relative: +0x10 jumps forward, -100 jumps back\n"
-            @"\n"
-            @"Current: 0x%0*zx    End: 0x%0*zx",
+        alert.messageText = L(@"goto.title");
+        alert.informativeText = [NSString stringWithFormat:L(@"goto.message"),
             std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH), currentOffset,
             std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH), totalLength];
-        [alert addButtonWithTitle:@"Go"];
-        [alert addButtonWithTitle:@"Cancel"];
+        [alert addButtonWithTitle:L(@"goto.button")];
+        [alert addButtonWithTitle:L(@"button.cancel")];
 
         NSTextField *input = [[NSTextField alloc] initWithFrame:NSMakeRect(0.0, 0.0, 220.0, 24.0)];
         input.stringValue = defaultText ?: @"";
         input.alignment = NSTextAlignmentLeft;
-        input.placeholderString = @"e.g. 0x1F or +16";
+        input.placeholderString = L(@"goto.placeholder");
         input.accessibilityIdentifier = @"hex-editor.goto.input";
         alert.accessoryView = input;
         [alert.window setInitialFirstResponder:input];
@@ -2195,7 +2446,7 @@ static void presentHexGotoDialog()
                                      activeByteOffset,
                                      previewTotalLength,
                                      target)) {
-        presentHexValidationError(@"Could not parse the offset. Use a decimal value, a 0x-prefixed hex value, or a + / - prefix for relative jumps.");
+        presentHexValidationError(L(@"goto.errorParse"));
         return;
     }
     gotoHexOffset(target);
@@ -2206,12 +2457,12 @@ static void presentHexGotoDialog()
 static bool executeHexFindNext(hexedit::SearchDirection direction, NSString **errorMessage)
 {
     if (g_lastFindText == nil || g_lastFindText.length == 0) {
-        if (errorMessage) *errorMessage = @"No prior search. Use Find (Cmd+F) first.";
+        if (errorMessage) *errorMessage = L(@"find.errorNoPriorSearch");
         return false;
     }
     hexedit::SearchPattern pattern;
     if (!hexedit::parseSearchPattern(std::string([g_lastFindText UTF8String]), g_findMatchCase, pattern)) {
-        if (errorMessage) *errorMessage = @"Could not parse the find pattern.";
+        if (errorMessage) *errorMessage = L(@"find.errorParseFind");
         return false;
     }
 
@@ -2229,7 +2480,7 @@ static bool executeHexFindNext(hexedit::SearchDirection direction, NSString **er
     std::size_t found = 0;
     if (!hexedit::findBytePattern(previewBytes.data(), previewBytes.size(), pattern,
                                    startOffset, direction, g_findWrap, found)) {
-        if (errorMessage) *errorMessage = @"Pattern not found.";
+        if (errorMessage) *errorMessage = L(@"find.errorNotFound");
         return false;
     }
 
@@ -2255,23 +2506,23 @@ static bool executeHexFindNext(hexedit::SearchDirection direction, NSString **er
 static int executeHexReplaceAll(NSString *findText, NSString *replaceText, bool matchCase, NSString **errorMessage)
 {
     if (findText == nil || findText.length == 0) {
-        if (errorMessage) *errorMessage = @"Find pattern is empty.";
+        if (errorMessage) *errorMessage = L(@"find.errorPatternEmpty");
         return -1;
     }
     if (!isPreviewBufferActive()) {
-        if (errorMessage) *errorMessage = @"No active hex buffer.";
+        if (errorMessage) *errorMessage = L(@"find.errorNoBuffer");
         return -1;
     }
 
     hexedit::SearchPattern findPattern;
     if (!hexedit::parseSearchPattern(std::string([findText UTF8String]), matchCase, findPattern)) {
-        if (errorMessage) *errorMessage = @"Could not parse the find pattern.";
+        if (errorMessage) *errorMessage = L(@"find.errorParseFind");
         return -1;
     }
     hexedit::SearchPattern replacePattern;
     if (replaceText != nil && replaceText.length > 0) {
         if (!hexedit::parseSearchPattern(std::string([replaceText UTF8String]), true, replacePattern)) {
-            if (errorMessage) *errorMessage = @"Could not parse the replace pattern.";
+            if (errorMessage) *errorMessage = L(@"find.errorParseReplace");
             return -1;
         }
     }
@@ -2295,7 +2546,7 @@ static int executeHexReplaceAll(NSString *findText, NSString *replaceText, bool 
 
     NppHandle editor = previewScintillaHandle;
     if (!editor) {
-        if (errorMessage) *errorMessage = @"No active editor.";
+        if (errorMessage) *errorMessage = L(@"find.errorNoEditor");
         return -1;
     }
 
@@ -2328,32 +2579,32 @@ static int executeHexReplaceAll(NSString *findText, NSString *replaceText, bool 
 static bool executeHexReplaceCurrentSelection(NSString *findText, NSString *replaceText, bool matchCase, NSString **errorMessage)
 {
     if (!hasByteSelection()) {
-        if (errorMessage) *errorMessage = @"No selection to replace. Use Find Next first.";
+        if (errorMessage) *errorMessage = L(@"find.errorReplaceCurrent");
         return false;
     }
     hexedit::SearchPattern findPattern;
     if (findText == nil || !hexedit::parseSearchPattern(std::string([findText UTF8String]), matchCase, findPattern)) {
-        if (errorMessage) *errorMessage = @"Could not parse the find pattern.";
+        if (errorMessage) *errorMessage = L(@"find.errorParseFind");
         return false;
     }
     hexedit::SearchPattern replacePattern;
     if (replaceText != nil && replaceText.length > 0) {
         if (!hexedit::parseSearchPattern(std::string([replaceText UTF8String]), true, replacePattern)) {
-            if (errorMessage) *errorMessage = @"Could not parse the replace pattern.";
+            if (errorMessage) *errorMessage = L(@"find.errorParseReplace");
             return false;
         }
     }
 
     const std::size_t selLen = selectedByteEnd - selectedByteStart;
     if (selLen != findPattern.bytes.size()) {
-        if (errorMessage) *errorMessage = @"Current selection does not match the find pattern's length.";
+        if (errorMessage) *errorMessage = L(@"find.errorReplaceLength");
         return false;
     }
 
     if (!applyEditorByteTransaction(selectedByteStart,
                                      replacePattern.bytes.empty() ? nullptr : replacePattern.bytes.data(),
                                      replacePattern.bytes.size(), selLen)) {
-        if (errorMessage) *errorMessage = @"Replacement failed.";
+        if (errorMessage) *errorMessage = L(@"find.errorReplaceFailedShort");
         return false;
     }
 
@@ -2372,14 +2623,13 @@ static void presentHexFindDialog(BOOL replaceMode)
 {
     @autoreleasepool {
         NSAlert *alert = [[NSAlert alloc] init];
-        alert.messageText = replaceMode ? @"Find and Replace" : @"Find in Hex";
-        alert.informativeText = @"Plain text searches the buffer as ASCII bytes.\n"
-                                @"Use 0x-prefix or space-separated hex (e.g. 0xDEADBEEF or DE AD BE EF) for byte patterns.";
-        [alert addButtonWithTitle:@"Find Next"];
+        alert.messageText = replaceMode ? L(@"find.titleReplace") : L(@"find.titleFind");
+        alert.informativeText = L(@"find.message");
+        [alert addButtonWithTitle:L(@"find.button.findNext")];
         if (replaceMode) {
-            [alert addButtonWithTitle:@"Replace All"];
+            [alert addButtonWithTitle:L(@"find.button.replaceAll")];
         }
-        [alert addButtonWithTitle:@"Cancel"];
+        [alert addButtonWithTitle:L(@"button.cancel")];
 
         const CGFloat width = 360.0;
         const CGFloat fieldHeight = 22.0;
@@ -2391,7 +2641,7 @@ static void presentHexFindDialog(BOOL replaceMode)
 
         CGFloat y = totalHeight - fieldHeight;
         NSTextField *findField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, y, width, fieldHeight)];
-        findField.placeholderString = @"Find: text or 0xDEADBEEF";
+        findField.placeholderString = L(@"find.placeholder.find");
         findField.stringValue = g_lastFindText ?: @"";
         findField.accessibilityIdentifier = @"hex-editor.find.input";
         [accessory addSubview:findField];
@@ -2400,21 +2650,21 @@ static void presentHexFindDialog(BOOL replaceMode)
         if (replaceMode) {
             y -= (fieldHeight + verticalGap);
             replaceField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, y, width, fieldHeight)];
-            replaceField.placeholderString = @"Replace with: text or hex bytes";
+            replaceField.placeholderString = L(@"find.placeholder.replace");
             replaceField.stringValue = g_lastReplaceText ?: @"";
             replaceField.accessibilityIdentifier = @"hex-editor.replace.input";
             [accessory addSubview:replaceField];
         }
 
         y -= (checkHeight + verticalGap);
-        NSButton *matchCaseButton = [NSButton checkboxWithTitle:@"Match case (ASCII only)" target:nil action:nil];
+        NSButton *matchCaseButton = [NSButton checkboxWithTitle:L(@"find.toggle.matchCase") target:nil action:nil];
         matchCaseButton.frame = NSMakeRect(0, y, width, checkHeight);
         matchCaseButton.state = g_findMatchCase ? NSControlStateValueOn : NSControlStateValueOff;
         matchCaseButton.accessibilityIdentifier = @"hex-editor.find.matchcase";
         [accessory addSubview:matchCaseButton];
 
         y -= (checkHeight + verticalGap);
-        NSButton *wrapButton = [NSButton checkboxWithTitle:@"Wrap around end of buffer" target:nil action:nil];
+        NSButton *wrapButton = [NSButton checkboxWithTitle:L(@"find.toggle.wrap") target:nil action:nil];
         wrapButton.frame = NSMakeRect(0, y, width, checkHeight);
         wrapButton.state = g_findWrap ? NSControlStateValueOn : NSControlStateValueOff;
         wrapButton.accessibilityIdentifier = @"hex-editor.find.wrap";
@@ -2439,17 +2689,19 @@ static void presentHexFindDialog(BOOL replaceMode)
             // Find Next
             NSString *err = nil;
             if (!executeHexFindNext(hexedit::SearchDirection::Forward, &err)) {
-                presentHexValidationError(err ?: @"Pattern not found.");
+                presentHexValidationError(err ?: L(@"find.errorNotFound"));
             }
         } else if (replaceMode && response == NSAlertSecondButtonReturn) {
             // Replace All
             NSString *err = nil;
             const int count = executeHexReplaceAll(g_lastFindText, g_lastReplaceText, g_findMatchCase, &err);
             if (count < 0) {
-                presentHexValidationError(err ?: @"Replace failed.");
+                presentHexValidationError(err ?: L(@"find.errorReplaceFailed"));
             } else {
-                showMessage(@"HEX-Editor", [NSString stringWithFormat:@"Replaced %d occurrence%@.",
-                    count, count == 1 ? @"" : @"s"]);
+                NSString *message = (count == 1)
+                    ? L(@"find.replacedSingular")
+                    : [NSString stringWithFormat:L(@"find.replacedPlural"), count];
+                showMessage(L(@"app.title"), message);
             }
         }
         // Third button (Cancel) — do nothing.
@@ -2478,11 +2730,11 @@ static bool compareDiffMaskCellHasDiff(NSInteger row, NSInteger cellIndex)
 static int executeHexCompareWithFile(NSString *otherFilePath, NSString **errorMessage)
 {
     if (!isPreviewBufferActive()) {
-        if (errorMessage) *errorMessage = @"Open the hex view (View in HEX) before running Compare.";
+        if (errorMessage) *errorMessage = L(@"compare.openHexFirstRun");
         return -1;
     }
     if (otherFilePath == nil || otherFilePath.length == 0) {
-        if (errorMessage) *errorMessage = @"No comparison file selected.";
+        if (errorMessage) *errorMessage = L(@"compare.errorNoFile");
         return -1;
     }
 
@@ -2492,8 +2744,8 @@ static int executeHexCompareWithFile(NSString *otherFilePath, NSString **errorMe
                                                   error:&readError];
     if (otherData == nil) {
         if (errorMessage) {
-            *errorMessage = [NSString stringWithFormat:@"Could not read %@: %@",
-                otherFilePath, readError.localizedDescription ?: @"unknown error"];
+            *errorMessage = [NSString stringWithFormat:L(@"compare.errorReadFile"),
+                otherFilePath, readError.localizedDescription ?: L(@"compare.errorReadUnknown")];
         }
         return -1;
     }
@@ -2536,7 +2788,7 @@ static void clearHexCompareResult()
 static void presentHexCompareDialog()
 {
     if (!isPreviewBufferActive()) {
-        showMessage(@"HEX-Editor", @"Open the hex view (View in HEX) before using Compare HEX.");
+        showMessage(L(@"app.title"), L(@"compare.openHexFirstCompare"));
         return;
     }
 
@@ -2555,8 +2807,8 @@ static void presentHexCompareDialog()
         NSString *chosenPath = fixturePath;
         if (chosenPath == nil) {
             NSOpenPanel *panel = [NSOpenPanel openPanel];
-            panel.title = @"Compare HEX with…";
-            panel.message = @"Pick a file to compare against the current buffer.";
+            panel.title = L(@"compare.openPanelTitle");
+            panel.message = L(@"compare.openPanelMessage");
             panel.canChooseFiles = YES;
             panel.canChooseDirectories = NO;
             panel.allowsMultipleSelection = NO;
@@ -2570,15 +2822,16 @@ static void presentHexCompareDialog()
         NSString *err = nil;
         const int result = executeHexCompareWithFile(chosenPath, &err);
         if (result < 0) {
-            presentHexValidationError(err ?: @"Compare failed.");
+            presentHexValidationError(err ?: L(@"compare.errorFailed"));
             return;
         }
         if (result == 0) {
-            showMessage(@"HEX-Editor Compare", @"Files match.");
+            showMessage(L(@"app.titleCompare"), L(@"compare.summaryMatch"));
         } else {
-            showMessage(@"HEX-Editor Compare",
-                [NSString stringWithFormat:@"%d byte%@ differ.\nUse Clear Compare Result to remove the highlight.",
-                    result, result == 1 ? @"" : @"s"]);
+            NSString *summary = (result == 1)
+                ? L(@"compare.summaryDifferSingular")
+                : [NSString stringWithFormat:L(@"compare.summaryDifferPlural"), result];
+            showMessage(L(@"app.titleCompare"), summary);
         }
     }
 }
@@ -2588,18 +2841,18 @@ static void presentHexCompareDialog()
 static int executeInsertColumns(NSString *patternText, int count, int position, NSString **errorMessage)
 {
     if (!isPreviewBufferActive()) {
-        if (errorMessage) *errorMessage = @"No active hex buffer.";
+        if (errorMessage) *errorMessage = L(@"find.errorNoBuffer");
         return -1;
     }
     if (patternText == nil || patternText.length == 0) {
-        if (errorMessage) *errorMessage = @"Pattern is empty.";
+        if (errorMessage) *errorMessage = L(@"insertColumns.errorEmptyPattern");
         return -1;
     }
 
     // Parse pattern as hex bytes (the Windows dialog accepted hex input only).
     std::vector<std::uint8_t> patternBytes;
     if (!hexedit::parseHexClipboardText(std::string([patternText UTF8String]), patternBytes) || patternBytes.empty()) {
-        if (errorMessage) *errorMessage = @"Pattern must be a sequence of hex bytes (e.g. 0x00, DE AD BE EF).";
+        if (errorMessage) *errorMessage = L(@"insertColumns.errorParsePattern");
         return -1;
     }
 
@@ -2607,20 +2860,19 @@ static int executeInsertColumns(NSString *patternText, int count, int position, 
     const int currentColumns = std::max(g_columns, 1);
     const int columnsLimit = columnsLimitForBytesPerCell(bpc);
     if (count <= 0 || (count + currentColumns) > columnsLimit) {
-        if (errorMessage) *errorMessage = [NSString stringWithFormat:
-            @"Column count must be between 1 and %d at the current bit width.",
+        if (errorMessage) *errorMessage = [NSString stringWithFormat:L(@"insertColumns.errorRangeCount"),
             std::max(0, columnsLimit - currentColumns)];
         return -1;
     }
     if (position < 0 || position > currentColumns) {
-        if (errorMessage) *errorMessage = [NSString stringWithFormat:
-            @"Insert position must be between 0 and %d (the current column count).", currentColumns];
+        if (errorMessage) *errorMessage = [NSString stringWithFormat:L(@"insertColumns.errorRangePosition"),
+            currentColumns];
         return -1;
     }
 
     NppHandle editor = previewScintillaHandle;
     if (!editor) {
-        if (errorMessage) *errorMessage = @"No active editor.";
+        if (errorMessage) *errorMessage = L(@"find.errorNoEditor");
         return -1;
     }
 
@@ -2637,7 +2889,7 @@ static int executeInsertColumns(NSString *patternText, int count, int position, 
     // row to the first so earlier offsets don't shift as we mutate the tail.
     const std::size_t bpr = static_cast<std::size_t>(currentBytesPerRow());
     if (bpr == 0) {
-        if (errorMessage) *errorMessage = @"Invalid current row size.";
+        if (errorMessage) *errorMessage = L(@"insertColumns.errorRowSize");
         return -1;
     }
     const std::size_t totalLength = previewBytes.size();
@@ -2648,7 +2900,7 @@ static int executeInsertColumns(NSString *patternText, int count, int position, 
     const bool hasPartial = (totalLength % bpr) != 0;
     const std::size_t totalRows = fullRows + (hasPartial ? 1 : 0);
     if (totalRows == 0) {
-        if (errorMessage) *errorMessage = @"Buffer is empty — nothing to insert into.";
+        if (errorMessage) *errorMessage = L(@"insertColumns.errorBufferEmpty");
         return -1;
     }
 
@@ -2681,20 +2933,14 @@ static void presentInsertColumnsDialog()
 {
     @autoreleasepool {
         NSAlert *alert = [[NSAlert alloc] init];
-        alert.messageText = @"Insert Columns";
-        alert.informativeText = [NSString stringWithFormat:
-            @"Insert a hex pattern into every row at a chosen column position. Each row "
-            @"grows by (count × %d) bytes; the column count grows by `count`.\n"
-            @"\n"
-            @"Pattern: hex bytes only (e.g. 0x00 or DE AD).\n"
-            @"Count: 1 to %d at the current %d-bit grouping.\n"
-            @"Position: 0 to %d (current column count).",
+        alert.messageText = L(@"insertColumns.title");
+        alert.informativeText = [NSString stringWithFormat:L(@"insertColumns.message"),
             g_bytesPerCell,
             std::max(0, columnsLimitForBytesPerCell(g_bytesPerCell) - g_columns),
             g_bytesPerCell * 8,
             g_columns];
-        [alert addButtonWithTitle:@"Insert"];
-        [alert addButtonWithTitle:@"Cancel"];
+        [alert addButtonWithTitle:L(@"insertColumns.button")];
+        [alert addButtonWithTitle:L(@"button.cancel")];
 
         const CGFloat width = 320.0;
         const CGFloat fieldHeight = 22.0;
@@ -2704,13 +2950,13 @@ static void presentInsertColumnsDialog()
 
         CGFloat y = totalHeight - fieldHeight;
         NSTextField *patternField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, y, width, fieldHeight)];
-        patternField.placeholderString = @"Pattern (hex): 0xFF or DE AD";
+        patternField.placeholderString = L(@"insertColumns.placeholder.pattern");
         patternField.accessibilityIdentifier = @"hex-editor.insertcolumns.pattern";
         [accessory addSubview:patternField];
 
         y -= (fieldHeight + verticalGap);
         NSTextField *countField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, y, width, fieldHeight)];
-        countField.placeholderString = @"Count (columns to insert)";
+        countField.placeholderString = L(@"insertColumns.placeholder.count");
         countField.alignment = NSTextAlignmentRight;
         countField.accessibilityIdentifier = @"hex-editor.insertcolumns.count";
         [accessory addSubview:countField];
@@ -2718,7 +2964,7 @@ static void presentInsertColumnsDialog()
         y -= (fieldHeight + verticalGap);
         NSTextField *positionField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, y, width, fieldHeight)];
         positionField.stringValue = @"0";
-        positionField.placeholderString = @"Position (column index, 0 = left edge)";
+        positionField.placeholderString = L(@"insertColumns.placeholder.position");
         positionField.alignment = NSTextAlignmentRight;
         positionField.accessibilityIdentifier = @"hex-editor.insertcolumns.position";
         [accessory addSubview:positionField];
@@ -2739,13 +2985,18 @@ static void presentInsertColumnsDialog()
         NSString *err = nil;
         const int rows = executeInsertColumns(pattern, countValue, positionValue, &err);
         if (rows < 0) {
-            presentHexValidationError(err ?: @"Insert failed.");
+            presentHexValidationError(err ?: L(@"insertColumns.errorFailed"));
             return;
         }
-        showMessage(@"HEX-Editor",
-            [NSString stringWithFormat:@"Inserted %d column%@ across %d row%@.",
-                countValue, countValue == 1 ? @"" : @"s",
-                rows, rows == 1 ? @"" : @"s"]);
+        // The summary mentions both column-count plurality and row-count plurality. We use a
+        // simple two-message split rather than ICU plural forms so translators can rephrase
+        // each form independently.
+        NSString *summary = (rows == 1)
+            ? [NSString stringWithFormat:L(@"insertColumns.summarySingularRows"),
+                countValue, countValue == 1 ? @"" : @"s"]
+            : [NSString stringWithFormat:L(@"insertColumns.summaryPluralRows"),
+                countValue, countValue == 1 ? @"" : @"s", rows];
+        showMessage(L(@"app.title"), summary);
     }
 }
 
@@ -2754,21 +3005,21 @@ static void presentInsertColumnsDialog()
 static int executePatternReplace(NSString *patternText, NSString **errorMessage)
 {
     if (!isPreviewBufferActive()) {
-        if (errorMessage) *errorMessage = @"Open the hex view (View in HEX) before using Pattern Replace.";
+        if (errorMessage) *errorMessage = L(@"patternReplace.openHexFirst");
         return -1;
     }
     if (!hasByteSelection() || selectedByteEnd <= selectedByteStart) {
-        if (errorMessage) *errorMessage = @"Select something in the hex view first — Pattern Replace fills the selection.";
+        if (errorMessage) *errorMessage = L(@"patternReplace.requireSelection");
         return -1;
     }
     if (patternText == nil || patternText.length == 0) {
-        if (errorMessage) *errorMessage = @"Pattern is empty.";
+        if (errorMessage) *errorMessage = L(@"patternReplace.errorEmptyPattern");
         return -1;
     }
 
     std::vector<std::uint8_t> patternBytes;
     if (!hexedit::parseHexClipboardText(std::string([patternText UTF8String]), patternBytes) || patternBytes.empty()) {
-        if (errorMessage) *errorMessage = @"Pattern must be a sequence of hex bytes (e.g. 0xFF or DE AD BE EF).";
+        if (errorMessage) *errorMessage = L(@"patternReplace.errorParsePattern");
         return -1;
     }
 
@@ -2779,7 +3030,7 @@ static int executePatternReplace(NSString *patternText, NSString **errorMessage)
     }
 
     if (!applyEditorByteTransaction(selectedByteStart, filler.data(), filler.size(), length)) {
-        if (errorMessage) *errorMessage = @"Pattern Replace failed.";
+        if (errorMessage) *errorMessage = L(@"patternReplace.errorFailed");
         return -1;
     }
 
@@ -2797,27 +3048,24 @@ static int executePatternReplace(NSString *patternText, NSString **errorMessage)
 static void presentPatternReplaceDialog()
 {
     if (!isPreviewBufferActive()) {
-        showMessage(@"HEX-Editor", @"Open the hex view (View in HEX) before using Pattern Replace.");
+        showMessage(L(@"app.title"), L(@"patternReplace.openHexFirst"));
         return;
     }
     if (!hasByteSelection() || selectedByteEnd <= selectedByteStart) {
-        showMessage(@"HEX-Editor", @"Select something in the hex view first — Pattern Replace fills the selection.");
+        showMessage(L(@"app.title"), L(@"patternReplace.requireSelection"));
         return;
     }
 
     @autoreleasepool {
         const std::size_t length = selectedByteEnd - selectedByteStart;
         NSAlert *alert = [[NSAlert alloc] init];
-        alert.messageText = @"Pattern Replace";
-        alert.informativeText = [NSString stringWithFormat:
-            @"Fill the current %zu-byte selection with a repeating hex pattern.\n"
-            @"\n"
-            @"Pattern: hex bytes only (e.g. 0xFF or DE AD).", length];
-        [alert addButtonWithTitle:@"Replace"];
-        [alert addButtonWithTitle:@"Cancel"];
+        alert.messageText = L(@"patternReplace.title");
+        alert.informativeText = [NSString stringWithFormat:L(@"patternReplace.message"), length];
+        [alert addButtonWithTitle:L(@"patternReplace.button")];
+        [alert addButtonWithTitle:L(@"button.cancel")];
 
         NSTextField *patternField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)];
-        patternField.placeholderString = @"Pattern (hex): 0xFF or DE AD";
+        patternField.placeholderString = L(@"patternReplace.placeholder");
         patternField.accessibilityIdentifier = @"hex-editor.patternreplace.pattern";
         alert.accessoryView = patternField;
         [alert.window setInitialFirstResponder:patternField];
@@ -2831,12 +3079,13 @@ static void presentPatternReplaceDialog()
         NSString *err = nil;
         const int bytesWritten = executePatternReplace(pattern, &err);
         if (bytesWritten < 0) {
-            presentHexValidationError(err ?: @"Pattern Replace failed.");
+            presentHexValidationError(err ?: L(@"patternReplace.errorFailed"));
             return;
         }
-        showMessage(@"HEX-Editor",
-            [NSString stringWithFormat:@"Replaced %d byte%@ with the pattern.",
-                bytesWritten, bytesWritten == 1 ? @"" : @"s"]);
+        NSString *summary = (bytesWritten == 1)
+            ? L(@"patternReplace.summarySingular")
+            : [NSString stringWithFormat:L(@"patternReplace.summaryPlural"), bytesWritten];
+        showMessage(L(@"app.title"), summary);
     }
 }
 
@@ -2864,7 +3113,7 @@ static void addHexCellColumns(NSTableView *table, NSFont *font)
     const CGFloat cellWidth = cellColumnWidth(font, mode);
     const int midpoint = cells / 2;  // 8 for bpc=1, 4 for bpc=2, 2 for bpc=4, 1 for bpc=8
 
-    configureTableColumn(table, @"offset", @"Offset", offsetColumnWidth(font), font);
+    configureTableColumn(table, @"offset", L(@"table.header.offset"), offsetColumnWidth(font), font);
     for (int column = 0; column < cells; ++column) {
         const std::size_t firstByte = static_cast<std::size_t>(column) * static_cast<std::size_t>(g_bytesPerCell);
         configureTableColumn(
@@ -2878,7 +3127,7 @@ static void addHexCellColumns(NSTableView *table, NSFont *font)
         }
     }
     configureTableColumn(table, @"spacer", @"", HEX_ASCII_SEPARATOR_WIDTH, font);
-    configureTableColumn(table, @"ascii", @"ASCII", asciiColumnWidth(font), font);
+    configureTableColumn(table, @"ascii", L(@"table.header.ascii"), asciiColumnWidth(font), font);
 }
 
 static void applyHexViewMode()
@@ -3082,14 +3331,15 @@ static NSView *createHexTableView(NSTableView **tableView, NSTextField **statusL
 static NSString *makeStatusText()
 {
     if (previewBytes.empty()) {
-        return @"Current document is empty.";
+        return L(@"status.empty");
     }
 
     if (previewBytes.size() < previewTotalLength) {
-        return [NSString stringWithFormat:@"Showing %zu of %zu bytes. Preview is truncated for responsiveness.", previewBytes.size(), previewTotalLength];
+        return [NSString stringWithFormat:L(@"status.showingTruncated"),
+            previewBytes.size(), previewTotalLength];
     }
 
-    return [NSString stringWithFormat:@"Showing %zu bytes.", previewBytes.size()];
+    return [NSString stringWithFormat:L(@"status.showing"), previewBytes.size()];
 }
 
 static void refreshHexTable(NSTableView *tableView, NSTextField *statusLabel)
@@ -3141,7 +3391,7 @@ static void showHexPreview()
     previewScintillaHandle = getCurrentScintilla();
     previewBufferId = getCurrentBufferId();
     if (!previewScintillaHandle || previewBufferId == 0) {
-        showMessage(@"HEX-Editor for macOS", @"No active editor buffer is available.");
+        showMessage(L(@"app.titleMac"), L(@"editor.noActiveBuffer"));
         return;
     }
 
@@ -3156,7 +3406,7 @@ static void showHexPreview()
     hexEditorView = currentEditorView();
     hiddenScintillaView = findScintillaView(hexEditorView);
     if (!hexEditorView || !hiddenScintillaView) {
-        showMessage(@"HEX-Editor for macOS", @"Could not find the active editor view to replace.");
+        showMessage(L(@"app.titleMac"), L(@"editor.noActiveView"));
         previewScintillaHandle = 0;
         previewBufferId = 0;
         return;
@@ -3218,12 +3468,7 @@ static void hideHexPreview()
 
 static void showAbout()
 {
-    showMessage(@"HEX-Editor for macOS", @"Native macOS port scaffold for Notepad++ macOS. The current milestone provides an inline hex table with direct byte editing, selection, bookmarks, and context-menu editing commands.");
-}
-
-static void showNotPorted(NSString *feature)
-{
-    showMessage(@"HEX-Editor for macOS", [NSString stringWithFormat:@"%@ is present in the original Windows plugin menu, but its Cocoa implementation has not been ported yet.", feature]);
+    showMessage(L(@"app.titleMac"), L(@"about.body"));
 }
 
 static void compareHexPreview()
@@ -3234,7 +3479,7 @@ static void compareHexPreview()
 static void clearComparePreview()
 {
     if (g_compareDiffs.empty()) {
-        showMessage(@"HEX-Editor", @"No active comparison to clear.");
+        showMessage(L(@"app.title"), L(@"compare.noActiveResult"));
         return;
     }
     clearHexCompareResult();
@@ -3243,7 +3488,7 @@ static void clearComparePreview()
 static void insertColumnsPreview()
 {
     if (!isPreviewBufferActive()) {
-        showMessage(@"HEX-Editor", @"Open the hex view (View in HEX) before using Insert Columns.");
+        showMessage(L(@"app.title"), L(@"insertColumns.openHexFirst"));
         return;
     }
     presentInsertColumnsDialog();
@@ -3269,32 +3514,35 @@ extern "C" NPP_EXPORT void setInfo(NppData data)
     }
     loadHexPrefs();
 
-    strlcpy(funcItem[0]._itemName, "View in HEX", NPP_MENU_ITEM_SIZE);
+    // Plugin menu entries are C strings (FuncItem._itemName is a fixed char[]).
+    // We pull the localized title via L() and copy its UTF8 form. Notepad++ reads
+    // these once during plugin load, so the language is locked at startup.
+    strlcpy(funcItem[0]._itemName, [L(@"menu.plugin.viewInHex") UTF8String], NPP_MENU_ITEM_SIZE);
     funcItem[0]._pFunc = toggleHexPreview;
     funcItem[0]._init2Check = false;
     funcItem[0]._pShKey = &hexShortcut;
 
-    strlcpy(funcItem[1]._itemName, "Compare HEX", NPP_MENU_ITEM_SIZE);
+    strlcpy(funcItem[1]._itemName, [L(@"menu.plugin.compareHex") UTF8String], NPP_MENU_ITEM_SIZE);
     funcItem[1]._pFunc = compareHexPreview;
     funcItem[1]._init2Check = false;
     funcItem[1]._pShKey = nullptr;
 
-    strlcpy(funcItem[2]._itemName, "Clear Compare Result", NPP_MENU_ITEM_SIZE);
+    strlcpy(funcItem[2]._itemName, [L(@"menu.plugin.clearCompareResult") UTF8String], NPP_MENU_ITEM_SIZE);
     funcItem[2]._pFunc = clearComparePreview;
     funcItem[2]._init2Check = false;
     funcItem[2]._pShKey = nullptr;
 
-    strlcpy(funcItem[3]._itemName, "Insert Columns...", NPP_MENU_ITEM_SIZE);
+    strlcpy(funcItem[3]._itemName, [L(@"menu.plugin.insertColumns") UTF8String], NPP_MENU_ITEM_SIZE);
     funcItem[3]._pFunc = insertColumnsPreview;
     funcItem[3]._init2Check = false;
     funcItem[3]._pShKey = nullptr;
 
-    strlcpy(funcItem[4]._itemName, "Pattern Replace...", NPP_MENU_ITEM_SIZE);
+    strlcpy(funcItem[4]._itemName, [L(@"menu.plugin.patternReplace") UTF8String], NPP_MENU_ITEM_SIZE);
     funcItem[4]._pFunc = patternReplacePreview;
     funcItem[4]._init2Check = false;
     funcItem[4]._pShKey = nullptr;
 
-    strlcpy(funcItem[5]._itemName, "Help...", NPP_MENU_ITEM_SIZE);
+    strlcpy(funcItem[5]._itemName, [L(@"menu.plugin.help") UTF8String], NPP_MENU_ITEM_SIZE);
     funcItem[5]._pFunc = showAbout;
     funcItem[5]._init2Check = false;
     funcItem[5]._pShKey = nullptr;

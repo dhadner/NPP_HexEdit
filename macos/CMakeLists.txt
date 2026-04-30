@@ -56,6 +56,26 @@ set_target_properties(HexEditor PROPERTIES
 set(PLUGIN_INSTALL_DIR "$ENV{HOME}/.notepad++/plugins/HexEditor")
 install(TARGETS HexEditor DESTINATION "${PLUGIN_INSTALL_DIR}")
 
+# Localizable.<lang>.strings — the plugin reads these at runtime from the install
+# directory next to HexEditor.dylib. Embedded English defaults in HexEditor.mm
+# carry the UI when these files are missing, but shipping them is required for
+# any non-English language to render.
+set(HEX_LOCALIZATION_FILES
+    "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.en.strings"
+    "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.de.strings"
+)
+install(FILES ${HEX_LOCALIZATION_FILES} DESTINATION "${PLUGIN_INSTALL_DIR}")
+
+# Also copy the .strings into the build directory next to the dylib so the test
+# harness (which dlopens the build-tree dylib) finds them via dladdr at runtime.
+add_custom_command(TARGET HexEditor POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${HEX_LOCALIZATION_FILES}
+        "$<TARGET_FILE_DIR:HexEditor>"
+    COMMENT "Copying Localizable.*.strings next to HexEditor.dylib"
+    VERBATIM
+)
+
 if(BUILD_TESTING)
     add_executable(HexEditorCoreTests
         tests/HexCoreTests.cpp
@@ -68,10 +88,15 @@ if(BUILD_TESTING)
     set_tests_properties(HexEditorCoreTests PROPERTIES LABELS "unit;core")
 
     add_executable(HexEditorPluginSmokeTests
-        tests/HexPluginSmokeTests.cpp
+        tests/HexPluginSmokeTests.mm
     )
     target_include_directories(HexEditorPluginSmokeTests PRIVATE
         "${NPP_PLUGIN_INCLUDE}"
+    )
+    # Foundation gives us NSUserDefaults to force AppleLanguages = en before dlopen,
+    # so the smoke test's English string assertions don't depend on the dev locale.
+    target_link_libraries(HexEditorPluginSmokeTests PRIVATE
+        "-framework Foundation"
     )
     add_dependencies(HexEditorPluginSmokeTests HexEditor)
     add_test(NAME HexEditorPluginSmokeTests

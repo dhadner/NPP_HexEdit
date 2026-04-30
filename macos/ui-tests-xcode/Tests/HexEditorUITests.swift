@@ -1076,10 +1076,7 @@ func testContextMenuCommands() throws {
         dialogField.replaceFieldText(with: "99")  // out of range
         app.buttons["OK"].firstMatch.click()
 
-        // Plugin's NSAlert validation error should appear and dismiss with OK.
-        let errorAlert = app.dialogs["alert"].firstMatch
-        // The validation alert is also an NSAlert so it appears as a dialog. Just dismiss any
-        // OK button that's currently presented.
+        // Plugin's NSAlert validation error appears next; dismiss its OK.
         let okAfter = app.buttons["OK"].firstMatch
         XCTAssertTrue(okAfter.waitForExistence(timeout: 3))
         okAfter.click()
@@ -1102,7 +1099,10 @@ func testContextMenuCommands() throws {
         //   ~/Library/Preferences/org.notepad-plus-plus.HexEditor.plist before loading,
         //   so each test sees defaults. The runner cannot delete that plist itself —
         //   sandboxed UserDefaults(suiteName:) writes redirect to the runner container.
-        app.launchArguments = ["-nosession", "--reset-hex-prefs"] + extraArguments
+        // -AppleLanguages forces the host (and the in-process plugin) into English so the
+        // tests' string assertions stay valid no matter what locale the dev machine is set
+        // to. The plugin's runtime localization respects this.
+        app.launchArguments = ["-nosession", "--reset-hex-prefs", "-AppleLanguages", "(en)"] + extraArguments
         app.launch()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "Notepad++ macOS did not launch.")
         return app

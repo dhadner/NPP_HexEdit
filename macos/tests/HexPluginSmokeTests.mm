@@ -1,5 +1,7 @@
 #include "NppPluginInterfaceMac.h"
 
+#import <Foundation/Foundation.h>
+
 #include <dlfcn.h>
 
 #include <array>
@@ -36,6 +38,12 @@ int main(int argc, char **argv)
     if (argc < 2) {
         std::fprintf(stderr, "usage: %s <path-to-HexEditor.dylib>\n", argv[0]);
         return 2;
+    }
+
+    // Force English for the smoke test so the dylib's localized funcItem names
+    // come back as the English baseline regardless of the dev machine's locale.
+    @autoreleasepool {
+        [[NSUserDefaults standardUserDefaults] setObject:@[@"en"] forKey:@"AppleLanguages"];
     }
 
     const char *dylibPath = argv[1];
