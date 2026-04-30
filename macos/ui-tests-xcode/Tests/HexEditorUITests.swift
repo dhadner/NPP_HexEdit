@@ -8,10 +8,88 @@ private enum AXID {
     static let status = "hex-editor.status"
 }
 
+private extension XCUIElement {
+    /// Replace a text field's contents with `text`. Uses Cmd+A + typeText which is the
+    /// only sequence empirically delivered reliably to NSAlert-hosted NSTextFields under
+    /// XCUI — typeKey(.delete, ...) and typeKey(.end, ...) are silently dropped in this
+    /// configuration; Cmd+modifier shortcuts go through NSStandardKeyBindingResponding
+    /// and route correctly. Brief pauses around the modifier press let click+focus settle
+    /// before the select-all fires (without them the select-all sometimes races the click
+    /// and selects nothing, leaving the original value intact).
+    func replaceFieldText(with text: String) {
+        click()
+        Thread.sleep(forTimeInterval: 0.1)
+        typeKey("a", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.1)
+        typeText(text)
+    }
+}
+
 @MainActor
 final class HexEditorUITests: XCTestCase {
     override func setUp() async throws {
         continueAfterFailure = false
+
+        // Bulletproof pre-test cleanup: a prior test that aborted mid-modal can leave the
+        // dev build alive; LaunchServices then coalesces our XCUIApplication(url:) launch
+        // onto that stale process and we sit through 68 s of "no PID" per test. Force-kill
+        // any dev-build instance up front, then verify the kill landed before proceeding.
+        let expectedURL = try notepadAppURL().standardizedFileURL
+        terminateDevBuildInstances(expectedURL: expectedURL)
+
+        // If a *different* org.notepadplusplus.mac is running (e.g. /Applications/Notepad++.app),
+        // XCUI(url:) cannot launch a second instance under the same bundle ID. Skip-fast with a
+        // clear message instead of letting the test sit through the launch timeout.
+        let conflicts = NSWorkspace.shared.runningApplications.filter {
+            guard $0.bundleIdentifier == "org.notepadplusplus.mac" else { return false }
+            guard let url = $0.bundleURL?.standardizedFileURL else { return false }
+            return url != expectedURL
+        }
+        if let conflict = conflicts.first {
+            throw XCTSkip("""
+                Another Notepad++ macOS instance is already running with the same bundle \
+                identifier (org.notepadplusplus.mac):
+                  \(conflict.bundleURL?.path ?? "(unknown path)")
+                Quit it before running UI tests. XCUIApplication(url:) cannot launch a \
+                second instance under the same bundle ID. Expected dev build is:
+                  \(expectedURL.path)
+                """)
+        }
+    }
+
+    override func tearDown() async throws {
+        // Bulletproof post-test cleanup. If a test fails after opening a modal NSAlert,
+        // app.terminate() will not dismiss the modal and the host stays alive forever.
+        // forceTerminate() goes through Mach IPC (SIGKILL) and bypasses the modal entirely.
+        if let url = try? notepadAppURL().standardizedFileURL {
+            terminateDevBuildInstances(expectedURL: url)
+        }
+        try await super.tearDown()
+    }
+
+    /// Force-kills any running dev-build Notepad++.app instance (path matches `expectedURL`),
+    /// then waits up to 5 seconds for the process to disappear from the running-apps list.
+    /// Leaves instances at other paths (e.g. /Applications/Notepad++.app) untouched — those
+    /// belong to the user.
+    private func terminateDevBuildInstances(expectedURL: URL) {
+        let dev = NSWorkspace.shared.runningApplications.filter {
+            guard $0.bundleIdentifier == "org.notepadplusplus.mac" else { return false }
+            guard let url = $0.bundleURL?.standardizedFileURL else { return false }
+            return url == expectedURL
+        }
+        for app in dev {
+            // forceTerminate() is SIGKILL via Mach — survives modal alert blocks that
+            // would otherwise wedge a SIGTERM-based terminate().
+            app.forceTerminate()
+        }
+        for _ in 0..<50 {
+            let stillRunning = NSWorkspace.shared.runningApplications.contains {
+                $0.bundleIdentifier == "org.notepadplusplus.mac" &&
+                $0.bundleURL?.standardizedFileURL == expectedURL
+            }
+            if !stillRunning { return }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
     }
 
     func testHostApplicationLaunches() throws {
@@ -315,6 +393,7 @@ func testContextMenuCommands() throws {
             "Cut", "Copy", "Paste", "Delete",
             "Cut Binary Content", "Copy Binary Content", "Paste Binary Content",
             "View in",
+            "Address Width...", "Columns...",
             "Zoom In", "Zoom Out", "Restore Default Zoom",
         ]
         for label in expectedItems {
@@ -326,14 +405,172 @@ func testContextMenuCommands() throws {
         app.typeKey(.escape, modifierFlags: [])
     }
 
+    func testViewSubmodeSwitchesCellWidth() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "ABCD")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 5))
+
+        let cellOne = firstRow.staticTexts.element(boundBy: 1)
+        XCTAssertEqual(cellOne.value as? String, "41",
+                       "Default 8-Bit hex should render byte 0 ('A' = 0x41) as a 2-char cell.")
+
+        hexTable.rightClick()
+        let viewIn = app.menuItems["View in"]
+        XCTAssertTrue(viewIn.waitForExistence(timeout: 3))
+        viewIn.click()
+
+        let bits16 = app.menuItems["16-Bit"]
+        XCTAssertTrue(bits16.waitForExistence(timeout: 3))
+        bits16.click()
+
+        // Wait for the table to rebuild — the cell at index 1 must now span 2 bytes (4 hex chars).
+        let firstRowAfter = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRowAfter.waitForExistence(timeout: 5))
+        let cellOneAfter = firstRowAfter.staticTexts.element(boundBy: 1)
+
+        let predicate = NSPredicate(format: "value == %@", "4142")
+        let waiter = expectation(for: predicate, evaluatedWith: cellOneAfter, handler: nil)
+        wait(for: [waiter], timeout: 5)
+    }
+
+    func testAddressWidthDialogChangesOffsetGutter() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "X")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 5))
+        let offsetCell = firstRow.staticTexts.element(boundBy: 0)
+        XCTAssertEqual(offsetCell.value as? String, "00000000",
+                       "Default address width should produce an 8-digit offset.")
+
+        hexTable.rightClick()
+        let addrItem = app.menuItems["Address Width..."]
+        XCTAssertTrue(addrItem.waitForExistence(timeout: 3))
+        addrItem.click()
+
+        let dialogField = app.textFields["hex-editor.dialog.input"]
+        XCTAssertTrue(dialogField.waitForExistence(timeout: 3))
+        dialogField.replaceFieldText(with: "12")
+        XCTAssertEqual(dialogField.value as? String, "12",
+                       "Dialog field should contain '12' before clicking OK.")
+
+        let okButton = app.buttons["OK"].firstMatch
+        XCTAssertTrue(okButton.waitForExistence(timeout: 3))
+        okButton.click()
+        XCTAssertTrue(dialogField.waitForNonExistence(timeout: 5),
+                      "Dialog should dismiss after OK.")
+
+        // After the table rebuilds, the offset should be 12 hex digits wide.
+        let firstRowAfter = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRowAfter.waitForExistence(timeout: 5))
+        let offsetCellAfter = firstRowAfter.staticTexts.element(boundBy: 0)
+        let predicate = NSPredicate(format: "value == %@", "000000000000")
+        let waiter = expectation(for: predicate, evaluatedWith: offsetCellAfter, handler: nil)
+        wait(for: [waiter], timeout: 5)
+    }
+
+    func testColumnsDialogChangesRowCount() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 24 bytes → at the default 16 bytes/row that is 2 rows; at columns=4 (×1-byte cells) that is 6 rows.
+        try createBufferWithText(app: app, text: "ABCDEFGHIJKLMNOPQRSTUVWX")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        // Sanity: at least 2 rows initially (allow for the trailing append-slot row).
+        XCTAssertGreaterThanOrEqual(hexTable.tableRows.count, 2,
+                                     "24-byte buffer at default 16 bytes/row should render 2+ rows.")
+
+        hexTable.rightClick()
+        let colsItem = app.menuItems["Columns..."]
+        XCTAssertTrue(colsItem.waitForExistence(timeout: 3))
+        colsItem.click()
+
+        let dialogField = app.textFields["hex-editor.dialog.input"]
+        XCTAssertTrue(dialogField.waitForExistence(timeout: 3))
+        dialogField.replaceFieldText(with: "4")
+        XCTAssertEqual(dialogField.value as? String, "4",
+                       "Dialog field should contain '4' before clicking OK.")
+
+        let okButton = app.buttons["OK"].firstMatch
+        XCTAssertTrue(okButton.waitForExistence(timeout: 3))
+        okButton.click()
+        XCTAssertTrue(dialogField.waitForNonExistence(timeout: 5),
+                      "Dialog should dismiss after OK.")
+
+        // 24 bytes / 4-bytes-per-row = 6 rows, plus an append-slot row when the doc fully populates
+        // the last row, so accept ≥6 rows as the post-resize target.
+        let predicate = NSPredicate(format: "count >= 6")
+        let waiter = expectation(for: predicate, evaluatedWith: hexTable.tableRows, handler: nil)
+        wait(for: [waiter], timeout: 5)
+    }
+
+    func testInvalidAddressWidthShowsErrorAndKeepsOriginal() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "X")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        hexTable.rightClick()
+        app.menuItems["Address Width..."].click()
+
+        let dialogField = app.textFields["hex-editor.dialog.input"]
+        XCTAssertTrue(dialogField.waitForExistence(timeout: 3))
+        dialogField.replaceFieldText(with: "99")  // out of range
+        app.buttons["OK"].firstMatch.click()
+
+        // Plugin's NSAlert validation error should appear and dismiss with OK.
+        let errorAlert = app.dialogs["alert"].firstMatch
+        // The validation alert is also an NSAlert so it appears as a dialog. Just dismiss any
+        // OK button that's currently presented.
+        let okAfter = app.buttons["OK"].firstMatch
+        XCTAssertTrue(okAfter.waitForExistence(timeout: 3))
+        okAfter.click()
+
+        // Offset gutter must still be 8 digits — the invalid value was rejected.
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 5))
+        let offsetCell = firstRow.staticTexts.element(boundBy: 0)
+        XCTAssertEqual(offsetCell.value as? String, "00000000",
+                       "Invalid Address Width should be rejected and original 8-digit width preserved.")
+    }
+
     // MARK: - Helpers
 
     private func launchNotepad() throws -> XCUIApplication {
         let app = XCUIApplication(url: try notepadAppURL())
         // -nosession suppresses session restore so each test starts with a single empty,
-        // focused buffer (AppDelegate creates a fresh untitled document when no session
-        // is restored and no files were passed on the command line).
-        app.launchArguments = ["-nosession"]
+        // focused buffer.
+        // --reset-hex-prefs is honoured by the plugin's setInfo: it wipes the suite at
+        //   ~/Library/Preferences/org.notepad-plus-plus.HexEditor.plist before loading,
+        //   so each test sees defaults. The runner cannot delete that plist itself —
+        //   sandboxed UserDefaults(suiteName:) writes redirect to the runner container.
+        app.launchArguments = ["-nosession", "--reset-hex-prefs"]
         app.launch()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "Notepad++ macOS did not launch.")
         return app

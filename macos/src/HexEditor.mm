@@ -33,11 +33,67 @@ static const CGFloat HEX_MIN_FONT_SIZE = 6.0;
 static const CGFloat HEX_MAX_FONT_SIZE = 32.0;
 static const CGFloat HEX_CARET_WIDTH = 2.0;
 
-static const int HEX_BYTES_PER_ROW = 16;
+static NSString *const HEX_PREFS_SUITE = @"org.notepad-plus-plus.HexEditor";
+static NSString *const HEX_PREF_BYTES_PER_CELL = @"bytesPerCell";
+static NSString *const HEX_PREF_NOTATION_BINARY = @"notationBinary";
+static NSString *const HEX_PREF_LITTLE_ENDIAN = @"littleEndian";
+static NSString *const HEX_PREF_ADDRESS_WIDTH = @"addressWidth";
+static NSString *const HEX_PREF_COLUMNS = @"columns";
+
+static const int HEX_DEFAULT_ADDRESS_WIDTH = 8;
+static const int HEX_DEFAULT_COLUMNS = 16;
+static const int HEX_MIN_ADDRESS_WIDTH = 4;
+static const int HEX_MAX_ADDRESS_WIDTH = 16;
+static const int HEX_MAX_BYTES_PER_ROW = 128;
 
 static int g_bytesPerCell = 1;
 static hexedit::CellNotation g_notation = hexedit::CellNotation::Hex;
 static bool g_littleEndian = false;
+static int g_addressWidth = HEX_DEFAULT_ADDRESS_WIDTH;
+static int g_columns = HEX_DEFAULT_COLUMNS;
+
+static NSUserDefaults *hexPrefs()
+{
+    static NSUserDefaults *prefs = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        prefs = [[NSUserDefaults alloc] initWithSuiteName:HEX_PREFS_SUITE];
+    });
+    return prefs;
+}
+
+static int hexPrefInt(NSString *key, int fallback)
+{
+    NSUserDefaults *prefs = hexPrefs();
+    if (![prefs objectForKey:key]) {
+        return fallback;
+    }
+    return static_cast<int>([prefs integerForKey:key]);
+}
+
+static void hexPrefSetInt(NSString *key, int value)
+{
+    [hexPrefs() setInteger:value forKey:key];
+}
+
+static bool hexPrefBool(NSString *key, bool fallback)
+{
+    NSUserDefaults *prefs = hexPrefs();
+    if (![prefs objectForKey:key]) {
+        return fallback;
+    }
+    return [prefs boolForKey:key] ? true : false;
+}
+
+static void hexPrefSetBool(NSString *key, bool value)
+{
+    [hexPrefs() setBool:value forKey:key];
+}
+
+static int currentBytesPerRow()
+{
+    return std::max(g_columns, 1) * std::max(g_bytesPerCell, 1);
+}
 
 static hexedit::ViewMode currentViewMode()
 {
@@ -50,12 +106,54 @@ static hexedit::ViewMode currentViewMode()
 
 static int currentCellsPerRow()
 {
-    return hexedit::cellsPerRow(HEX_BYTES_PER_ROW, g_bytesPerCell);
+    return std::max(g_columns, 1);
 }
 
 static int currentDigitsPerCell()
 {
     return hexedit::digitsPerCell(currentViewMode());
+}
+
+static int columnsLimitForBytesPerCell(int bytesPerCell)
+{
+    if (!hexedit::isValidBytesPerCell(bytesPerCell)) {
+        return HEX_DEFAULT_COLUMNS;
+    }
+    return HEX_MAX_BYTES_PER_ROW / bytesPerCell;
+}
+
+static int defaultColumnsForBytesPerCell(int bytesPerCell)
+{
+    return std::max(1, HEX_DEFAULT_COLUMNS / std::max(bytesPerCell, 1));
+}
+
+static void loadHexPrefs()
+{
+    int bpc = hexPrefInt(HEX_PREF_BYTES_PER_CELL, 1);
+    if (!hexedit::isValidBytesPerCell(bpc)) {
+        bpc = 1;
+    }
+    g_bytesPerCell = bpc;
+    g_notation = hexPrefBool(HEX_PREF_NOTATION_BINARY, false)
+        ? hexedit::CellNotation::Binary
+        : hexedit::CellNotation::Hex;
+    g_littleEndian = (bpc > 1) ? hexPrefBool(HEX_PREF_LITTLE_ENDIAN, false) : false;
+    g_addressWidth = std::clamp(
+        hexPrefInt(HEX_PREF_ADDRESS_WIDTH, HEX_DEFAULT_ADDRESS_WIDTH),
+        HEX_MIN_ADDRESS_WIDTH,
+        HEX_MAX_ADDRESS_WIDTH);
+    const int columnsLimit = columnsLimitForBytesPerCell(g_bytesPerCell);
+    int columns = hexPrefInt(HEX_PREF_COLUMNS, defaultColumnsForBytesPerCell(g_bytesPerCell));
+    g_columns = std::clamp(columns, 1, columnsLimit);
+}
+
+static void saveHexPrefs()
+{
+    hexPrefSetInt(HEX_PREF_BYTES_PER_CELL, g_bytesPerCell);
+    hexPrefSetBool(HEX_PREF_NOTATION_BINARY, g_notation == hexedit::CellNotation::Binary);
+    hexPrefSetBool(HEX_PREF_LITTLE_ENDIAN, g_littleEndian);
+    hexPrefSetInt(HEX_PREF_ADDRESS_WIDTH, g_addressWidth);
+    hexPrefSetInt(HEX_PREF_COLUMNS, g_columns);
 }
 
 static FuncItem funcItem[NB_FUNC];
@@ -106,6 +204,10 @@ static void applyHexViewMode();
 static void setHexViewBytesPerCell(int bytesPerCell);
 static void toggleHexViewBinary();
 static void toggleHexViewEndian();
+static void setHexAddressWidth(int width);
+static void setHexColumns(int columns);
+static int promptHexInteger(NSString *title, NSString *informative, int currentValue, int minValue, int maxValue);
+static void presentHexValidationError(NSString *message);
 static bool replaceEditorBytes(size_t offset, const uint8_t *bytes, size_t byteCount, size_t replacedByteCount);
 static bool deleteEditorBytes(size_t offset, size_t byteCount);
 static bool applyEditorByteTransaction(size_t offset, const uint8_t *bytes, size_t byteCount, size_t replacedByteCount);
@@ -215,8 +317,9 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
 @implementation HexTableDataSource
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
 {
-    NSInteger rows = static_cast<NSInteger>((previewBytes.size() + 15) / 16);
-    if (previewBytes.size() == previewTotalLength && (previewBytes.empty() || previewBytes.size() % 16 == 0)) {
+    const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+    NSInteger rows = static_cast<NSInteger>((previewBytes.size() + bpr - 1) / bpr);
+    if (previewBytes.size() == previewTotalLength && (previewBytes.empty() || previewBytes.size() % bpr == 0)) {
         ++rows;
     }
     return rows;
@@ -224,25 +327,27 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
 
 - (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row
 {
-    const size_t rowOffset = static_cast<size_t>(row) * 16;
+    const int bytesPerRow = currentBytesPerRow();
+    const size_t rowOffset = static_cast<size_t>(row) * static_cast<size_t>(bytesPerRow);
     NSString *identifier = tableColumn.identifier;
 
     if ([identifier isEqualToString:@"offset"]) {
-        return [NSString stringWithFormat:@"%08zx", rowOffset];
+        return [NSString stringWithFormat:@"%0*zx", g_addressWidth, rowOffset];
     }
 
     if ([identifier isEqualToString:@"ascii"]) {
-        char ascii[17] = {};
-        for (size_t index = 0; index < 16; ++index) {
-            const size_t byteIndex = rowOffset + index;
+        std::string ascii;
+        ascii.reserve(static_cast<size_t>(bytesPerRow));
+        for (int index = 0; index < bytesPerRow; ++index) {
+            const size_t byteIndex = rowOffset + static_cast<size_t>(index);
             if (byteIndex < previewBytes.size()) {
                 const uint8_t value = previewBytes[byteIndex];
-                ascii[index] = std::isprint(value) ? static_cast<char>(value) : '.';
+                ascii.push_back(std::isprint(value) ? static_cast<char>(value) : '.');
             } else {
-                ascii[index] = ' ';
+                ascii.push_back(' ');
             }
         }
-        return [NSString stringWithUTF8String:ascii];
+        return [NSString stringWithUTF8String:ascii.c_str()];
     }
 
     if ([identifier isEqualToString:@"midspacer"] || [identifier isEqualToString:@"spacer"]) {
@@ -329,15 +434,16 @@ static HexTableDataSource *hexTableDataSource = nil;
             if (asciiColumn >= 0) {
                 NSFont *font = hexTableFont();
                 NSRect asciiFrame = [self frameOfCellAtColumn:asciiColumn row:rowIndex];
-                const CGFloat asciiEndX = asciiGlyphLeft(self, asciiColumn, rowIndex) + (16.0 * monospacedGlyphWidth(font));
+                const CGFloat asciiEndX = asciiGlyphLeft(self, asciiColumn, rowIndex) + (static_cast<CGFloat>(currentBytesPerRow()) * monospacedGlyphWidth(font));
                 highlightRect.size.width = std::max<CGFloat>(asciiEndX - NSMinX(highlightRect), 0.0);
                 highlightRect = NSIntersectionRect(highlightRect, NSUnionRect(rowRect, asciiFrame));
             }
             NSRectFillUsingOperation(highlightRect, NSCompositingOperationSourceOver);
         }
 
-        const size_t rowStart = static_cast<size_t>(rowIndex) * 16;
-        const size_t rowEnd = rowStart + 16;
+        const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+        const size_t rowStart = static_cast<size_t>(rowIndex) * bpr;
+        const size_t rowEnd = rowStart + bpr;
         if (!hasByteSelection() || selectedByteEnd <= rowStart || selectedByteStart >= rowEnd) {
             continue;
         }
@@ -350,8 +456,8 @@ static HexTableDataSource *hexTableDataSource = nil;
         const int digitsPerByte = (mode.notation == hexedit::CellNotation::Binary) ? 8 : 2;
         const size_t selectedRowStart = std::max(selectedByteStart, rowStart);
         const size_t selectedRowEnd = std::min(selectedByteEnd, rowEnd);
-        const size_t firstByteInRow = selectedRowStart % HEX_BYTES_PER_ROW;
-        const size_t lastByteInRow = (selectedRowEnd - 1) % HEX_BYTES_PER_ROW;
+        const size_t firstByteInRow = selectedRowStart % bpr;
+        const size_t lastByteInRow = (selectedRowEnd - 1) % bpr;
         const size_t firstCell = firstByteInRow / static_cast<size_t>(bpc);
         const size_t lastCell = lastByteInRow / static_cast<size_t>(bpc);
 
@@ -382,13 +488,14 @@ static HexTableDataSource *hexTableDataSource = nil;
         return;
     }
 
+    const size_t caretBpr = static_cast<size_t>(currentBytesPerRow());
     const bool drawAsciiCaretAtLineEnd = hasByteSelection() &&
         activeCursorField == HexCursorField::Ascii &&
         selectedByteEnd > selectedByteStart &&
         selectedByteEnd == activeByteOffset &&
-        (selectedByteEnd % 16) == 0;
+        (selectedByteEnd % caretBpr) == 0;
     const size_t caretByteOffset = drawAsciiCaretAtLineEnd ? selectedByteEnd - 1 : activeByteOffset;
-    const NSInteger row = static_cast<NSInteger>(caretByteOffset / 16);
+    const NSInteger row = static_cast<NSInteger>(caretByteOffset / caretBpr);
     if (row < 0 || row >= self.numberOfRows || !NSIntersectsRect(dirtyRect, [self rectOfRow:row])) {
         return;
     }
@@ -399,7 +506,7 @@ static HexTableDataSource *hexTableDataSource = nil;
 
     if (activeCursorField == HexCursorField::Hex) {
         const hexedit::ViewMode mode = currentViewMode();
-        const size_t byteInRow = caretByteOffset % HEX_BYTES_PER_ROW;
+        const size_t byteInRow = caretByteOffset % caretBpr;
         const hexedit::DisplayPosition pos = hexedit::displayPositionForByte(byteInRow, static_cast<int>(activeHexNibble), mode);
         const NSInteger tableColumn = [self columnWithIdentifier:[NSString stringWithFormat:@"cell%02zu", pos.cellIndex]];
         if (tableColumn < 0) {
@@ -417,7 +524,7 @@ static HexTableDataSource *hexTableDataSource = nil;
 
         cellFrame = [self frameOfCellAtColumn:tableColumn row:row];
         const CGFloat charWidth = monospacedGlyphWidth(font);
-        const size_t asciiColumnIndex = drawAsciiCaretAtLineEnd ? 16 : (caretByteOffset % 16);
+        const size_t asciiColumnIndex = drawAsciiCaretAtLineEnd ? caretBpr : (caretByteOffset % caretBpr);
         caretX = asciiGlyphLeft(self, tableColumn, row) + static_cast<CGFloat>(asciiColumnIndex) * charWidth;
     }
 
@@ -507,6 +614,12 @@ static HexTableDataSource *hexTableDataSource = nil;
         endianItem.target = self;
     }
     viewItem.submenu = viewSubmenu;
+
+    [menu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *addrItem = [menu addItemWithTitle:@"Address Width..." action:@selector(hexShowAddressWidthDialog:) keyEquivalent:@""];
+    addrItem.target = self;
+    NSMenuItem *colsItem = [menu addItemWithTitle:@"Columns..." action:@selector(hexShowColumnsDialog:) keyEquivalent:@""];
+    colsItem.target = self;
 
     [menu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *zoomInItem = [menu addItemWithTitle:@"Zoom In" action:@selector(hexZoomIn:) keyEquivalent:@""];
@@ -639,6 +752,42 @@ static HexTableDataSource *hexTableDataSource = nil;
 - (void)hexViewToggleBinary:(id)sender { toggleHexViewBinary(); }
 - (void)hexViewToggleEndian:(id)sender { toggleHexViewEndian(); }
 
+- (void)hexShowAddressWidthDialog:(id)sender
+{
+    const int value = promptHexInteger(
+        @"Address Width",
+        [NSString stringWithFormat:@"Number of digits in the offset column (%d–%d).",
+            HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH],
+        g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH);
+    if (value == -1) {
+        return;
+    }
+    if (value == -2) {
+        presentHexValidationError([NSString stringWithFormat:@"Only values between %d and %d possible.",
+            HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH]);
+        return;
+    }
+    setHexAddressWidth(value);
+}
+
+- (void)hexShowColumnsDialog:(id)sender
+{
+    const int limit = columnsLimitForBytesPerCell(g_bytesPerCell);
+    const int value = promptHexInteger(
+        @"Columns",
+        [NSString stringWithFormat:@"Number of cells per row (1–%d at the current bit width).", limit],
+        g_columns, 1, limit);
+    if (value == -1) {
+        return;
+    }
+    if (value == -2) {
+        presentHexValidationError([NSString stringWithFormat:@"Maximum of %d bytes can be shown in a row.",
+            HEX_MAX_BYTES_PER_ROW]);
+        return;
+    }
+    setHexColumns(value);
+}
+
 - (BOOL)byteOffsetAtPoint:(NSPoint)point offset:(size_t *)offset nibble:(NSInteger *)nibble field:(HexCursorField *)field
 {
     const NSInteger row = [self rowAtPoint:point];
@@ -660,7 +809,7 @@ static HexTableDataSource *hexTableDataSource = nil;
         digitInCell = std::clamp(digitInCell, 0, totalDigits - 1);
         const hexedit::PhysicalPosition phys =
             hexedit::physicalPositionForDisplay(static_cast<std::size_t>(cellIndex), digitInCell, mode);
-        const size_t byteOffset = static_cast<size_t>(row) * HEX_BYTES_PER_ROW + phys.byteInRow;
+        const size_t byteOffset = static_cast<size_t>(row) * static_cast<size_t>(currentBytesPerRow()) + phys.byteInRow;
         if (!isVisibleEditableOffset(byteOffset)) {
             return NO;
         }
@@ -684,8 +833,9 @@ static HexTableDataSource *hexTableDataSource = nil;
         NSRect cellFrame = [self frameOfCellAtColumn:column row:row];
         NSFont *font = hexTableFont();
         CGFloat charWidth = monospacedGlyphWidth(font);
-        NSInteger asciiIndex = std::clamp<NSInteger>(static_cast<NSInteger>((point.x - asciiGlyphLeft(self, column, row)) / charWidth), 0, 15);
-        const size_t byteOffset = static_cast<size_t>(row) * 16 + static_cast<size_t>(asciiIndex);
+        const NSInteger bpr = static_cast<NSInteger>(currentBytesPerRow());
+        NSInteger asciiIndex = std::clamp<NSInteger>(static_cast<NSInteger>((point.x - asciiGlyphLeft(self, column, row)) / charWidth), 0, bpr - 1);
+        const size_t byteOffset = static_cast<size_t>(row) * static_cast<size_t>(bpr) + static_cast<size_t>(asciiIndex);
         if (!isVisibleEditableOffset(byteOffset)) {
             return NO;
         }
@@ -954,7 +1104,9 @@ static CGFloat paddedTextWidth(NSString *text, NSFont *font)
 
 static CGFloat offsetColumnWidth(NSFont *font)
 {
-    return std::max(paddedTextWidth(@"00000000", font), paddedTextWidth(@"Offset", font));
+    const int width = std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH);
+    NSString *sample = [@"" stringByPaddingToLength:static_cast<NSUInteger>(width) withString:@"0" startingAtIndex:0];
+    return std::max(paddedTextWidth(sample, font), paddedTextWidth(@"Offset", font));
 }
 
 static CGFloat cellColumnWidth(NSFont *font, const hexedit::ViewMode &mode)
@@ -977,7 +1129,9 @@ static CGFloat cellGlyphLeft(NSTableView *tableView, NSInteger column, NSInteger
 
 static CGFloat asciiColumnWidth(NSFont *font)
 {
-    return std::max(paddedTextWidth(@"................", font), paddedTextWidth(@"ASCII", font));
+    const int bpr = std::max(currentBytesPerRow(), 1);
+    NSString *sample = [@"" stringByPaddingToLength:static_cast<NSUInteger>(bpr) withString:@"." startingAtIndex:0];
+    return std::max(paddedTextWidth(sample, font), paddedTextWidth(@"ASCII", font));
 }
 
 static CGFloat tableContentWidth(NSFont *font)
@@ -1105,8 +1259,9 @@ static void redrawHexRowsPreservingScroll(size_t firstOffset, size_t secondOffse
         return;
     }
 
-    const NSInteger firstRow = static_cast<NSInteger>(firstOffset / 16);
-    const NSInteger secondRow = static_cast<NSInteger>(secondOffset / 16);
+    const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+    const NSInteger firstRow = static_cast<NSInteger>(firstOffset / bpr);
+    const NSInteger secondRow = static_cast<NSInteger>(secondOffset / bpr);
     if (firstRow >= 0 && firstRow < hexTableView.numberOfRows) {
         [hexTableView setNeedsDisplayInRect:[hexTableView rectOfRow:firstRow]];
     }
@@ -1235,11 +1390,12 @@ static BOOL isSelectedByte(size_t offset)
 
 static size_t currentHighlightRow()
 {
+    const size_t bpr = static_cast<size_t>(currentBytesPerRow());
     if (hasByteSelection()) {
-        return (selectedByteEnd - 1) / 16;
+        return (selectedByteEnd - 1) / bpr;
     }
 
-    return activeByteOffset / 16;
+    return activeByteOffset / bpr;
 }
 
 static void clearByteSelection()
@@ -1719,6 +1875,47 @@ static void showMessage(NSString *title, NSString *text)
     }
 }
 
+static int promptHexInteger(NSString *title, NSString *informative, int currentValue, int minValue, int maxValue)
+{
+    __block int result = -1;
+    @autoreleasepool {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = title;
+        alert.informativeText = informative;
+        [alert addButtonWithTitle:@"OK"];
+        [alert addButtonWithTitle:@"Cancel"];
+
+        NSTextField *input = [[NSTextField alloc] initWithFrame:NSMakeRect(0.0, 0.0, 120.0, 24.0)];
+        input.stringValue = [NSString stringWithFormat:@"%d", currentValue];
+        input.alignment = NSTextAlignmentRight;
+        input.accessibilityIdentifier = @"hex-editor.dialog.input";
+        alert.accessoryView = input;
+        [alert.window setInitialFirstResponder:input];
+        [input selectText:nil];
+
+        const NSModalResponse response = [alert runModal];
+        if (response != NSAlertFirstButtonReturn) {
+            return -1;
+        }
+
+        NSScanner *scanner = [NSScanner scannerWithString:[input.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]];
+        int parsed = 0;
+        if (![scanner scanInt:&parsed] || !scanner.atEnd) {
+            return -2;
+        }
+        if (parsed < minValue || parsed > maxValue) {
+            return -2;
+        }
+        result = parsed;
+    }
+    return result;
+}
+
+static void presentHexValidationError(NSString *message)
+{
+    showMessage(@"HEX-Editor", message);
+}
+
 static void configureTableColumn(NSTableView *tableView, NSString *identifier, NSString *title, CGFloat width, NSFont *font)
 {
     NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:identifier];
@@ -1798,6 +1995,8 @@ static void setHexViewBytesPerCell(int bytesPerCell)
         // when bits drops back to HEX_BYTE).
         g_littleEndian = false;
     }
+    g_columns = defaultColumnsForBytesPerCell(g_bytesPerCell);
+    saveHexPrefs();
     applyHexViewMode();
 }
 
@@ -1806,6 +2005,7 @@ static void toggleHexViewBinary()
     g_notation = (g_notation == hexedit::CellNotation::Binary)
         ? hexedit::CellNotation::Hex
         : hexedit::CellNotation::Binary;
+    saveHexPrefs();
     applyHexViewMode();
 }
 
@@ -1815,6 +2015,30 @@ static void toggleHexViewEndian()
         return;
     }
     g_littleEndian = !g_littleEndian;
+    saveHexPrefs();
+    applyHexViewMode();
+}
+
+static void setHexAddressWidth(int width)
+{
+    const int clamped = std::clamp(width, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH);
+    if (clamped == g_addressWidth) {
+        return;
+    }
+    g_addressWidth = clamped;
+    saveHexPrefs();
+    applyHexViewMode();
+}
+
+static void setHexColumns(int columns)
+{
+    const int limit = columnsLimitForBytesPerCell(g_bytesPerCell);
+    const int clamped = std::clamp(columns, 1, limit);
+    if (clamped == g_columns) {
+        return;
+    }
+    g_columns = clamped;
+    saveHexPrefs();
     applyHexViewMode();
 }
 
@@ -2102,6 +2326,17 @@ static void showOptionsPreview()
 extern "C" NPP_EXPORT void setInfo(NppData data)
 {
     nppData = data;
+
+    // Test hook: a sandboxed XCUI runner cannot reach `~/Library/Preferences/` to clear
+    // the host-side plist between runs (its `UserDefaults(suiteName:)` writes go into the
+    // runner's own container). Honour `--reset-hex-prefs` on the host's argv so the test
+    // bundle can request a clean slate without giving up persistence semantics in normal use.
+    NSArray<NSString *> *launchArgs = [[NSProcessInfo processInfo] arguments];
+    if ([launchArgs containsObject:@"--reset-hex-prefs"]) {
+        [hexPrefs() removePersistentDomainForName:HEX_PREFS_SUITE];
+        [hexPrefs() synchronize];
+    }
+    loadHexPrefs();
 
     strlcpy(funcItem[0]._itemName, "View in HEX", NPP_MENU_ITEM_SIZE);
     funcItem[0]._pFunc = toggleHexPreview;

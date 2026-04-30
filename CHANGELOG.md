@@ -64,7 +64,9 @@ Menu wiring on Windows is in [Hex.cpp:100-117](HexEditor/src/Hex.cpp#L100-L117);
 - Cmd+Home / Cmd+End cursor jumps to document start/end (bare `End` only goes to row end — see [TESTING.md:127-129](macos/TESTING.md#L127-L129))
 - Bookmark toggling via offset-column click (the bookmark row highlight survives in the offset gutter)
 - View submode submenu (Windows-faithful "View in" entry) — switch grouping between **8-Bit**, **16-Bit**, **32-Bit**, **64-Bit**; toggle between **hex** and **binary** notation; toggle **Big Endian / Little Endian** display order (only meaningful for grouping > 8-bit). Auto-recomputes cells per row as `16 / bytesPerCell`, mirroring Windows. Endianness affects display order only; underlying bytes are untouched.
-- Three accessibility identifiers exposed for UI test reach (`hex-editor.root`, `hex-editor.table`, `hex-editor.status`)
+- **Address Width...** and **Columns...** dialogs in the context menu, faithful to Windows [HEXDialog.cpp:2027-2089](HexEditor/src/HEXDialog.cpp#L2027-L2089). Address Width accepts 4–16 digits, Columns accepts 1..(128/bytesPerCell). Implemented as native `NSAlert`s with a numeric accessory field rather than the Win32 modal dialog template — the macOS-idiomatic shape (per the project's "look like a Mac UI" call) — but the validation ranges and error wording mirror Windows.
+- All view-mode and gutter settings persist across launches via an `NSUserDefaults` suite at `org.notepad-plus-plus.HexEditor`. Keys: `bytesPerCell`, `notationBinary`, `littleEndian`, `addressWidth`, `columns`. Loaded in `setInfo`, saved on every change.
+- Four accessibility identifiers exposed for UI test reach (`hex-editor.root`, `hex-editor.table`, `hex-editor.status`, `hex-editor.dialog.input`)
 
 **Context menu — current shape:**
 
@@ -91,6 +93,7 @@ Diverges from Windows in two intentional ways: Undo/Redo and Zoom In/Out/Restore
 - **Display-order arrow-key navigation in multi-byte / little-endian modes.** Arrow keys still walk the underlying byte array. In little-endian 32-bit mode this means pressing → from byte 0 advances to byte 1 (which on Windows would step backward across the displayed cell because byte 0 displays last). Click + caret rendering already use the display-order mapping correctly, so the visual position is right; only step-by-step arrow navigation is byte-order-based for now.
 
 **Not yet ported from Windows** (present in [HexEditor/src/](HexEditor/src/), absent on macOS):
+
 - Find / Replace dialog ([UserDlg/FindReplaceDialog.cpp](HexEditor/src/UserDlg/FindReplaceDialog.cpp))
 - Goto offset dialog ([UserDlg/GotoDialog.cpp](HexEditor/src/UserDlg/GotoDialog.cpp))
 - Compare HEX with diff highlighting ([UserDlg/CompareDialog.cpp](HexEditor/src/UserDlg/CompareDialog.cpp))
@@ -98,7 +101,6 @@ Diverges from Windows in two intentional ways: Undo/Redo and Zoom In/Out/Restore
 - Insert Columns ([OptionDlg/ColumnDialog.cpp](HexEditor/src/OptionDlg/ColumnDialog.cpp))
 - Options dialog with color/font configuration ([OptionDlg/OptionDialog.cpp](HexEditor/src/OptionDlg/OptionDialog.cpp))
 - Help dialog with embedded URL controls ([HelpDlg/](HexEditor/src/HelpDlg/))
-- Configurable column count and address width
 - Custom font (bold / italic / underline / capital), color theming, current-line highlight
 - Dark mode support (added on Windows in v0.9.14)
 - Autostart-by-extension and autostart-by-file-percentage (`AUTOSTART_MAX`)
