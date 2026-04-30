@@ -224,6 +224,8 @@ static void presentHexFindDialog(BOOL replaceMode);
 static bool executeHexFindNext(hexedit::SearchDirection direction, NSString **errorMessage);
 static int executeHexReplaceAll(NSString *findText, NSString *replaceText, bool matchCase, NSString **errorMessage);
 static bool executeHexReplaceCurrentSelection(NSString *findText, NSString *replaceText, bool matchCase, NSString **errorMessage);
+static void presentInsertColumnsDialog();
+static int executeInsertColumns(NSString *patternText, int count, int position, NSString **errorMessage);
 static bool replaceEditorBytes(size_t offset, const uint8_t *bytes, size_t byteCount, size_t replacedByteCount);
 static bool deleteEditorBytes(size_t offset, size_t byteCount);
 static bool applyEditorByteTransaction(size_t offset, const uint8_t *bytes, size_t byteCount, size_t replacedByteCount);
@@ -2421,6 +2423,172 @@ static void presentHexFindDialog(BOOL replaceMode)
     }
 }
 
+// MARK: - Insert Columns
+
+static int executeInsertColumns(NSString *patternText, int count, int position, NSString **errorMessage)
+{
+    if (!isPreviewBufferActive()) {
+        if (errorMessage) *errorMessage = @"No active hex buffer.";
+        return -1;
+    }
+    if (patternText == nil || patternText.length == 0) {
+        if (errorMessage) *errorMessage = @"Pattern is empty.";
+        return -1;
+    }
+
+    // Parse pattern as hex bytes (the Windows dialog accepted hex input only).
+    std::vector<std::uint8_t> patternBytes;
+    if (!hexedit::parseHexClipboardText(std::string([patternText UTF8String]), patternBytes) || patternBytes.empty()) {
+        if (errorMessage) *errorMessage = @"Pattern must be a sequence of hex bytes (e.g. 0x00, DE AD BE EF).";
+        return -1;
+    }
+
+    const int bpc = std::max(g_bytesPerCell, 1);
+    const int currentColumns = std::max(g_columns, 1);
+    const int columnsLimit = columnsLimitForBytesPerCell(bpc);
+    if (count <= 0 || (count + currentColumns) > columnsLimit) {
+        if (errorMessage) *errorMessage = [NSString stringWithFormat:
+            @"Column count must be between 1 and %d at the current bit width.",
+            std::max(0, columnsLimit - currentColumns)];
+        return -1;
+    }
+    if (position < 0 || position > currentColumns) {
+        if (errorMessage) *errorMessage = [NSString stringWithFormat:
+            @"Insert position must be between 0 and %d (the current column count).", currentColumns];
+        return -1;
+    }
+
+    NppHandle editor = previewScintillaHandle;
+    if (!editor) {
+        if (errorMessage) *errorMessage = @"No active editor.";
+        return -1;
+    }
+
+    // Build the per-row payload: `count * bpc` bytes drawn from the pattern, repeating
+    // (cycling through pattern.bytes). Mirrors Windows insertColumns which fills enough
+    // pattern repetitions to land on the count*bits boundary.
+    const std::size_t bytesPerRowInsert = static_cast<std::size_t>(count) * static_cast<std::size_t>(bpc);
+    std::vector<std::uint8_t> rowPayload(bytesPerRowInsert);
+    for (std::size_t i = 0; i < bytesPerRowInsert; ++i) {
+        rowPayload[i] = patternBytes[i % patternBytes.size()];
+    }
+
+    // Compute insertion offsets per row in the *original* document. Apply from the last
+    // row to the first so earlier offsets don't shift as we mutate the tail.
+    const std::size_t bpr = static_cast<std::size_t>(currentBytesPerRow());
+    if (bpr == 0) {
+        if (errorMessage) *errorMessage = @"Invalid current row size.";
+        return -1;
+    }
+    const std::size_t totalLength = previewBytes.size();
+    // Number of rows to insert into is the number of fully-populated rows. A trailing
+    // partial row gets padding inserted up to the position too — match Windows which
+    // iterates HEXM_GETLINECNT, the count of rendered rows including the trailing one.
+    const std::size_t fullRows = totalLength / bpr;
+    const bool hasPartial = (totalLength % bpr) != 0;
+    const std::size_t totalRows = fullRows + (hasPartial ? 1 : 0);
+    if (totalRows == 0) {
+        if (errorMessage) *errorMessage = @"Buffer is empty — nothing to insert into.";
+        return -1;
+    }
+
+    const std::size_t insertOffsetWithinRow = static_cast<std::size_t>(position) * static_cast<std::size_t>(bpc);
+
+    suppressModificationRefresh = true;
+    sci(editor, SCI_BEGINUNDOACTION);
+    for (std::size_t i = totalRows; i-- > 0; ) {
+        const std::size_t rowStart = i * bpr;
+        const std::size_t insertionOffset = std::min(rowStart + insertOffsetWithinRow, totalLength);
+        sci(editor, SCI_SETTARGETSTART, insertionOffset, 0);
+        sci(editor, SCI_SETTARGETEND, insertionOffset, 0);
+        sci(editor, SCI_REPLACETARGET, rowPayload.size(), reinterpret_cast<intptr_t>(rowPayload.data()));
+    }
+    sci(editor, SCI_ENDUNDOACTION);
+    suppressModificationRefresh = false;
+
+    // Grow the visible column count so the new bytes line up where the user asked.
+    g_columns = currentColumns + count;
+    saveHexPrefs();
+
+    previewBytes = readCurrentBuffer(&previewTotalLength);
+    clampActiveCursor();
+    clearByteSelection();
+    applyHexViewMode();
+    return static_cast<int>(totalRows);
+}
+
+static void presentInsertColumnsDialog()
+{
+    @autoreleasepool {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"Insert Columns";
+        alert.informativeText = [NSString stringWithFormat:
+            @"Insert a hex pattern into every row at a chosen column position. Each row "
+            @"grows by (count × %d) bytes; the column count grows by `count`.\n"
+            @"\n"
+            @"Pattern: hex bytes only (e.g. 0x00 or DE AD).\n"
+            @"Count: 1 to %d at the current %d-bit grouping.\n"
+            @"Position: 0 to %d (current column count).",
+            g_bytesPerCell,
+            std::max(0, columnsLimitForBytesPerCell(g_bytesPerCell) - g_columns),
+            g_bytesPerCell * 8,
+            g_columns];
+        [alert addButtonWithTitle:@"Insert"];
+        [alert addButtonWithTitle:@"Cancel"];
+
+        const CGFloat width = 320.0;
+        const CGFloat fieldHeight = 22.0;
+        const CGFloat verticalGap = 6.0;
+        const CGFloat totalHeight = fieldHeight * 3 + verticalGap * 2;
+        NSView *accessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, totalHeight)];
+
+        CGFloat y = totalHeight - fieldHeight;
+        NSTextField *patternField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, y, width, fieldHeight)];
+        patternField.placeholderString = @"Pattern (hex): 0xFF or DE AD";
+        patternField.accessibilityIdentifier = @"hex-editor.insertcolumns.pattern";
+        [accessory addSubview:patternField];
+
+        y -= (fieldHeight + verticalGap);
+        NSTextField *countField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, y, width, fieldHeight)];
+        countField.placeholderString = @"Count (columns to insert)";
+        countField.alignment = NSTextAlignmentRight;
+        countField.accessibilityIdentifier = @"hex-editor.insertcolumns.count";
+        [accessory addSubview:countField];
+
+        y -= (fieldHeight + verticalGap);
+        NSTextField *positionField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, y, width, fieldHeight)];
+        positionField.stringValue = @"0";
+        positionField.placeholderString = @"Position (column index, 0 = left edge)";
+        positionField.alignment = NSTextAlignmentRight;
+        positionField.accessibilityIdentifier = @"hex-editor.insertcolumns.position";
+        [accessory addSubview:positionField];
+
+        alert.accessoryView = accessory;
+        [alert.window setInitialFirstResponder:patternField];
+        [patternField selectText:nil];
+
+        const NSModalResponse response = [alert runModal];
+        if (response != NSAlertFirstButtonReturn) {
+            return;
+        }
+
+        NSString *pattern = [patternField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        const int countValue = countField.intValue;
+        const int positionValue = positionField.intValue;
+
+        NSString *err = nil;
+        const int rows = executeInsertColumns(pattern, countValue, positionValue, &err);
+        if (rows < 0) {
+            presentHexValidationError(err ?: @"Insert failed.");
+            return;
+        }
+        showMessage(@"HEX-Editor",
+            [NSString stringWithFormat:@"Inserted %d column%@ across %d row%@.",
+                countValue, countValue == 1 ? @"" : @"s",
+                rows, rows == 1 ? @"" : @"s"]);
+    }
+}
+
 static void configureTableColumn(NSTableView *tableView, NSString *identifier, NSString *title, CGFloat width, NSFont *font)
 {
     NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:identifier];
@@ -2819,7 +2987,11 @@ static void clearComparePreview()
 
 static void insertColumnsPreview()
 {
-    showNotPorted(@"Insert Columns");
+    if (!isPreviewBufferActive()) {
+        showMessage(@"HEX-Editor", @"Open the hex view (View in HEX) before using Insert Columns.");
+        return;
+    }
+    presentInsertColumnsDialog();
 }
 
 static void patternReplacePreview()

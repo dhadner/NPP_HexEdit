@@ -699,6 +699,78 @@ func testContextMenuCommands() throws {
         wait(for: [revertWaiter], timeout: 5)
     }
 
+    func testInsertColumnsExpandsRowAndInjectsPattern() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 16 ASCII bytes 0x41..0x50 ("ABCDEFGHIJKLMNOP"). One row in default 16-byte mode.
+        try createBufferWithText(app: app, text: "ABCDEFGHIJKLMNOP")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        // Sanity: byte 4 starts as 'E' = 0x45.
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 5))
+        XCTAssertEqual(firstRow.staticTexts.element(boundBy: 5).value as? String, "45",
+                       "Byte 4 should start as 0x45 ('E').")
+
+        // Open Insert Columns from the plugin menu.
+        try invokeHexEditorMenu(app: app, item: "Insert Columns...")
+
+        // Fill in pattern, count, position.
+        let patternField = app.textFields["hex-editor.insertcolumns.pattern"]
+        XCTAssertTrue(patternField.waitForExistence(timeout: 5),
+                      "Insert Columns pattern field should appear.")
+        patternField.replaceFieldText(with: "FF")
+
+        let countField = app.textFields["hex-editor.insertcolumns.count"]
+        XCTAssertTrue(countField.waitForExistence(timeout: 3))
+        countField.replaceFieldText(with: "2")
+
+        let positionField = app.textFields["hex-editor.insertcolumns.position"]
+        XCTAssertTrue(positionField.waitForExistence(timeout: 3))
+        positionField.replaceFieldText(with: "4")
+
+        let insertButton = app.buttons["Insert"].firstMatch
+        XCTAssertTrue(insertButton.waitForExistence(timeout: 3))
+        insertButton.click()
+
+        // A confirmation alert appears with "Inserted N columns…". Dismiss its OK.
+        let okAfter = app.buttons["OK"].firstMatch
+        XCTAssertTrue(okAfter.waitForExistence(timeout: 3))
+        okAfter.click()
+
+        // After insertion at column 4 with count=2 (bpc=1), bytes 0-3 stay, then two 0xFF
+        // bytes are injected, then the original bytes 4-15 follow. The row width is now 18.
+        // Verify byte 4 and 5 are now 0xff and byte 6 is the original 'E' (0x45).
+        let firstRowAfter = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRowAfter.waitForExistence(timeout: 5))
+        let byte4Predicate = NSPredicate(format: "value == %@", "ff")
+        let waiter4 = expectation(for: byte4Predicate,
+                                  evaluatedWith: firstRowAfter.staticTexts.element(boundBy: 5),
+                                  handler: nil)
+        let waiter5 = expectation(for: byte4Predicate,
+                                  evaluatedWith: firstRowAfter.staticTexts.element(boundBy: 6),
+                                  handler: nil)
+        wait(for: [waiter4, waiter5], timeout: 5)
+
+        XCTAssertEqual(firstRowAfter.staticTexts.element(boundBy: 7).value as? String, "45",
+                       "Byte 6 (formerly byte 4 'E' = 0x45) should now sit at column 6.")
+
+        // Single undo reverts the entire insertion (one undo group).
+        app.typeKey("z", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        let firstRowReverted = hexTable.tableRows.element(boundBy: 0)
+        let revertPredicate = NSPredicate(format: "value == %@", "45")
+        let revertWaiter = expectation(for: revertPredicate,
+                                        evaluatedWith: firstRowReverted.staticTexts.element(boundBy: 5),
+                                        handler: nil)
+        wait(for: [revertWaiter], timeout: 5)
+    }
+
     func testBinaryNotationBitEdit() throws {
         let app = try launchNotepad()
         defer { app.terminate() }
