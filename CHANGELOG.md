@@ -65,6 +65,7 @@ Menu wiring on Windows is in [Hex.cpp:100-117](HexEditor/src/Hex.cpp#L100-L117);
 - Bookmark toggling via offset-column click (the bookmark row highlight survives in the offset gutter)
 - View submode submenu (Windows-faithful "View in" entry) — switch grouping between **8-Bit**, **16-Bit**, **32-Bit**, **64-Bit**; toggle between **hex** and **binary** notation; toggle **Big Endian / Little Endian** display order (only meaningful for grouping > 8-bit). Auto-recomputes cells per row as `16 / bytesPerCell`, mirroring Windows. Endianness affects display order only; underlying bytes are untouched.
 - **Address Width...** and **Columns...** dialogs in the context menu, faithful to Windows [HEXDialog.cpp:2027-2089](HexEditor/src/HEXDialog.cpp#L2027-L2089). Address Width accepts 4–16 digits, Columns accepts 1..(128/bytesPerCell). Implemented as native `NSAlert`s with a numeric accessory field rather than the Win32 modal dialog template — the macOS-idiomatic shape (per the project's "look like a Mac UI" call) — but the validation ranges and error wording mirror Windows.
+- **Go to Offset…** in the context menu (also bound to **Cmd+L** in the hex view, matching the macOS browser/Pages convention for jump-to-location). Single-field NSAlert that auto-detects format: decimal (`1234`), hex (`0x4A2`), or relative (`+0x10`, `-100`). Underscores and commas are accepted as digit separators. Mirrors the Windows [GotoDialog.cpp](HexEditor/src/UserDlg/GotoDialog.cpp) feature without porting the Win32 multi-mode UI; the parser lives in `HexCore::resolveGotoOffset`. Windows wires Goto via the host's `IDM_SEARCH_GOTOLINE` ([Hex.cpp:818](HexEditor/src/Hex.cpp#L818)); on macOS that requires intercepting host menu commands — deferred — so for now the entry point is the context menu plus the keybinding.
 - All view-mode and gutter settings persist across launches via an `NSUserDefaults` suite at `org.notepad-plus-plus.HexEditor`. Keys: `bytesPerCell`, `notationBinary`, `littleEndian`, `addressWidth`, `columns`. Loaded in `setInfo`, saved on every change.
 - Four accessibility identifiers exposed for UI test reach (`hex-editor.root`, `hex-editor.table`, `hex-editor.status`, `hex-editor.dialog.input`)
 
@@ -95,7 +96,6 @@ Diverges from Windows in two intentional ways: Undo/Redo and Zoom In/Out/Restore
 **Not yet ported from Windows** (present in [HexEditor/src/](HexEditor/src/), absent on macOS):
 
 - Find / Replace dialog ([UserDlg/FindReplaceDialog.cpp](HexEditor/src/UserDlg/FindReplaceDialog.cpp))
-- Goto offset dialog ([UserDlg/GotoDialog.cpp](HexEditor/src/UserDlg/GotoDialog.cpp))
 - Compare HEX with diff highlighting ([UserDlg/CompareDialog.cpp](HexEditor/src/UserDlg/CompareDialog.cpp))
 - Pattern replace ([UserDlg/PatternDialog.cpp](HexEditor/src/UserDlg/PatternDialog.cpp))
 - Insert Columns ([OptionDlg/ColumnDialog.cpp](HexEditor/src/OptionDlg/ColumnDialog.cpp))

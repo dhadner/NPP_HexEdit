@@ -362,6 +362,104 @@ DisplayPosition displayPositionForByte(std::size_t byteInRow, int subInByte, con
     return out;
 }
 
+namespace {
+
+inline std::string trimGotoExpression(const std::string &text)
+{
+    std::size_t first = 0;
+    while (first < text.size() && std::isspace(static_cast<unsigned char>(text[first]))) {
+        ++first;
+    }
+    std::size_t last = text.size();
+    while (last > first && std::isspace(static_cast<unsigned char>(text[last - 1]))) {
+        --last;
+    }
+    return text.substr(first, last - first);
+}
+
+}  // namespace
+
+bool resolveGotoOffset(const std::string &text,
+                        std::size_t currentOffset,
+                        std::size_t totalLength,
+                        std::size_t &outOffset)
+{
+    const std::string trimmed = trimGotoExpression(text);
+    if (trimmed.empty()) {
+        return false;
+    }
+
+    enum class Mode { Absolute, RelativeForward, RelativeBackward };
+    Mode mode = Mode::Absolute;
+    std::size_t cursor = 0;
+
+    if (trimmed[cursor] == '+') {
+        mode = Mode::RelativeForward;
+        ++cursor;
+    } else if (trimmed[cursor] == '-') {
+        mode = Mode::RelativeBackward;
+        ++cursor;
+    }
+
+    int base = 10;
+    if (cursor + 1 < trimmed.size() && trimmed[cursor] == '0' &&
+        (trimmed[cursor + 1] == 'x' || trimmed[cursor + 1] == 'X')) {
+        base = 16;
+        cursor += 2;
+    }
+
+    if (cursor >= trimmed.size()) {
+        return false;
+    }
+
+    unsigned long long value = 0;
+    while (cursor < trimmed.size()) {
+        unsigned char c = static_cast<unsigned char>(trimmed[cursor]);
+        if (std::isspace(c) || c == '_' || c == ',') {
+            ++cursor;
+            continue;
+        }
+        const int digit = hexDigitValue(c);
+        if (digit < 0 || digit >= base) {
+            return false;
+        }
+        const unsigned long long next = value * static_cast<unsigned long long>(base) + static_cast<unsigned long long>(digit);
+        if (next < value) {
+            return false;
+        }
+        value = next;
+        ++cursor;
+    }
+
+    std::size_t target = 0;
+    switch (mode) {
+        case Mode::Absolute:
+            target = static_cast<std::size_t>(value);
+            break;
+        case Mode::RelativeForward: {
+            const std::size_t delta = static_cast<std::size_t>(value);
+            if (delta > totalLength - currentOffset) {
+                target = totalLength;
+            } else {
+                target = currentOffset + delta;
+            }
+            break;
+        }
+        case Mode::RelativeBackward: {
+            const std::size_t delta = static_cast<std::size_t>(value);
+            target = (delta >= currentOffset) ? 0 : currentOffset - delta;
+            break;
+        }
+    }
+
+    if (target > totalLength) {
+        target = totalLength;
+    }
+
+    outOffset = target;
+    return true;
+}
+
 PhysicalPosition physicalPositionForDisplay(std::size_t cellIndex, int digitInCell, const ViewMode &mode)
 {
     PhysicalPosition out;

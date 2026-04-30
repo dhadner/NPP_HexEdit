@@ -392,6 +392,7 @@ func testContextMenuCommands() throws {
             "Undo", "Redo",
             "Cut", "Copy", "Paste", "Delete",
             "Cut Binary Content", "Copy Binary Content", "Paste Binary Content",
+            "Go to Offset…",
             "View in",
             "Address Width...", "Columns...",
             "Zoom In", "Zoom Out", "Restore Default Zoom",
@@ -523,6 +524,96 @@ func testContextMenuCommands() throws {
         let predicate = NSPredicate(format: "count >= 6")
         let waiter = expectation(for: predicate, evaluatedWith: hexTable.tableRows, handler: nil)
         wait(for: [waiter], timeout: 5)
+    }
+
+    func testGotoOffsetMovesCursor() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 16 ASCII bytes 0x41 ('A') through 0x50 ('P').
+        try createBufferWithText(app: app, text: "ABCDEFGHIJKLMNOP")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 5))
+        // Sanity: byte 5 starts as 'F' (0x46). Cell index 6 in the row's flat staticTexts list
+        // (0=offset, 1..8=byte0..byte7, ...).
+        let byte5 = firstRow.staticTexts.element(boundBy: 6)
+        XCTAssertEqual(byte5.value as? String, "46",
+                       "Byte 5 should start as 0x46 ('F') before the Goto edit.")
+
+        // Right-click → Go to Offset…
+        hexTable.rightClick()
+        let gotoItem = app.menuItems["Go to Offset…"]
+        XCTAssertTrue(gotoItem.waitForExistence(timeout: 3))
+        gotoItem.click()
+
+        let dialogField = app.textFields["hex-editor.goto.input"]
+        XCTAssertTrue(dialogField.waitForExistence(timeout: 3))
+        dialogField.replaceFieldText(with: "5")
+        XCTAssertEqual(dialogField.value as? String, "5",
+                       "Goto field should hold '5' before clicking Go.")
+
+        let goButton = app.buttons["Go"].firstMatch
+        XCTAssertTrue(goButton.waitForExistence(timeout: 3))
+        goButton.click()
+        XCTAssertTrue(dialogField.waitForNonExistence(timeout: 5),
+                      "Goto dialog should dismiss after clicking Go.")
+
+        // Cursor is now at offset 5. Type "00" to overwrite byte 5 → 0x00.
+        app.typeText("00")
+
+        let firstRowAfter = hexTable.tableRows.element(boundBy: 0)
+        let byte5After = firstRowAfter.staticTexts.element(boundBy: 6)
+        let predicate = NSPredicate(format: "value == %@", "00")
+        let waiter = expectation(for: predicate, evaluatedWith: byte5After, handler: nil)
+        wait(for: [waiter], timeout: 5)
+
+        // Byte 4 must remain 0x45 ('E') — proves the cursor really landed on byte 5, not byte 4.
+        let byte4After = firstRowAfter.staticTexts.element(boundBy: 5)
+        XCTAssertEqual(byte4After.value as? String, "45",
+                       "Byte 4 must be untouched — Goto should land precisely on byte 5.")
+
+        // Two undos to restore both nibble edits before terminate (no save prompt).
+        app.typeKey("z", modifierFlags: .command)
+        app.typeKey("z", modifierFlags: .command)
+    }
+
+    func testGotoOffsetRejectsGarbage() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "ABCD")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        hexTable.rightClick()
+        app.menuItems["Go to Offset…"].click()
+
+        let dialogField = app.textFields["hex-editor.goto.input"]
+        XCTAssertTrue(dialogField.waitForExistence(timeout: 3))
+        dialogField.replaceFieldText(with: "wat")
+        app.buttons["Go"].firstMatch.click()
+
+        // Plugin's NSAlert validation error should be presented; dismiss it.
+        let okAfter = app.buttons["OK"].firstMatch
+        XCTAssertTrue(okAfter.waitForExistence(timeout: 3),
+                      "Invalid Goto input should surface an OK-only error dialog.")
+        okAfter.click()
+
+        // Hex view should still be intact and the buffer untouched.
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 5))
+        let byte0 = firstRow.staticTexts.element(boundBy: 1)
+        XCTAssertEqual(byte0.value as? String, "41",
+                       "Byte 0 must remain 0x41 — the rejected Goto should not change buffer state.")
     }
 
     func testInvalidAddressWidthShowsErrorAndKeepsOriginal() throws {

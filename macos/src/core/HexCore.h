@@ -129,4 +129,9 @@ DisplayPosition displayPositionForByte(std::size_t byteInRow, int subInByte, con
 
 PhysicalPosition physicalPositionForDisplay(std::size_t cellIndex, int digitInCell, const ViewMode &mode);
 
+bool resolveGotoOffset(const std::string &text,
+                        std::size_t currentOffset,
+                        std::size_t totalLength,
+                        std::size_t &outOffset);
+
 }

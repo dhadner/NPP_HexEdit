@@ -672,6 +672,72 @@ void testDisplayPositionMapping()
     }
 }
 
+void testResolveGotoOffset()
+{
+    g_currentSuite = "resolveGotoOffset";
+
+    std::size_t out = 0;
+
+    // Decimal absolute.
+    HEX_EXPECT(resolveGotoOffset("100", 50, 1024, out));
+    HEX_EXPECT_EQ(out, static_cast<std::size_t>(100));
+
+    // Hex absolute (lowercase).
+    HEX_EXPECT(resolveGotoOffset("0x1f", 0, 1024, out));
+    HEX_EXPECT_EQ(out, static_cast<std::size_t>(0x1F));
+
+    // Hex absolute (uppercase prefix).
+    HEX_EXPECT(resolveGotoOffset("0XAB", 0, 1024, out));
+    HEX_EXPECT_EQ(out, static_cast<std::size_t>(0xAB));
+
+    // Whitespace-tolerant.
+    HEX_EXPECT(resolveGotoOffset("  0x1f  ", 0, 1024, out));
+    HEX_EXPECT_EQ(out, static_cast<std::size_t>(0x1F));
+
+    // Relative forward (decimal).
+    HEX_EXPECT(resolveGotoOffset("+10", 100, 1024, out));
+    HEX_EXPECT_EQ(out, static_cast<std::size_t>(110));
+
+    // Relative forward (hex).
+    HEX_EXPECT(resolveGotoOffset("+0x10", 100, 1024, out));
+    HEX_EXPECT_EQ(out, static_cast<std::size_t>(116));
+
+    // Relative backward.
+    HEX_EXPECT(resolveGotoOffset("-50", 100, 1024, out));
+    HEX_EXPECT_EQ(out, static_cast<std::size_t>(50));
+
+    // Relative backward saturates at 0.
+    HEX_EXPECT(resolveGotoOffset("-1000", 100, 1024, out));
+    HEX_EXPECT_EQ(out, static_cast<std::size_t>(0));
+
+    // Absolute beyond max clamps to totalLength.
+    HEX_EXPECT(resolveGotoOffset("99999", 0, 1024, out));
+    HEX_EXPECT_EQ(out, static_cast<std::size_t>(1024));
+
+    // Relative forward beyond max clamps.
+    HEX_EXPECT(resolveGotoOffset("+99999", 100, 1024, out));
+    HEX_EXPECT_EQ(out, static_cast<std::size_t>(1024));
+
+    // Underscore / comma digit separators are accepted.
+    HEX_EXPECT(resolveGotoOffset("1_000", 0, 10000, out));
+    HEX_EXPECT_EQ(out, static_cast<std::size_t>(1000));
+    HEX_EXPECT(resolveGotoOffset("0xFF,FF", 0, 0x100000, out));
+    HEX_EXPECT_EQ(out, static_cast<std::size_t>(0xFFFF));
+
+    // Empty input rejected.
+    HEX_EXPECT(!resolveGotoOffset("", 0, 1024, out));
+    HEX_EXPECT(!resolveGotoOffset("   ", 0, 1024, out));
+
+    // Sign with no digits rejected.
+    HEX_EXPECT(!resolveGotoOffset("+", 0, 1024, out));
+    HEX_EXPECT(!resolveGotoOffset("-0x", 0, 1024, out));
+
+    // Garbage rejected.
+    HEX_EXPECT(!resolveGotoOffset("abc", 0, 1024, out));   // 'b','c' invalid in decimal
+    HEX_EXPECT(!resolveGotoOffset("0xZZ", 0, 1024, out));
+    HEX_EXPECT(!resolveGotoOffset("12.3", 0, 1024, out));
+}
+
 }
 
 int main()
@@ -693,9 +759,10 @@ int main()
     testViewModeShape();
     testFormatCell();
     testDisplayPositionMapping();
+    testResolveGotoOffset();
 
     if (g_failures == 0) {
-        std::printf("PASS: %d assertions across 17 suites\n", g_assertions);
+        std::printf("PASS: %d assertions across 18 suites\n", g_assertions);
         return 0;
     }
     std::printf("FAIL: %d/%d assertions failed\n", g_failures, g_assertions);

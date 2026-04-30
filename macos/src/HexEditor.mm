@@ -207,7 +207,10 @@ static void toggleHexViewEndian();
 static void setHexAddressWidth(int width);
 static void setHexColumns(int columns);
 static int promptHexInteger(NSString *title, NSString *informative, int currentValue, int minValue, int maxValue);
+static NSString *promptHexGotoExpression(NSString *defaultText, std::size_t currentOffset, std::size_t totalLength);
 static void presentHexValidationError(NSString *message);
+static void presentHexGotoDialog();
+static void gotoHexOffset(std::size_t offset);
 static bool replaceEditorBytes(size_t offset, const uint8_t *bytes, size_t byteCount, size_t replacedByteCount);
 static bool deleteEditorBytes(size_t offset, size_t byteCount);
 static bool applyEditorByteTransaction(size_t offset, const uint8_t *bytes, size_t byteCount, size_t replacedByteCount);
@@ -590,6 +593,11 @@ static HexTableDataSource *hexTableDataSource = nil;
     pasteBinaryItem.target = self;
     [menu addItem:[NSMenuItem separatorItem]];
 
+    NSMenuItem *gotoItem = [menu addItemWithTitle:@"Go to Offset…" action:@selector(hexShowGotoDialog:) keyEquivalent:@"l"];
+    gotoItem.target = self;
+    gotoItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+    [menu addItem:[NSMenuItem separatorItem]];
+
     NSMenuItem *viewItem = [menu addItemWithTitle:@"View in" action:nil keyEquivalent:@""];
     NSMenu *viewSubmenu = [[NSMenu alloc] initWithTitle:@"View in"];
     struct BitsEntry { NSString *title; int bytesPerCell; SEL selector; };
@@ -788,6 +796,11 @@ static HexTableDataSource *hexTableDataSource = nil;
     setHexColumns(value);
 }
 
+- (void)hexShowGotoDialog:(id)sender
+{
+    presentHexGotoDialog();
+}
+
 - (BOOL)byteOffsetAtPoint:(NSPoint)point offset:(size_t *)offset nibble:(NSInteger *)nibble field:(HexCursorField *)field
 {
     const NSInteger row = [self rowAtPoint:point];
@@ -952,6 +965,13 @@ static HexTableDataSource *hexTableDataSource = nil;
                 clearByteSelection();
                 writeBackCursor(hexedit::cursorToDocumentEnd(currentCursor(), currentDocumentView()));
                 [self reloadDataPreservingScrollOrigin:scrollOrigin];
+                return;
+            }
+            // Cmd+L → Go to Offset (matches the macOS browser/Pages convention for jump-to-location).
+            // The Notepad++ host's IDM_SEARCH_GOTOLINE plumbing isn't intercepted yet on macOS,
+            // so this keybinding is the only way to trigger Goto without right-clicking.
+            if (character == 'l' || character == 'L') {
+                presentHexGotoDialog();
                 return;
             }
         }
@@ -1914,6 +1934,81 @@ static int promptHexInteger(NSString *title, NSString *informative, int currentV
 static void presentHexValidationError(NSString *message)
 {
     showMessage(@"HEX-Editor", message);
+}
+
+static NSString *promptHexGotoExpression(NSString *defaultText, std::size_t currentOffset, std::size_t totalLength)
+{
+    __block NSString *result = nil;
+    @autoreleasepool {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"Go to Offset";
+        alert.informativeText = [NSString stringWithFormat:
+            @"Enter a byte offset.\n"
+            @"  • Decimal: 1234\n"
+            @"  • Hex: 0x4A2 (or 0X4A2)\n"
+            @"  • Relative: +0x10 jumps forward, -100 jumps back\n"
+            @"\n"
+            @"Current: 0x%0*zx    End: 0x%0*zx",
+            std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH), currentOffset,
+            std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH), totalLength];
+        [alert addButtonWithTitle:@"Go"];
+        [alert addButtonWithTitle:@"Cancel"];
+
+        NSTextField *input = [[NSTextField alloc] initWithFrame:NSMakeRect(0.0, 0.0, 220.0, 24.0)];
+        input.stringValue = defaultText ?: @"";
+        input.alignment = NSTextAlignmentLeft;
+        input.placeholderString = @"e.g. 0x1F or +16";
+        input.accessibilityIdentifier = @"hex-editor.goto.input";
+        alert.accessoryView = input;
+        [alert.window setInitialFirstResponder:input];
+        [input selectText:nil];
+
+        const NSModalResponse response = [alert runModal];
+        if (response != NSAlertFirstButtonReturn) {
+            return nil;
+        }
+        result = [[input.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] copy];
+    }
+    return result;
+}
+
+static void gotoHexOffset(std::size_t offset)
+{
+    if (!hexTableView) {
+        return;
+    }
+    if (offset > previewTotalLength) {
+        offset = previewTotalLength;
+    }
+    activeByteOffset = offset;
+    activeHexNibble = 0;
+    activeCursorField = HexCursorField::Hex;
+    clearByteSelection();
+
+    const NSInteger row = static_cast<NSInteger>(offset / static_cast<size_t>(currentBytesPerRow()));
+    if (row >= 0 && row < hexTableView.numberOfRows) {
+        [hexTableView scrollRowToVisible:row];
+    }
+    [hexTableView setNeedsDisplay:YES];
+    [hexTableView.window makeFirstResponder:hexTableView];
+}
+
+static void presentHexGotoDialog()
+{
+    NSString *expression = promptHexGotoExpression(nil, activeByteOffset, previewTotalLength);
+    if (expression == nil || expression.length == 0) {
+        return;
+    }
+
+    std::size_t target = 0;
+    if (!hexedit::resolveGotoOffset(std::string([expression UTF8String]),
+                                     activeByteOffset,
+                                     previewTotalLength,
+                                     target)) {
+        presentHexValidationError(@"Could not parse the offset. Use a decimal value, a 0x-prefixed hex value, or a + / - prefix for relative jumps.");
+        return;
+    }
+    gotoHexOffset(target);
 }
 
 static void configureTableColumn(NSTableView *tableView, NSString *identifier, NSString *title, CGFloat width, NSFont *font)
