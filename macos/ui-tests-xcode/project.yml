@@ -1,0 +1,61 @@
+name: HexEditorUITests
+options:
+  bundleIdPrefix: org.notepadplusplus.hexeditor
+  deploymentTarget:
+    macOS: "13.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGNING_REQUIRED: YES
+    CODE_SIGNING_ALLOWED: YES
+    DEVELOPMENT_TEAM: ""
+
+targets:
+  HexEditorUITestRunner:
+    type: application
+    platform: macOS
+    sources:
+      - path: TestRunner
+    info:
+      path: TestRunner/Info.plist
+      properties:
+        CFBundleName: HexEditorUITestRunner
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        LSUIElement: true
+        NSPrincipalClass: NSApplication
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.notepadplusplus.hexeditor.uitestrunner
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+
+  HexEditorUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: HexEditorUITestRunner
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.notepadplusplus.hexeditor.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: HexEditorUITestRunner
+
+schemes:
+  HexEditorUITests:
+    build:
+      targets:
+        HexEditorUITestRunner: all
+        HexEditorUITests: [test]
+    test:
+      targets:
+        - HexEditorUITests
+      gatherCoverageData: false
