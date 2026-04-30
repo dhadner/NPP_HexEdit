@@ -392,6 +392,7 @@ func testContextMenuCommands() throws {
             "Undo", "Redo",
             "Cut", "Copy", "Paste", "Delete",
             "Cut Binary Content", "Copy Binary Content", "Paste Binary Content",
+            "Find…", "Find and Replace…", "Find Next", "Find Previous",
             "Go to Offset…",
             "View in",
             "Address Width...", "Columns...",
@@ -524,6 +525,178 @@ func testContextMenuCommands() throws {
         let predicate = NSPredicate(format: "count >= 6")
         let waiter = expectation(for: predicate, evaluatedWith: hexTable.tableRows, handler: nil)
         wait(for: [waiter], timeout: 5)
+    }
+
+    func testFindNextLandsOnAsciiMatch() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // Buffer: "AAAA-BBBB-CCCC". Match "BBBB" at offset 5.
+        try createBufferWithText(app: app, text: "AAAA-BBBB-CCCC")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        // Use Cmd+F directly — much simpler than menu navigation, and the host's Edit
+        // menu also has a "Find…" item which makes app.menuItems["Find…"] ambiguous.
+        // The hex view's keyDown handler routes Cmd+F to presentHexFindDialog.
+        app.typeKey("f", modifierFlags: .command)
+
+        let findField = app.textFields["hex-editor.find.input"]
+        XCTAssertTrue(findField.waitForExistence(timeout: 3),
+                      "Cmd+F should open the hex Find dialog. If this fails, the host may have intercepted the shortcut.")
+        findField.replaceFieldText(with: "BBBB")
+
+        let findNextButton = app.buttons["Find Next"].firstMatch
+        XCTAssertTrue(findNextButton.waitForExistence(timeout: 3))
+        findNextButton.click()
+        XCTAssertTrue(findField.waitForNonExistence(timeout: 5),
+                      "Find dialog should dismiss after Find Next.")
+
+        // After Find Next, the cursor should be at offset 5. Type "00" to overwrite byte 5
+        // (which is 0x42 'B'). If the find didn't land, byte 5 would not become 0x00 — or some
+        // other byte would change instead.
+        app.typeText("00")
+
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        let byte5 = firstRow.staticTexts.element(boundBy: 6)
+        let predicate = NSPredicate(format: "value == %@", "00")
+        let waiter = expectation(for: predicate, evaluatedWith: byte5, handler: nil)
+        wait(for: [waiter], timeout: 5)
+
+        // Untouched byte sanity.
+        let byte4 = firstRow.staticTexts.element(boundBy: 5)
+        XCTAssertEqual(byte4.value as? String, "2d",
+                       "Byte 4 ('-' = 0x2D) must be untouched — Find should land precisely on byte 5.")
+
+        // Two undos to revert the nibble edits.
+        app.typeKey("z", modifierFlags: .command)
+        app.typeKey("z", modifierFlags: .command)
+    }
+
+    func testFindNextHexPattern() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // "ABCDEFGH" → bytes 41 42 43 44 45 46 47 48. Search for hex "44 45" (offset 3).
+        try createBufferWithText(app: app, text: "ABCDEFGH")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        app.typeKey("f", modifierFlags: .command)
+
+        let findField = app.textFields["hex-editor.find.input"]
+        XCTAssertTrue(findField.waitForExistence(timeout: 3),
+                      "Cmd+F should open the hex Find dialog.")
+        findField.replaceFieldText(with: "44 45")
+        app.buttons["Find Next"].firstMatch.click()
+        XCTAssertTrue(findField.waitForNonExistence(timeout: 5))
+
+        // Cursor should now be at byte 3 (0x44 = 'D'). Type "00" to overwrite.
+        app.typeText("00")
+
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        let byte3 = firstRow.staticTexts.element(boundBy: 4)
+        let predicate = NSPredicate(format: "value == %@", "00")
+        let waiter = expectation(for: predicate, evaluatedWith: byte3, handler: nil)
+        wait(for: [waiter], timeout: 5)
+
+        app.typeKey("z", modifierFlags: .command)
+        app.typeKey("z", modifierFlags: .command)
+    }
+
+    func testFindNotFoundShowsErrorAndKeepsBuffer() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "ABCD")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        app.typeKey("f", modifierFlags: .command)
+
+        let findField = app.textFields["hex-editor.find.input"]
+        XCTAssertTrue(findField.waitForExistence(timeout: 3),
+                      "Cmd+F should open the hex Find dialog.")
+        findField.replaceFieldText(with: "ZZZZ")
+        app.buttons["Find Next"].firstMatch.click()
+
+        // The find dialog dismisses, then a "not found" NSAlert appears with an OK button.
+        let okAfter = app.buttons["OK"].firstMatch
+        XCTAssertTrue(okAfter.waitForExistence(timeout: 3),
+                      "A not-found error dialog should appear and offer OK.")
+        okAfter.click()
+
+        // Buffer is untouched.
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        let byte0 = firstRow.staticTexts.element(boundBy: 1)
+        XCTAssertEqual(byte0.value as? String, "41",
+                       "Failed find must not modify the buffer.")
+    }
+
+    func testReplaceAllChangesAllAsciiOccurrences() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 3 occurrences of "X": "AXBXCX". Replacing X with Y → "AYBYCY".
+        try createBufferWithText(app: app, text: "AXBXCX")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        // Cmd+Alt+F → Find and Replace dialog (replace mode).
+        app.typeKey("f", modifierFlags: [.command, .option])
+
+        let findField = app.textFields["hex-editor.find.input"]
+        XCTAssertTrue(findField.waitForExistence(timeout: 3),
+                      "Cmd+Alt+F should open the Find and Replace dialog.")
+        findField.replaceFieldText(with: "X")
+
+        let replaceField = app.textFields["hex-editor.replace.input"]
+        XCTAssertTrue(replaceField.waitForExistence(timeout: 3))
+        replaceField.replaceFieldText(with: "Y")
+
+        let replaceAllButton = app.buttons["Replace All"].firstMatch
+        XCTAssertTrue(replaceAllButton.waitForExistence(timeout: 3))
+        replaceAllButton.click()
+
+        // Confirmation alert ("Replaced 3 occurrences."). Dismiss with OK.
+        let okAfter = app.buttons["OK"].firstMatch
+        XCTAssertTrue(okAfter.waitForExistence(timeout: 3))
+        okAfter.click()
+
+        // Verify byte values: bytes 1, 3, 5 should be 0x59 ('Y'), bytes 0/2/4 unchanged.
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        // byte index → AX boundBy: 0 = offset, byte N = N+1
+        let predicate = NSPredicate(format: "value == %@", "59")
+        let waiter1 = expectation(for: predicate, evaluatedWith: firstRow.staticTexts.element(boundBy: 2), handler: nil)
+        let waiter3 = expectation(for: predicate, evaluatedWith: firstRow.staticTexts.element(boundBy: 4), handler: nil)
+        let waiter5 = expectation(for: predicate, evaluatedWith: firstRow.staticTexts.element(boundBy: 6), handler: nil)
+        wait(for: [waiter1, waiter3, waiter5], timeout: 5)
+
+        XCTAssertEqual(firstRow.staticTexts.element(boundBy: 1).value as? String, "41",
+                       "Byte 0 ('A') must be untouched.")
+        XCTAssertEqual(firstRow.staticTexts.element(boundBy: 3).value as? String, "42",
+                       "Byte 2 ('B') must be untouched.")
+
+        // Single undo reverts the entire Replace All (one undo group).
+        app.typeKey("z", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        let firstRowAfterUndo = hexTable.tableRows.element(boundBy: 0)
+        let byte1After = firstRowAfterUndo.staticTexts.element(boundBy: 2)
+        let revertPredicate = NSPredicate(format: "value == %@", "58")
+        let revertWaiter = expectation(for: revertPredicate, evaluatedWith: byte1After, handler: nil)
+        wait(for: [revertWaiter], timeout: 5)
     }
 
     func testGotoOffsetMovesCursor() throws {

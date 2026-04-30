@@ -39,6 +39,13 @@ static NSString *const HEX_PREF_NOTATION_BINARY = @"notationBinary";
 static NSString *const HEX_PREF_LITTLE_ENDIAN = @"littleEndian";
 static NSString *const HEX_PREF_ADDRESS_WIDTH = @"addressWidth";
 static NSString *const HEX_PREF_COLUMNS = @"columns";
+static NSString *const HEX_PREF_FIND_MATCH_CASE = @"findMatchCase";
+static NSString *const HEX_PREF_FIND_WRAP = @"findWrap";
+
+static NSString *g_lastFindText = @"";
+static NSString *g_lastReplaceText = @"";
+static bool g_findMatchCase = true;
+static bool g_findWrap = true;
 
 static const int HEX_DEFAULT_ADDRESS_WIDTH = 8;
 static const int HEX_DEFAULT_COLUMNS = 16;
@@ -145,6 +152,8 @@ static void loadHexPrefs()
     const int columnsLimit = columnsLimitForBytesPerCell(g_bytesPerCell);
     int columns = hexPrefInt(HEX_PREF_COLUMNS, defaultColumnsForBytesPerCell(g_bytesPerCell));
     g_columns = std::clamp(columns, 1, columnsLimit);
+    g_findMatchCase = hexPrefBool(HEX_PREF_FIND_MATCH_CASE, true);
+    g_findWrap = hexPrefBool(HEX_PREF_FIND_WRAP, true);
 }
 
 static void saveHexPrefs()
@@ -211,6 +220,10 @@ static NSString *promptHexGotoExpression(NSString *defaultText, std::size_t curr
 static void presentHexValidationError(NSString *message);
 static void presentHexGotoDialog();
 static void gotoHexOffset(std::size_t offset);
+static void presentHexFindDialog(BOOL replaceMode);
+static bool executeHexFindNext(hexedit::SearchDirection direction, NSString **errorMessage);
+static int executeHexReplaceAll(NSString *findText, NSString *replaceText, bool matchCase, NSString **errorMessage);
+static bool executeHexReplaceCurrentSelection(NSString *findText, NSString *replaceText, bool matchCase, NSString **errorMessage);
 static bool replaceEditorBytes(size_t offset, const uint8_t *bytes, size_t byteCount, size_t replacedByteCount);
 static bool deleteEditorBytes(size_t offset, size_t byteCount);
 static bool applyEditorByteTransaction(size_t offset, const uint8_t *bytes, size_t byteCount, size_t replacedByteCount);
@@ -413,6 +426,59 @@ static HexTableDataSource *hexTableDataSource = nil;
     return YES;
 }
 
+// Intercept the hex-specific keyboard shortcuts BEFORE the host's main menu gets a chance.
+// AppKit dispatches performKeyEquivalent: to the key window's view tree first, then to the
+// menu bar; the host's Edit menu binds Cmd+F / Cmd+G to its own Find actions, so without
+// this override our keyDown handler would never see those events.
+- (BOOL)performKeyEquivalent:(NSEvent *)event
+{
+    if (![self isHexTableView_acceptsHexShortcut:event]) {
+        return [super performKeyEquivalent:event];
+    }
+
+    NSString *characters = event.charactersIgnoringModifiers;
+    if (characters.length == 0) {
+        return [super performKeyEquivalent:event];
+    }
+    const unichar c = [characters characterAtIndex:0];
+    const NSEventModifierFlags mods = event.modifierFlags;
+
+    if (c == 'f' || c == 'F') {
+        presentHexFindDialog((mods & NSEventModifierFlagOption) != 0);
+        return YES;
+    }
+    if (c == 'g' || c == 'G') {
+        NSString *err = nil;
+        const hexedit::SearchDirection dir = ((mods & NSEventModifierFlagShift) != 0)
+            ? hexedit::SearchDirection::Backward
+            : hexedit::SearchDirection::Forward;
+        if (!executeHexFindNext(dir, &err)) {
+            presentHexValidationError(err ?: @"Pattern not found.");
+        }
+        return YES;
+    }
+    if (c == 'l' || c == 'L') {
+        presentHexGotoDialog();
+        return YES;
+    }
+    return [super performKeyEquivalent:event];
+}
+
+// Helper: only claim shortcut events when this view (or its window) is plausibly the
+// active hex view. Without the gate, every unrelated Cmd+F in the host would route here.
+- (BOOL)isHexTableView_acceptsHexShortcut:(NSEvent *)event
+{
+    if ((event.modifierFlags & NSEventModifierFlagCommand) == 0) {
+        return NO;
+    }
+    NSWindow *window = self.window;
+    if (window == nil) {
+        return NO;
+    }
+    // The hex table only becomes a window subview when the overlay is visible.
+    return self.superview != nil;
+}
+
 - (void)drawRect:(NSRect)dirtyRect
 {
     const NSInteger firstVisibleRow = std::max<NSInteger>(0, [self rowAtPoint:NSMakePoint(NSMinX(dirtyRect), NSMinY(dirtyRect))]);
@@ -591,6 +657,20 @@ static HexTableDataSource *hexTableDataSource = nil;
     copyBinaryItem.target = self;
     NSMenuItem *pasteBinaryItem = [menu addItemWithTitle:@"Paste Binary Content" action:@selector(hexPasteBinary:) keyEquivalent:@""];
     pasteBinaryItem.target = self;
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem *findItem = [menu addItemWithTitle:@"Find…" action:@selector(hexShowFindDialog:) keyEquivalent:@"f"];
+    findItem.target = self;
+    findItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+    NSMenuItem *findReplaceItem = [menu addItemWithTitle:@"Find and Replace…" action:@selector(hexShowFindReplaceDialog:) keyEquivalent:@"f"];
+    findReplaceItem.target = self;
+    findReplaceItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
+    NSMenuItem *findNextItem = [menu addItemWithTitle:@"Find Next" action:@selector(hexFindNext:) keyEquivalent:@"g"];
+    findNextItem.target = self;
+    findNextItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+    NSMenuItem *findPrevItem = [menu addItemWithTitle:@"Find Previous" action:@selector(hexFindPrevious:) keyEquivalent:@"g"];
+    findPrevItem.target = self;
+    findPrevItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
     [menu addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem *gotoItem = [menu addItemWithTitle:@"Go to Offset…" action:@selector(hexShowGotoDialog:) keyEquivalent:@"l"];
@@ -801,6 +881,32 @@ static HexTableDataSource *hexTableDataSource = nil;
     presentHexGotoDialog();
 }
 
+- (void)hexShowFindDialog:(id)sender
+{
+    presentHexFindDialog(NO);
+}
+
+- (void)hexShowFindReplaceDialog:(id)sender
+{
+    presentHexFindDialog(YES);
+}
+
+- (void)hexFindNext:(id)sender
+{
+    NSString *err = nil;
+    if (!executeHexFindNext(hexedit::SearchDirection::Forward, &err)) {
+        presentHexValidationError(err ?: @"Pattern not found.");
+    }
+}
+
+- (void)hexFindPrevious:(id)sender
+{
+    NSString *err = nil;
+    if (!executeHexFindNext(hexedit::SearchDirection::Backward, &err)) {
+        presentHexValidationError(err ?: @"Pattern not found.");
+    }
+}
+
 - (BOOL)byteOffsetAtPoint:(NSPoint)point offset:(size_t *)offset nibble:(NSInteger *)nibble field:(HexCursorField *)field
 {
     const NSInteger row = [self rowAtPoint:point];
@@ -972,6 +1078,23 @@ static HexTableDataSource *hexTableDataSource = nil;
             // so this keybinding is the only way to trigger Goto without right-clicking.
             if (character == 'l' || character == 'L') {
                 presentHexGotoDialog();
+                return;
+            }
+            // Cmd+F → Find (Cmd+Alt+F → Find and Replace), Cmd+G → Find Next, Cmd+Shift+G → Find Prev.
+            // Mirrors the Windows Find/Replace plugin entry point (IDM_SEARCH_FIND wired in
+            // Hex.cpp) using macOS conventions for the keybindings.
+            if (character == 'f' || character == 'F') {
+                presentHexFindDialog((modifiers & NSEventModifierFlagOption) != 0);
+                return;
+            }
+            if (character == 'g' || character == 'G') {
+                NSString *err = nil;
+                const hexedit::SearchDirection dir = ((modifiers & NSEventModifierFlagShift) != 0)
+                    ? hexedit::SearchDirection::Backward
+                    : hexedit::SearchDirection::Forward;
+                if (!executeHexFindNext(dir, &err)) {
+                    presentHexValidationError(err ?: @"Pattern not found.");
+                }
                 return;
             }
         }
@@ -2009,6 +2132,261 @@ static void presentHexGotoDialog()
         return;
     }
     gotoHexOffset(target);
+}
+
+// MARK: - Find / Replace
+
+static bool executeHexFindNext(hexedit::SearchDirection direction, NSString **errorMessage)
+{
+    if (g_lastFindText == nil || g_lastFindText.length == 0) {
+        if (errorMessage) *errorMessage = @"No prior search. Use Find (Cmd+F) first.";
+        return false;
+    }
+    hexedit::SearchPattern pattern;
+    if (!hexedit::parseSearchPattern(std::string([g_lastFindText UTF8String]), g_findMatchCase, pattern)) {
+        if (errorMessage) *errorMessage = @"Could not parse the find pattern.";
+        return false;
+    }
+
+    std::size_t startOffset = 0;
+    if (direction == hexedit::SearchDirection::Forward) {
+        if (hasByteSelection()) {
+            startOffset = std::min(selectedByteStart + 1, previewBytes.size());
+        } else {
+            startOffset = std::min(activeByteOffset + 1, previewBytes.size());
+        }
+    } else {
+        startOffset = hasByteSelection() ? selectedByteStart : activeByteOffset;
+    }
+
+    std::size_t found = 0;
+    if (!hexedit::findBytePattern(previewBytes.data(), previewBytes.size(), pattern,
+                                   startOffset, direction, g_findWrap, found)) {
+        if (errorMessage) *errorMessage = @"Pattern not found.";
+        return false;
+    }
+
+    selectedByteStart = found;
+    selectedByteEnd = found + pattern.bytes.size();
+    activeByteOffset = found;
+    activeHexNibble = 0;
+    activeCursorField = HexCursorField::Hex;
+
+    if (hexTableView) {
+        const NSInteger row = static_cast<NSInteger>(found / static_cast<size_t>(currentBytesPerRow()));
+        if (row >= 0 && row < hexTableView.numberOfRows) {
+            [hexTableView scrollRowToVisible:row];
+        }
+        [hexTableView setNeedsDisplay:YES];
+        if (hexStatusLabel) {
+            hexStatusLabel.stringValue = makeStatusText();
+        }
+    }
+    return true;
+}
+
+static int executeHexReplaceAll(NSString *findText, NSString *replaceText, bool matchCase, NSString **errorMessage)
+{
+    if (findText == nil || findText.length == 0) {
+        if (errorMessage) *errorMessage = @"Find pattern is empty.";
+        return -1;
+    }
+    if (!isPreviewBufferActive()) {
+        if (errorMessage) *errorMessage = @"No active hex buffer.";
+        return -1;
+    }
+
+    hexedit::SearchPattern findPattern;
+    if (!hexedit::parseSearchPattern(std::string([findText UTF8String]), matchCase, findPattern)) {
+        if (errorMessage) *errorMessage = @"Could not parse the find pattern.";
+        return -1;
+    }
+    hexedit::SearchPattern replacePattern;
+    if (replaceText != nil && replaceText.length > 0) {
+        if (!hexedit::parseSearchPattern(std::string([replaceText UTF8String]), true, replacePattern)) {
+            if (errorMessage) *errorMessage = @"Could not parse the replace pattern.";
+            return -1;
+        }
+    }
+
+    // Collect all non-overlapping match offsets, forward, no wrap.
+    std::vector<std::size_t> matches;
+    std::size_t cursor = 0;
+    while (cursor + findPattern.bytes.size() <= previewBytes.size()) {
+        std::size_t at = 0;
+        if (!hexedit::findBytePattern(previewBytes.data(), previewBytes.size(), findPattern,
+                                       cursor, hexedit::SearchDirection::Forward, false, at)) {
+            break;
+        }
+        matches.push_back(at);
+        cursor = at + findPattern.bytes.size();
+    }
+
+    if (matches.empty()) {
+        return 0;
+    }
+
+    NppHandle editor = previewScintillaHandle;
+    if (!editor) {
+        if (errorMessage) *errorMessage = @"No active editor.";
+        return -1;
+    }
+
+    suppressModificationRefresh = true;
+    sci(editor, SCI_BEGINUNDOACTION);
+    // Apply in reverse so earlier offsets stay valid as we mutate from the tail forward.
+    for (auto it = matches.rbegin(); it != matches.rend(); ++it) {
+        const std::size_t off = *it;
+        sci(editor, SCI_SETTARGETSTART, off, 0);
+        sci(editor, SCI_SETTARGETEND, off + findPattern.bytes.size(), 0);
+        sci(editor, SCI_REPLACETARGET, replacePattern.bytes.size(),
+            reinterpret_cast<intptr_t>(replacePattern.bytes.data()));
+    }
+    sci(editor, SCI_ENDUNDOACTION);
+    suppressModificationRefresh = false;
+
+    previewBytes = readCurrentBuffer(&previewTotalLength);
+    clampActiveCursor();
+    clearByteSelection();
+    if (hexTableView) {
+        [hexTableView reloadData];
+        [hexTableView setNeedsDisplay:YES];
+    }
+    if (hexStatusLabel) {
+        hexStatusLabel.stringValue = makeStatusText();
+    }
+    return static_cast<int>(matches.size());
+}
+
+static bool executeHexReplaceCurrentSelection(NSString *findText, NSString *replaceText, bool matchCase, NSString **errorMessage)
+{
+    if (!hasByteSelection()) {
+        if (errorMessage) *errorMessage = @"No selection to replace. Use Find Next first.";
+        return false;
+    }
+    hexedit::SearchPattern findPattern;
+    if (findText == nil || !hexedit::parseSearchPattern(std::string([findText UTF8String]), matchCase, findPattern)) {
+        if (errorMessage) *errorMessage = @"Could not parse the find pattern.";
+        return false;
+    }
+    hexedit::SearchPattern replacePattern;
+    if (replaceText != nil && replaceText.length > 0) {
+        if (!hexedit::parseSearchPattern(std::string([replaceText UTF8String]), true, replacePattern)) {
+            if (errorMessage) *errorMessage = @"Could not parse the replace pattern.";
+            return false;
+        }
+    }
+
+    const std::size_t selLen = selectedByteEnd - selectedByteStart;
+    if (selLen != findPattern.bytes.size()) {
+        if (errorMessage) *errorMessage = @"Current selection does not match the find pattern's length.";
+        return false;
+    }
+
+    if (!applyEditorByteTransaction(selectedByteStart,
+                                     replacePattern.bytes.empty() ? nullptr : replacePattern.bytes.data(),
+                                     replacePattern.bytes.size(), selLen)) {
+        if (errorMessage) *errorMessage = @"Replacement failed.";
+        return false;
+    }
+
+    activeByteOffset = std::min(selectedByteStart + replacePattern.bytes.size(), previewBytes.size());
+    activeHexNibble = 0;
+    activeCursorField = HexCursorField::Hex;
+    clearByteSelection();
+    if (hexTableView) {
+        [hexTableView reloadData];
+        [hexTableView setNeedsDisplay:YES];
+    }
+    return true;
+}
+
+static void presentHexFindDialog(BOOL replaceMode)
+{
+    @autoreleasepool {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = replaceMode ? @"Find and Replace" : @"Find in Hex";
+        alert.informativeText = @"Plain text searches the buffer as ASCII bytes.\n"
+                                @"Use 0x-prefix or space-separated hex (e.g. 0xDEADBEEF or DE AD BE EF) for byte patterns.";
+        [alert addButtonWithTitle:@"Find Next"];
+        if (replaceMode) {
+            [alert addButtonWithTitle:@"Replace All"];
+        }
+        [alert addButtonWithTitle:@"Cancel"];
+
+        const CGFloat width = 360.0;
+        const CGFloat fieldHeight = 22.0;
+        const CGFloat checkHeight = 18.0;
+        const CGFloat verticalGap = 6.0;
+        const int rows = replaceMode ? 5 : 4;
+        const CGFloat totalHeight = (fieldHeight * 2) + (checkHeight * 2) + (verticalGap * (rows - 1));
+        NSView *accessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, totalHeight)];
+
+        CGFloat y = totalHeight - fieldHeight;
+        NSTextField *findField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, y, width, fieldHeight)];
+        findField.placeholderString = @"Find: text or 0xDEADBEEF";
+        findField.stringValue = g_lastFindText ?: @"";
+        findField.accessibilityIdentifier = @"hex-editor.find.input";
+        [accessory addSubview:findField];
+
+        NSTextField *replaceField = nil;
+        if (replaceMode) {
+            y -= (fieldHeight + verticalGap);
+            replaceField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, y, width, fieldHeight)];
+            replaceField.placeholderString = @"Replace with: text or hex bytes";
+            replaceField.stringValue = g_lastReplaceText ?: @"";
+            replaceField.accessibilityIdentifier = @"hex-editor.replace.input";
+            [accessory addSubview:replaceField];
+        }
+
+        y -= (checkHeight + verticalGap);
+        NSButton *matchCaseButton = [NSButton checkboxWithTitle:@"Match case (ASCII only)" target:nil action:nil];
+        matchCaseButton.frame = NSMakeRect(0, y, width, checkHeight);
+        matchCaseButton.state = g_findMatchCase ? NSControlStateValueOn : NSControlStateValueOff;
+        matchCaseButton.accessibilityIdentifier = @"hex-editor.find.matchcase";
+        [accessory addSubview:matchCaseButton];
+
+        y -= (checkHeight + verticalGap);
+        NSButton *wrapButton = [NSButton checkboxWithTitle:@"Wrap around end of buffer" target:nil action:nil];
+        wrapButton.frame = NSMakeRect(0, y, width, checkHeight);
+        wrapButton.state = g_findWrap ? NSControlStateValueOn : NSControlStateValueOff;
+        wrapButton.accessibilityIdentifier = @"hex-editor.find.wrap";
+        [accessory addSubview:wrapButton];
+
+        alert.accessoryView = accessory;
+        [alert.window setInitialFirstResponder:findField];
+        [findField selectText:nil];
+
+        const NSModalResponse response = [alert runModal];
+        // Persist whatever the user typed regardless of which action they took.
+        g_lastFindText = [findField.stringValue copy] ?: @"";
+        if (replaceField) {
+            g_lastReplaceText = [replaceField.stringValue copy] ?: @"";
+        }
+        g_findMatchCase = matchCaseButton.state == NSControlStateValueOn;
+        g_findWrap = wrapButton.state == NSControlStateValueOn;
+        hexPrefSetBool(HEX_PREF_FIND_MATCH_CASE, g_findMatchCase);
+        hexPrefSetBool(HEX_PREF_FIND_WRAP, g_findWrap);
+
+        if (response == NSAlertFirstButtonReturn) {
+            // Find Next
+            NSString *err = nil;
+            if (!executeHexFindNext(hexedit::SearchDirection::Forward, &err)) {
+                presentHexValidationError(err ?: @"Pattern not found.");
+            }
+        } else if (replaceMode && response == NSAlertSecondButtonReturn) {
+            // Replace All
+            NSString *err = nil;
+            const int count = executeHexReplaceAll(g_lastFindText, g_lastReplaceText, g_findMatchCase, &err);
+            if (count < 0) {
+                presentHexValidationError(err ?: @"Replace failed.");
+            } else {
+                showMessage(@"HEX-Editor", [NSString stringWithFormat:@"Replaced %d occurrence%@.",
+                    count, count == 1 ? @"" : @"s"]);
+            }
+        }
+        // Third button (Cancel) — do nothing.
+    }
 }
 
 static void configureTableColumn(NSTableView *tableView, NSString *identifier, NSString *title, CGFloat width, NSFont *font)

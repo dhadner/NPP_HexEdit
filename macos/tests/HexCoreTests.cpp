@@ -738,6 +738,116 @@ void testResolveGotoOffset()
     HEX_EXPECT(!resolveGotoOffset("12.3", 0, 1024, out));
 }
 
+void testParseSearchPattern()
+{
+    g_currentSuite = "parseSearchPattern";
+
+    SearchPattern p;
+
+    // ASCII fallback (plain text).
+    HEX_EXPECT(parseSearchPattern("hello", true, p));
+    HEX_EXPECT_EQ(static_cast<int>(p.kind), static_cast<int>(SearchPatternKind::Ascii));
+    HEX_EXPECT_EQ(p.bytes.size(), static_cast<std::size_t>(5));
+    HEX_EXPECT_EQ(static_cast<int>(p.bytes[0]), static_cast<int>('h'));
+    HEX_EXPECT(p.matchCase);
+
+    // Hex via "0x" prefix.
+    HEX_EXPECT(parseSearchPattern("0xDEADBEEF", true, p));
+    HEX_EXPECT_EQ(static_cast<int>(p.kind), static_cast<int>(SearchPatternKind::Hex));
+    HEX_EXPECT_EQ(p.bytes.size(), static_cast<std::size_t>(4));
+    HEX_EXPECT_EQ(static_cast<int>(p.bytes[0]), 0xDE);
+    HEX_EXPECT_EQ(static_cast<int>(p.bytes[3]), 0xEF);
+
+    // Hex via space-separated digits with at least one a-f.
+    HEX_EXPECT(parseSearchPattern("de ad be ef", true, p));
+    HEX_EXPECT_EQ(static_cast<int>(p.kind), static_cast<int>(SearchPatternKind::Hex));
+    HEX_EXPECT_EQ(p.bytes.size(), static_cast<std::size_t>(4));
+
+    // All-digit numeric strings stay as ASCII (would otherwise mis-detect as hex).
+    HEX_EXPECT(parseSearchPattern("1234", true, p));
+    HEX_EXPECT_EQ(static_cast<int>(p.kind), static_cast<int>(SearchPatternKind::Ascii));
+    HEX_EXPECT_EQ(p.bytes.size(), static_cast<std::size_t>(4));
+
+    // Match-case off propagates.
+    HEX_EXPECT(parseSearchPattern("Hi", false, p));
+    HEX_EXPECT(!p.matchCase);
+
+    // Empty rejected.
+    HEX_EXPECT(!parseSearchPattern("", true, p));
+}
+
+void testFindBytePattern()
+{
+    g_currentSuite = "findBytePattern";
+
+    std::vector<std::uint8_t> hay = {
+        'A','B','C','D','E','F','G','H','A','B','C','D','E','F','G','H'
+    };
+    std::size_t at = 0;
+
+    SearchPattern needle;
+    HEX_EXPECT(parseSearchPattern("CD", true, needle));
+
+    // Forward from 0 finds first occurrence at offset 2.
+    HEX_EXPECT(findBytePattern(hay.data(), hay.size(), needle, 0,
+                                SearchDirection::Forward, true, at));
+    HEX_EXPECT_EQ(at, static_cast<std::size_t>(2));
+
+    // Forward from 3 finds the second at offset 10.
+    HEX_EXPECT(findBytePattern(hay.data(), hay.size(), needle, 3,
+                                SearchDirection::Forward, true, at));
+    HEX_EXPECT_EQ(at, static_cast<std::size_t>(10));
+
+    // Forward from 11 with wrap → wraps to offset 2.
+    HEX_EXPECT(findBytePattern(hay.data(), hay.size(), needle, 11,
+                                SearchDirection::Forward, true, at));
+    HEX_EXPECT_EQ(at, static_cast<std::size_t>(2));
+
+    // Forward from 11 without wrap → no match.
+    HEX_EXPECT(!findBytePattern(hay.data(), hay.size(), needle, 11,
+                                 SearchDirection::Forward, false, at));
+
+    // Backward from end (16) finds the second at offset 10.
+    HEX_EXPECT(findBytePattern(hay.data(), hay.size(), needle, 16,
+                                SearchDirection::Backward, true, at));
+    HEX_EXPECT_EQ(at, static_cast<std::size_t>(10));
+
+    // Backward from offset 5 finds the first at offset 2.
+    HEX_EXPECT(findBytePattern(hay.data(), hay.size(), needle, 5,
+                                SearchDirection::Backward, true, at));
+    HEX_EXPECT_EQ(at, static_cast<std::size_t>(2));
+
+    // Backward from 1 with wrap → wraps to offset 10 (last in document).
+    HEX_EXPECT(findBytePattern(hay.data(), hay.size(), needle, 1,
+                                SearchDirection::Backward, true, at));
+    HEX_EXPECT_EQ(at, static_cast<std::size_t>(10));
+
+    // Backward from 1 without wrap → no match.
+    HEX_EXPECT(!findBytePattern(hay.data(), hay.size(), needle, 1,
+                                 SearchDirection::Backward, false, at));
+
+    // Hex pattern search.
+    std::vector<std::uint8_t> blob = { 0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0x00 };
+    SearchPattern hexNeedle;
+    HEX_EXPECT(parseSearchPattern("0xDEADBEEF", true, hexNeedle));
+    HEX_EXPECT(findBytePattern(blob.data(), blob.size(), hexNeedle, 0,
+                                SearchDirection::Forward, true, at));
+    HEX_EXPECT_EQ(at, static_cast<std::size_t>(1));
+
+    // Match case off finds 'CD' regardless of case.
+    SearchPattern caseLess;
+    HEX_EXPECT(parseSearchPattern("cd", false, caseLess));
+    HEX_EXPECT(findBytePattern(hay.data(), hay.size(), caseLess, 0,
+                                SearchDirection::Forward, true, at));
+    HEX_EXPECT_EQ(at, static_cast<std::size_t>(2));
+
+    // Pattern longer than haystack → no match.
+    SearchPattern bigNeedle;
+    bigNeedle.bytes = std::vector<std::uint8_t>(100, 0x00);
+    HEX_EXPECT(!findBytePattern(hay.data(), hay.size(), bigNeedle, 0,
+                                 SearchDirection::Forward, true, at));
+}
+
 }
 
 int main()
@@ -760,9 +870,11 @@ int main()
     testFormatCell();
     testDisplayPositionMapping();
     testResolveGotoOffset();
+    testParseSearchPattern();
+    testFindBytePattern();
 
     if (g_failures == 0) {
-        std::printf("PASS: %d assertions across 18 suites\n", g_assertions);
+        std::printf("PASS: %d assertions across 20 suites\n", g_assertions);
         return 0;
     }
     std::printf("FAIL: %d/%d assertions failed\n", g_failures, g_assertions);

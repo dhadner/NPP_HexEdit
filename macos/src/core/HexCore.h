@@ -134,4 +134,41 @@ bool resolveGotoOffset(const std::string &text,
                         std::size_t totalLength,
                         std::size_t &outOffset);
 
+enum class SearchDirection {
+    Forward,
+    Backward
+};
+
+enum class SearchPatternKind {
+    Ascii,
+    Hex
+};
+
+struct SearchPattern {
+    std::vector<std::uint8_t> bytes;
+    SearchPatternKind kind = SearchPatternKind::Ascii;
+    bool matchCase = true;
+};
+
+// Parse a user search expression. Heuristic:
+//   - If the trimmed text starts with "0x"/"0X", or is otherwise composed only of
+//     hex digits + whitespace + comma/separator characters AND has at least one
+//     non-decimal hex digit (a-f) OR uses recognised hex separators, parse as hex.
+//   - Otherwise treat as raw ASCII bytes.
+// Returns false if the text is empty or a hex pattern parse fails.
+bool parseSearchPattern(const std::string &text, bool matchCase, SearchPattern &out);
+
+// Forward / backward byte-pattern search. Returns true and writes *outOffset on hit.
+// startOffset is the position to begin searching FROM (forward = at-or-after; backward
+// = before). When wrap is true and no match is found in the primary range, the search
+// continues from the opposite end up to startOffset (exclusive) — Windows wrap semantics.
+// matchCase = false is honoured only for SearchPatternKind::Ascii.
+bool findBytePattern(const std::uint8_t *haystack,
+                     std::size_t haystackLength,
+                     const SearchPattern &pattern,
+                     std::size_t startOffset,
+                     SearchDirection direction,
+                     bool wrap,
+                     std::size_t &outOffset);
+
 }

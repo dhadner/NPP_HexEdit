@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 
 namespace hexedit {
 
@@ -458,6 +459,170 @@ bool resolveGotoOffset(const std::string &text,
 
     outOffset = target;
     return true;
+}
+
+namespace {
+
+inline std::uint8_t toLowerAscii(std::uint8_t value)
+{
+    return (value >= 'A' && value <= 'Z') ? static_cast<std::uint8_t>(value + ('a' - 'A')) : value;
+}
+
+bool bytesEqualAtCase(const std::uint8_t *haystack, const std::uint8_t *needle, std::size_t length, bool caseSensitive)
+{
+    if (caseSensitive) {
+        return std::memcmp(haystack, needle, length) == 0;
+    }
+    for (std::size_t i = 0; i < length; ++i) {
+        if (toLowerAscii(haystack[i]) != toLowerAscii(needle[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool searchInRange(const std::uint8_t *haystack,
+                   std::size_t rangeStart,
+                   std::size_t rangeEnd,
+                   const std::uint8_t *needle,
+                   std::size_t needleLength,
+                   bool matchCase,
+                   bool isHex,
+                   SearchDirection direction,
+                   std::size_t &outOffset)
+{
+    if (needleLength == 0 || rangeEnd < rangeStart || rangeEnd - rangeStart < needleLength) {
+        return false;
+    }
+    const bool caseSensitive = isHex || matchCase;
+    if (direction == SearchDirection::Forward) {
+        const std::size_t lastStart = rangeEnd - needleLength;
+        for (std::size_t i = rangeStart; i <= lastStart; ++i) {
+            if (bytesEqualAtCase(haystack + i, needle, needleLength, caseSensitive)) {
+                outOffset = i;
+                return true;
+            }
+        }
+    } else {
+        const std::size_t lastStart = rangeEnd - needleLength;
+        std::size_t i = lastStart + 1;
+        while (i > rangeStart) {
+            --i;
+            if (bytesEqualAtCase(haystack + i, needle, needleLength, caseSensitive)) {
+                outOffset = i;
+                return true;
+            }
+            if (i == rangeStart) {
+                break;
+            }
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
+bool parseSearchPattern(const std::string &text, bool matchCase, SearchPattern &out)
+{
+    out.bytes.clear();
+    out.kind = SearchPatternKind::Ascii;
+    out.matchCase = matchCase;
+
+    if (text.empty()) {
+        return false;
+    }
+
+    // Hex auto-detection is intentionally conservative — a bare token like "CD" must
+    // remain ASCII (chars 'C','D'), not be re-interpreted as hex byte 0xCD. Hex requires
+    // either an explicit "0x"/"0X" prefix or a recognised separator (space, comma, etc.)
+    // proving the user is grouping byte values. Without that, fall back to ASCII so
+    // human-readable searches like "ELF" or "TODO" work as expected.
+    bool explicitHex = false;
+    if (text.size() >= 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+        explicitHex = true;
+    }
+
+    bool hasSeparator = false;
+    bool allHexCompatible = true;
+    for (unsigned char c : text) {
+        if (std::isspace(c) || c == ',' || c == ';' || c == ':' || c == '-' || c == '_') {
+            hasSeparator = true;
+            continue;
+        }
+        if (hexDigitValue(c) < 0) {
+            allHexCompatible = false;
+            break;
+        }
+    }
+
+    if (explicitHex || (allHexCompatible && hasSeparator)) {
+        std::vector<std::uint8_t> bytes;
+        if (!parseHexClipboardText(text, bytes)) {
+            return false;
+        }
+        out.bytes = std::move(bytes);
+        out.kind = SearchPatternKind::Hex;
+        return !out.bytes.empty();
+    }
+
+    // ASCII fallback: bytes are the raw chars.
+    out.bytes.assign(text.begin(), text.end());
+    out.kind = SearchPatternKind::Ascii;
+    return true;
+}
+
+bool findBytePattern(const std::uint8_t *haystack,
+                     std::size_t haystackLength,
+                     const SearchPattern &pattern,
+                     std::size_t startOffset,
+                     SearchDirection direction,
+                     bool wrap,
+                     std::size_t &outOffset)
+{
+    if (haystack == nullptr || pattern.bytes.empty() || pattern.bytes.size() > haystackLength) {
+        return false;
+    }
+    if (startOffset > haystackLength) {
+        startOffset = haystackLength;
+    }
+
+    const bool isHex = pattern.kind == SearchPatternKind::Hex;
+    const std::uint8_t *needle = pattern.bytes.data();
+    const std::size_t needleLen = pattern.bytes.size();
+
+    if (direction == SearchDirection::Forward) {
+        // Primary range: [startOffset, haystackLength)
+        if (searchInRange(haystack, startOffset, haystackLength, needle, needleLen,
+                          pattern.matchCase, isHex, direction, outOffset)) {
+            return true;
+        }
+        if (!wrap) {
+            return false;
+        }
+        // Wrap range: [0, min(startOffset + needleLen - 1, haystackLength))
+        const std::size_t wrapEnd = std::min(startOffset + needleLen - 1, haystackLength);
+        return searchInRange(haystack, 0, wrapEnd, needle, needleLen,
+                             pattern.matchCase, isHex, direction, outOffset);
+    }
+
+    // Backward
+    // Primary range: [0, startOffset)
+    if (startOffset >= needleLen) {
+        if (searchInRange(haystack, 0, startOffset, needle, needleLen,
+                          pattern.matchCase, isHex, direction, outOffset)) {
+            return true;
+        }
+    }
+    if (!wrap) {
+        return false;
+    }
+    // Wrap range: [max(startOffset, 1) - 0, haystackLength). Approximation: search whole tail.
+    const std::size_t wrapStart = (startOffset >= needleLen - 1) ? (startOffset - (needleLen - 1)) : 0;
+    if (wrapStart >= haystackLength) {
+        return false;
+    }
+    return searchInRange(haystack, wrapStart, haystackLength, needle, needleLen,
+                         pattern.matchCase, isHex, direction, outOffset);
 }
 
 PhysicalPosition physicalPositionForDisplay(std::size_t cellIndex, int digitInCell, const ViewMode &mode)
