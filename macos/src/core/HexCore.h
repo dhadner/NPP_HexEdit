@@ -1,4 +1,5 @@
-#pragma once
+#ifndef NPP_HEXEDITOR_HEXCORE_H
+#define NPP_HEXEDITOR_HEXCORE_H
 
 #include <cstddef>
 #include <cstdint>
@@ -202,3 +203,5 @@ std::vector<bool> computeByteDiffs(const std::uint8_t *a, std::size_t lenA,
                                     const std::uint8_t *b, std::size_t lenB);
 
 }
+
+#endif  // NPP_HEXEDITOR_HEXCORE_H

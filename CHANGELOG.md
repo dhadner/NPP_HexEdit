@@ -9,7 +9,7 @@ The macOS port is a from-scratch native plugin. Source lives in [macos/](macos/)
 ### Platform & build
 
 | | Windows baseline | macOS port |
-|---|---|---|
+| --- | --- | --- |
 | Binary | `HexEditor.dll` | `HexEditor.dylib` |
 | UI toolkit | Win32 / custom-drawn `DockableDlg` | AppKit (`NSTableView` overlay) |
 | Plugin ABI header | `PluginInterface.h` | `NppPluginInterfaceMac.h` |
@@ -33,7 +33,7 @@ The split is new: HexCore exposes pure planning functions (`planHexDigitEdit`, `
 ### Plugin menu commands
 
 | # | Windows | macOS | Status |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 0 | View in HEX | View in HEX | Implemented (with shortcut binding via `_pShKey`) |
 | 1 | Compare HEX | Compare HEX | **Implemented** (compares against a file rather than Windows' second split view) |
 | 2 | Clear Compare Result | Clear Compare Result | **Implemented** |
@@ -51,6 +51,7 @@ Menu wiring on Windows is in [Hex.cpp:100-117](HexEditor/src/Hex.cpp#L100-L117);
 ### Editor capabilities
 
 **Implemented on macOS:**
+
 - Inline overlay that swaps the active Scintilla view for an `NSTableView`-based hex grid (offset / hex bytes / ASCII columns)
 - Direct byte overwrite from both hex and ASCII columns; append at EOF
 - Range selection across hex and ASCII panes
