@@ -35,6 +35,14 @@ CursorState clampCursor(CursorState cursor, const DocumentView &view)
     return cursor;
 }
 
+CursorState clampCursor(CursorState cursor, const DocumentView &view, const ViewMode &mode)
+{
+    cursor.offset = std::min(cursor.offset, view.maxEditableOffset());
+    const int subsPerByte = (mode.notation == CellNotation::Binary) ? 8 : 2;
+    cursor.nibble = std::clamp(cursor.nibble, 0, subsPerByte - 1);
+    return cursor;
+}
+
 CursorState moveCursor(const CursorState &cursor, long delta, const DocumentView &view)
 {
     CursorState next = cursor;
@@ -100,6 +108,81 @@ CursorState navigateRight(const CursorState &cursor, const DocumentView &view)
     return moveCursor(cursor, 1, view);
 }
 
+CursorState navigateLeft(const CursorState &cursor, const DocumentView &view, const ViewMode &mode, int bytesPerRow)
+{
+    if (cursor.field != CursorField::Hex || bytesPerRow <= 0 || !isValidBytesPerCell(mode.bytesPerCell)) {
+        return navigateLeft(cursor, view);
+    }
+
+    const std::size_t bpr = static_cast<std::size_t>(bytesPerRow);
+    const std::size_t row = cursor.offset / bpr;
+    const std::size_t byteInRow = cursor.offset - row * bpr;
+    DisplayPosition dp = displayPositionForByte(byteInRow, cursor.nibble, mode);
+    const int dpc = digitsPerCell(mode);
+    long flatDigit = static_cast<long>(dp.cellIndex) * dpc + dp.digitInCell;
+
+    if (flatDigit > 0) {
+        --flatDigit;
+    } else {
+        // At first display digit of row: walk to last digit of previous row, if any.
+        if (row == 0) {
+            return cursor;
+        }
+        const long perRow = static_cast<long>(bpr / static_cast<std::size_t>(mode.bytesPerCell)) * dpc;
+        flatDigit = perRow - 1;
+        const std::size_t newCell = static_cast<std::size_t>(flatDigit / dpc);
+        const int newDigit = static_cast<int>(flatDigit % dpc);
+        const PhysicalPosition pp = physicalPositionForDisplay(newCell, newDigit, mode);
+        CursorState next = cursor;
+        next.offset = (row - 1) * bpr + pp.byteInRow;
+        next.nibble = pp.subInByte;
+        return clampCursor(next, view, mode);
+    }
+
+    const std::size_t newCell = static_cast<std::size_t>(flatDigit / dpc);
+    const int newDigit = static_cast<int>(flatDigit % dpc);
+    const PhysicalPosition pp = physicalPositionForDisplay(newCell, newDigit, mode);
+    CursorState next = cursor;
+    next.offset = row * bpr + pp.byteInRow;
+    next.nibble = pp.subInByte;
+    return clampCursor(next, view, mode);
+}
+
+CursorState navigateRight(const CursorState &cursor, const DocumentView &view, const ViewMode &mode, int bytesPerRow)
+{
+    if (cursor.field != CursorField::Hex || bytesPerRow <= 0 || !isValidBytesPerCell(mode.bytesPerCell)) {
+        return navigateRight(cursor, view);
+    }
+
+    const std::size_t bpr = static_cast<std::size_t>(bytesPerRow);
+    const std::size_t row = cursor.offset / bpr;
+    const std::size_t byteInRow = cursor.offset - row * bpr;
+    DisplayPosition dp = displayPositionForByte(byteInRow, cursor.nibble, mode);
+    const int dpc = digitsPerCell(mode);
+    const long perRow = static_cast<long>(bpr / static_cast<std::size_t>(mode.bytesPerCell)) * dpc;
+    long flatDigit = static_cast<long>(dp.cellIndex) * dpc + dp.digitInCell;
+
+    if (flatDigit < perRow - 1) {
+        ++flatDigit;
+        const std::size_t newCell = static_cast<std::size_t>(flatDigit / dpc);
+        const int newDigit = static_cast<int>(flatDigit % dpc);
+        const PhysicalPosition pp = physicalPositionForDisplay(newCell, newDigit, mode);
+        CursorState next = cursor;
+        next.offset = row * bpr + pp.byteInRow;
+        next.nibble = pp.subInByte;
+        return clampCursor(next, view, mode);
+    }
+
+    // At last digit of row: advance to first digit of next row (or append slot).
+    CursorState next = cursor;
+    next.offset = (row + 1) * bpr;
+    next.nibble = 0;
+    if (next.offset > view.maxEditableOffset()) {
+        next.offset = view.maxEditableOffset();
+    }
+    return clampCursor(next, view, mode);
+}
+
 ByteRange selectedOrCurrentRange(const DocumentView &view, const CursorState &cursor, const Selection &selection)
 {
     ByteRange range;
@@ -161,6 +244,63 @@ bool planHexDigitEdit(const DocumentView &view,
         nextCursor.nibble = 0;
     }
     out.nextCursor = clampCursor(nextCursor, view);
+    return true;
+}
+
+bool planBitEdit(const DocumentView &view,
+                 const CursorState &cursor,
+                 const Selection &selection,
+                 int bitValue,
+                 ByteEditOperation &out)
+{
+    if (bitValue != 0 && bitValue != 1) {
+        return false;
+    }
+
+    CursorState working = cursor;
+    if (selection.active()) {
+        working.offset = selection.start;
+        working.nibble = 0;  // bit index 0 = MSB
+    }
+
+    if (!isVisibleEditableOffset(view, working.offset)) {
+        return false;
+    }
+    if (working.nibble < 0 || working.nibble > 7) {
+        return false;
+    }
+
+    std::uint8_t baseByte = 0;
+    std::size_t replacedByteCount = 0;
+    if (working.offset < view.visibleByteCount) {
+        baseByte = view.bytes[working.offset];
+        replacedByteCount = 1;
+    }
+
+    // bit 0 = MSB → shift count = 7. bit 7 = LSB → shift count = 0.
+    const int shift = 7 - working.nibble;
+    const std::uint8_t mask = static_cast<std::uint8_t>(1u << shift);
+    std::uint8_t newByte = static_cast<std::uint8_t>(baseByte & ~mask);
+    if (bitValue == 1) {
+        newByte = static_cast<std::uint8_t>(newByte | mask);
+    }
+
+    out.offset = working.offset;
+    out.replacedByteCount = replacedByteCount;
+    out.replacement = { newByte };
+
+    CursorState nextCursor = working;
+    nextCursor.field = CursorField::Hex;
+    if (working.nibble < 7) {
+        nextCursor.nibble = working.nibble + 1;
+    } else {
+        ++nextCursor.offset;
+        nextCursor.nibble = 0;
+    }
+    // Clamp under binary semantics so the new bit position stays in 0..7.
+    ViewMode binaryMode;
+    binaryMode.notation = CellNotation::Binary;
+    out.nextCursor = clampCursor(nextCursor, view, binaryMode);
     return true;
 }
 

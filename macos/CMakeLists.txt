@@ -15,6 +15,11 @@ set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_OBJCXX_VISIBILITY_PRESET hidden)
 
+# Emit compile_commands.json so clangd (the language server VS Code uses) knows our
+# include paths, C++17 standard, and per-target flags. Without this, clangd's in-IDE
+# diagnostics flood with fake "HexCore.h not found" / "no member named 'clamp'" errors.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 set(NPP_MACOS_DIR "${CMAKE_CURRENT_LIST_DIR}/../../notepad-plus-plus-macos" CACHE PATH "Path to notepad-plus-plus-macos checkout")
 set(NPP_PLUGIN_INCLUDE "${NPP_MACOS_DIR}/src")
 set(SCINTILLA_INCLUDE "${NPP_MACOS_DIR}/scintilla/include")

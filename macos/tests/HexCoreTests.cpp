@@ -848,6 +848,179 @@ void testFindBytePattern()
                                  SearchDirection::Forward, true, at));
 }
 
+void testClampCursorMode()
+{
+    g_currentSuite = "clampCursor (mode-aware)";
+
+    std::vector<std::uint8_t> bytes(8, 0x00);
+    DocumentView view = makeView(bytes, 8);
+
+    CursorState c;
+    c.offset = 3;
+
+    ViewMode hex;
+    c.nibble = 9;
+    CursorState clamped = clampCursor(c, view, hex);
+    HEX_EXPECT_EQ(clamped.nibble, 1);  // hex max = 1
+
+    ViewMode bin;
+    bin.notation = CellNotation::Binary;
+    c.nibble = 9;
+    clamped = clampCursor(c, view, bin);
+    HEX_EXPECT_EQ(clamped.nibble, 7);  // binary max = 7
+
+    c.nibble = -3;
+    clamped = clampCursor(c, view, bin);
+    HEX_EXPECT_EQ(clamped.nibble, 0);
+}
+
+void testPlanBitEdit()
+{
+    g_currentSuite = "planBitEdit";
+
+    std::vector<std::uint8_t> bytes = { 0x00, 0xFF, 0xAA };
+    DocumentView view = makeView(bytes, bytes.size());
+    Selection none;
+
+    // Set bit 0 (MSB) of byte 0 from 0 → 1.
+    CursorState c;
+    c.offset = 0;
+    c.nibble = 0;
+    ByteEditOperation op;
+    HEX_EXPECT(planBitEdit(view, c, none, 1, op));
+    HEX_EXPECT_EQ(op.offset, static_cast<std::size_t>(0));
+    HEX_EXPECT_EQ(op.replacedByteCount, static_cast<std::size_t>(1));
+    HEX_EXPECT_EQ(op.replacement.size(), static_cast<std::size_t>(1));
+    HEX_EXPECT_EQ(static_cast<int>(op.replacement[0]), 0x80);  // MSB set
+    HEX_EXPECT_EQ(op.nextCursor.offset, static_cast<std::size_t>(0));
+    HEX_EXPECT_EQ(op.nextCursor.nibble, 1);  // advance to bit 1
+
+    // Clear bit 7 (LSB) of byte 1 from 1 → 0.
+    c.offset = 1;
+    c.nibble = 7;
+    HEX_EXPECT(planBitEdit(view, c, none, 0, op));
+    HEX_EXPECT_EQ(static_cast<int>(op.replacement[0]), 0xFE);  // LSB cleared
+    HEX_EXPECT_EQ(op.nextCursor.offset, static_cast<std::size_t>(2));  // rolled to next byte
+    HEX_EXPECT_EQ(op.nextCursor.nibble, 0);
+
+    // Setting an already-set bit is a no-op for the bit value but still produces a write.
+    c.offset = 1;
+    c.nibble = 4;
+    HEX_EXPECT(planBitEdit(view, c, none, 1, op));
+    HEX_EXPECT_EQ(static_cast<int>(op.replacement[0]), 0xFF);
+
+    // Toggle bit 1 of byte 2 (0xAA = 10101010, bit 1 = '0' → '1').
+    c.offset = 2;
+    c.nibble = 1;
+    HEX_EXPECT(planBitEdit(view, c, none, 1, op));
+    HEX_EXPECT_EQ(static_cast<int>(op.replacement[0]), 0xEA);  // 11101010
+
+    // Append at EOF — empty doc + bit 3 set → 0x10.
+    std::vector<std::uint8_t> empty;
+    DocumentView emptyView = makeView(empty, 0);
+    c.offset = 0;
+    c.nibble = 3;
+    HEX_EXPECT(planBitEdit(emptyView, c, none, 1, op));
+    HEX_EXPECT_EQ(op.replacedByteCount, static_cast<std::size_t>(0));
+    HEX_EXPECT_EQ(static_cast<int>(op.replacement[0]), 0x10);
+
+    // Invalid bit value rejected.
+    c.offset = 0;
+    c.nibble = 0;
+    HEX_EXPECT(!planBitEdit(view, c, none, 2, op));
+    HEX_EXPECT(!planBitEdit(view, c, none, -1, op));
+
+    // Out-of-range bit index rejected.
+    c.offset = 0;
+    c.nibble = 8;
+    HEX_EXPECT(!planBitEdit(view, c, none, 1, op));
+}
+
+void testNavigateInDisplayOrder()
+{
+    g_currentSuite = "navigateLeft/Right (display-order)";
+
+    std::vector<std::uint8_t> bytes(32, 0x00);
+    DocumentView view = makeView(bytes, 32);
+
+    // Default 8-Bit hex big-endian — should match the old byte-order overloads.
+    {
+        ViewMode m;  // bpc=1, hex, BE
+        const int bpr = 16;
+        CursorState c; c.offset = 4; c.nibble = 0;
+        CursorState next = navigateRight(c, view, m, bpr);
+        HEX_EXPECT_EQ(next.offset, static_cast<std::size_t>(4));
+        HEX_EXPECT_EQ(next.nibble, 1);
+
+        next = navigateRight(next, view, m, bpr);
+        HEX_EXPECT_EQ(next.offset, static_cast<std::size_t>(5));
+        HEX_EXPECT_EQ(next.nibble, 0);
+
+        next = navigateLeft(next, view, m, bpr);
+        HEX_EXPECT_EQ(next.offset, static_cast<std::size_t>(4));
+        HEX_EXPECT_EQ(next.nibble, 1);
+    }
+
+    // 16-Bit hex little-endian — the cell holds bytes (0,1) but byte 1 displays first.
+    // Starting at byte 0 nibble 0 (cell 0 digit 2), navigateRight should go to nibble 1
+    // (cell 0 digit 3); the next one should jump to byte 3 nibble 0 (cell 1 digit 0,
+    // because cell 1 in LE displays byte 3 first).
+    {
+        ViewMode m; m.bytesPerCell = 2; m.littleEndian = true;
+        const int bpr = 16;  // 8 cells × 2 bytes
+        CursorState c; c.offset = 0; c.nibble = 0;
+
+        // Verify the starting display position is digit 2 (= second byte of cell 0).
+        DisplayPosition dp = displayPositionForByte(0, 0, m);
+        HEX_EXPECT_EQ(dp.cellIndex, static_cast<std::size_t>(0));
+        HEX_EXPECT_EQ(dp.digitInCell, 2);
+
+        CursorState next = navigateRight(c, view, m, bpr);
+        HEX_EXPECT_EQ(next.offset, static_cast<std::size_t>(0));
+        HEX_EXPECT_EQ(next.nibble, 1);  // byte 0 low nibble (cell 0 digit 3)
+
+        next = navigateRight(next, view, m, bpr);
+        // cell 0 digit 4 → cell 1 digit 0 → physical = byte 3 high nibble.
+        HEX_EXPECT_EQ(next.offset, static_cast<std::size_t>(3));
+        HEX_EXPECT_EQ(next.nibble, 0);
+
+        // Going back should retrace: byte 0 nibble 1.
+        CursorState back = navigateLeft(next, view, m, bpr);
+        HEX_EXPECT_EQ(back.offset, static_cast<std::size_t>(0));
+        HEX_EXPECT_EQ(back.nibble, 1);
+    }
+
+    // Row-boundary advance in BE 8-bit: navigateRight at end of row 0 jumps to row 1.
+    {
+        ViewMode m;  // bpc=1
+        const int bpr = 16;
+        CursorState c; c.offset = 15; c.nibble = 1;
+        CursorState next = navigateRight(c, view, m, bpr);
+        HEX_EXPECT_EQ(next.offset, static_cast<std::size_t>(16));
+        HEX_EXPECT_EQ(next.nibble, 0);
+    }
+
+    // Row-boundary retreat in BE 8-bit.
+    {
+        ViewMode m;
+        const int bpr = 16;
+        CursorState c; c.offset = 16; c.nibble = 0;
+        CursorState back = navigateLeft(c, view, m, bpr);
+        HEX_EXPECT_EQ(back.offset, static_cast<std::size_t>(15));
+        HEX_EXPECT_EQ(back.nibble, 1);
+    }
+
+    // navigateLeft from document start is a no-op.
+    {
+        ViewMode m;
+        const int bpr = 16;
+        CursorState c; c.offset = 0; c.nibble = 0;
+        CursorState back = navigateLeft(c, view, m, bpr);
+        HEX_EXPECT_EQ(back.offset, static_cast<std::size_t>(0));
+        HEX_EXPECT_EQ(back.nibble, 0);
+    }
+}
+
 }
 
 int main()
@@ -872,9 +1045,12 @@ int main()
     testResolveGotoOffset();
     testParseSearchPattern();
     testFindBytePattern();
+    testClampCursorMode();
+    testPlanBitEdit();
+    testNavigateInDisplayOrder();
 
     if (g_failures == 0) {
-        std::printf("PASS: %d assertions across 20 suites\n", g_assertions);
+        std::printf("PASS: %d assertions across 23 suites\n", g_assertions);
         return 0;
     }
     std::printf("FAIL: %d/%d assertions failed\n", g_failures, g_assertions);

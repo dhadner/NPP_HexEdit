@@ -699,6 +699,59 @@ func testContextMenuCommands() throws {
         wait(for: [revertWaiter], timeout: 5)
     }
 
+    func testBinaryNotationBitEdit() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // "@A" → bytes 0x40 0x41 → binary "01000000" "01000001".
+        try createBufferWithText(app: app, text: "@A")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        // Switch to binary notation via View in → to Binary
+        hexTable.rightClick()
+        let viewIn = app.menuItems["View in"].firstMatch
+        XCTAssertTrue(viewIn.waitForExistence(timeout: 3))
+        viewIn.click()
+        let toBinary = app.menuItems["to Binary"].firstMatch
+        XCTAssertTrue(toBinary.waitForExistence(timeout: 3))
+        toBinary.click()
+        Thread.sleep(forTimeInterval: 0.3)
+
+        // Cell 0 should show byte 0 (0x40) as 8 binary chars.
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 5))
+        let cell0 = firstRow.staticTexts.element(boundBy: 1)
+        let initialPredicate = NSPredicate(format: "value == %@", "01000000")
+        let initialWaiter = expectation(for: initialPredicate, evaluatedWith: cell0, handler: nil)
+        wait(for: [initialWaiter], timeout: 5)
+
+        // Cursor defaults to byte 0 bit 0 (MSB). Type "1" → set MSB → "11000000" = 0xC0.
+        app.typeText("1")
+        let cell0AfterFirst = hexTable.tableRows.element(boundBy: 0).staticTexts.element(boundBy: 1)
+        let firstPredicate = NSPredicate(format: "value == %@", "11000000")
+        let firstWaiter = expectation(for: firstPredicate, evaluatedWith: cell0AfterFirst, handler: nil)
+        wait(for: [firstWaiter], timeout: 5)
+
+        // Cursor is now at bit 1 (was a 1, since 0x40 = 01000000 + bit 0 set = 11000000).
+        // Type "0" → clear bit 1 → 10000000.
+        app.typeText("0")
+        // Cursor at bit 2 (was 0). Type "1" → 10100000 = 0xA0.
+        app.typeText("1")
+        let cell0AfterThree = hexTable.tableRows.element(boundBy: 0).staticTexts.element(boundBy: 1)
+        let thirdPredicate = NSPredicate(format: "value == %@", "10100000")
+        let thirdWaiter = expectation(for: thirdPredicate, evaluatedWith: cell0AfterThree, handler: nil)
+        wait(for: [thirdWaiter], timeout: 5)
+
+        // Three undos to revert each bit edit before terminate.
+        app.typeKey("z", modifierFlags: .command)
+        app.typeKey("z", modifierFlags: .command)
+        app.typeKey("z", modifierFlags: .command)
+    }
+
     func testGotoOffsetMovesCursor() throws {
         let app = try launchNotepad()
         defer { app.terminate() }

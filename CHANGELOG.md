@@ -89,10 +89,10 @@ Zoom In / Zoom Out / Restore Default Zoom
 
 Diverges from Windows in two intentional ways: Undo/Redo and Zoom In/Out/Restore are macOS additions kept for usability; Select All and Toggle Bookmark are not duplicated in the context menu (Select All is reachable via the host Edit menu / Cmd+A; bookmarks toggle via clicking the offset column). The Windows "Address Width..." / "Columns..." entries are still pending; they require an `NSUserDefaults`-backed prefs store and the corresponding Cocoa input dialogs — tracked under "Not yet ported".
 
-**View submode — known follow-ups not yet matching Windows:**
+**View submode — earlier follow-ups now landed:**
 
-- **Bit-precise editing in binary notation.** The cursor model is still byte+nibble. In binary notation the displayed byte's bits are read-only; click and caret land at the byte's position, but typing 0/1 does not modify a single bit. To match Windows, the cursor needs a bit-position field and `handleHexDigit` needs a binary-mode branch.
-- **Display-order arrow-key navigation in multi-byte / little-endian modes.** Arrow keys still walk the underlying byte array. In little-endian 32-bit mode this means pressing → from byte 0 advances to byte 1 (which on Windows would step backward across the displayed cell because byte 0 displays last). Click + caret rendering already use the display-order mapping correctly, so the visual position is right; only step-by-step arrow navigation is byte-order-based for now.
+- **Bit-precise editing in binary notation.** Typing `0` or `1` while in Binary view edits a single bit at the caret (MSB-first within the byte) and advances by one bit. The cursor's `nibble` field is overloaded to carry a bit index 0..7 in Binary mode (vs 0..1 in Hex mode); `clampCursor` got a `ViewMode`-aware overload to clamp to the right range when modes switch. Implemented in `HexCore::planBitEdit`.
+- **Display-order arrow-key navigation in multi-byte / little-endian modes.** `navigateLeft` / `navigateRight` now have `ViewMode`-aware overloads that walk display digits left-to-right rather than walking the underlying byte array. In little-endian 16-bit mode, pressing → from byte 0 nibble 1 now correctly advances to byte 3 nibble 0 (cell 1's first displayed byte) instead of byte 1 nibble 0. Click and caret rendering were already display-order-correct.
 
 **Not yet ported from Windows** (present in [HexEditor/src/](HexEditor/src/), absent on macOS):
 

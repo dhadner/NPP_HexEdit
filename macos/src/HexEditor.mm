@@ -240,6 +240,7 @@ static bool cutHexSelectionBinary();
 static bool deleteHexSelection();
 static void selectAllHexBytes();
 static bool handleHexDigit(unichar character);
+static bool handleBinaryDigit(unichar character);
 static bool handleAsciiCharacter(unichar character);
 static bool handleAsciiByte(uint8_t byteValue);
 static bool handleAsciiAltNumpadDigit(NSEvent *event);
@@ -936,11 +937,10 @@ static HexTableDataSource *hexTableDataSource = nil;
             *offset = byteOffset;
         }
         if (nibble) {
-            // In binary mode the cursor still lives at byte/nibble granularity (high nibble).
-            // The view-mode work flags bit-level editing in binary mode as a deferred follow-up.
-            *nibble = (mode.notation == hexedit::CellNotation::Binary)
-                ? 0
-                : static_cast<NSInteger>(phys.subInByte);
+            // phys.subInByte is the nibble (0-1) in hex mode or the bit index (0-7,
+            // MSB-first) in binary mode. The cursor field accepts either range — bit
+            // edits use it directly via planBitEdit.
+            *nibble = static_cast<NSInteger>(phys.subInByte);
         }
         if (field) {
             *field = HexCursorField::Hex;
@@ -1111,12 +1111,14 @@ static HexTableDataSource *hexTableDataSource = nil;
     case NSBackspaceCharacter:
     case NSLeftArrowFunctionKey:
         clearByteSelection();
-        writeBackCursor(hexedit::navigateLeft(currentCursor(), currentDocumentView()));
+        writeBackCursor(hexedit::navigateLeft(currentCursor(), currentDocumentView(),
+                                               currentViewMode(), currentBytesPerRow()));
         [self reloadDataPreservingScrollOrigin:scrollOrigin];
         return;
     case NSRightArrowFunctionKey:
         clearByteSelection();
-        writeBackCursor(hexedit::navigateRight(currentCursor(), currentDocumentView()));
+        writeBackCursor(hexedit::navigateRight(currentCursor(), currentDocumentView(),
+                                                currentViewMode(), currentBytesPerRow()));
         [self reloadDataPreservingScrollOrigin:scrollOrigin];
         return;
     case NSUpArrowFunctionKey:
@@ -1147,7 +1149,13 @@ static HexTableDataSource *hexTableDataSource = nil;
     const size_t editedOffset = selectionWasActive ? selectedByteStart : activeByteOffset;
     bool handled = false;
     if (activeCursorField == HexCursorField::Hex) {
-        handled = handleHexDigit(character);
+        // In binary notation, only '0' and '1' are valid digit input — they edit a single
+        // bit. Hex notation accepts 0-9 / a-f / A-F via planHexDigitEdit.
+        if (g_notation == hexedit::CellNotation::Binary) {
+            handled = handleBinaryDigit(character);
+        } else {
+            handled = handleHexDigit(character);
+        }
     } else {
         handled = handleAsciiCharacter(character);
     }
@@ -1592,7 +1600,7 @@ static void toggleBookmarkRow(size_t row)
 
 static void clampActiveCursor()
 {
-    writeBackCursor(hexedit::clampCursor(currentCursor(), currentDocumentView()));
+    writeBackCursor(hexedit::clampCursor(currentCursor(), currentDocumentView(), currentViewMode()));
 }
 
 static void setActiveHexCursor(size_t offset, NSInteger nibble)
@@ -1815,7 +1823,7 @@ static bool deleteHexSelection()
     }
 
     clearByteSelection();
-    writeBackCursor(hexedit::clampCursor(op.nextCursor, currentDocumentView()));
+    writeBackCursor(hexedit::clampCursor(op.nextCursor, currentDocumentView(), currentViewMode()));
     redrawHexTablePreservingScroll(currentHexTableScrollOrigin());
     return true;
 }
@@ -1855,7 +1863,7 @@ static bool applyBytesPaste(const std::uint8_t *bytes, size_t byteCount)
     clearByteSelection();
     hexedit::CursorState reclamped = op.nextCursor;
     reclamped.offset = std::min(op.offset + byteCount, previewTotalLength);
-    writeBackCursor(hexedit::clampCursor(reclamped, currentDocumentView()));
+    writeBackCursor(hexedit::clampCursor(reclamped, currentDocumentView(), currentViewMode()));
     redrawHexTablePreservingScroll(currentHexTableScrollOrigin());
     return true;
 }
@@ -1937,7 +1945,31 @@ static bool handleHexDigit(unichar character)
     }
 
     clearByteSelection();
-    writeBackCursor(hexedit::clampCursor(op.nextCursor, currentDocumentView()));
+    writeBackCursor(hexedit::clampCursor(op.nextCursor, currentDocumentView(), currentViewMode()));
+    return true;
+}
+
+static bool handleBinaryDigit(unichar character)
+{
+    int bitValue;
+    if (character == '0') {
+        bitValue = 0;
+    } else if (character == '1') {
+        bitValue = 1;
+    } else {
+        return false;
+    }
+
+    hexedit::ByteEditOperation op;
+    if (!hexedit::planBitEdit(currentDocumentView(), currentCursor(), currentSelection(), bitValue, op)) {
+        return false;
+    }
+    if (!replaceEditorBytes(op.offset, op.replacement.data(), op.replacement.size(), op.replacedByteCount)) {
+        return false;
+    }
+
+    clearByteSelection();
+    writeBackCursor(hexedit::clampCursor(op.nextCursor, currentDocumentView(), currentViewMode()));
     return true;
 }
 
@@ -1963,7 +1995,7 @@ static bool handleAsciiByte(uint8_t byteValue)
     }
 
     clearByteSelection();
-    writeBackCursor(hexedit::clampCursor(op.nextCursor, currentDocumentView()));
+    writeBackCursor(hexedit::clampCursor(op.nextCursor, currentDocumentView(), currentViewMode()));
     return true;
 }
 
@@ -2479,6 +2511,10 @@ static void toggleHexViewBinary()
         ? hexedit::CellNotation::Hex
         : hexedit::CellNotation::Binary;
     saveHexPrefs();
+    // Cursor.nibble carries different ranges per mode (0-1 hex, 0-7 binary). Switching
+    // back to hex while the caret is mid-byte (e.g. bit 5) would leave it in the wrong
+    // range and the hex digit planner would misroute the next typed character.
+    clampActiveCursor();
     applyHexViewMode();
 }
 

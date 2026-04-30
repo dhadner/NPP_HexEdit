@@ -63,6 +63,10 @@ bool isVisibleEditableOffset(const DocumentView &view, std::size_t offset);
 
 CursorState clampCursor(CursorState cursor, const DocumentView &view);
 
+// Mode-aware variant. In binary notation `cursor.nibble` is interpreted as a bit index
+// (0..7, MSB-first), so the upper clamp depends on subsPerByte = 8 for binary, 2 for hex.
+CursorState clampCursor(CursorState cursor, const DocumentView &view, const ViewMode &mode);
+
 CursorState moveCursor(const CursorState &cursor, long delta, const DocumentView &view);
 
 CursorState cursorToLineStart(const CursorState &cursor);
@@ -77,6 +81,14 @@ CursorState navigateLeft(const CursorState &cursor, const DocumentView &view);
 
 CursorState navigateRight(const CursorState &cursor, const DocumentView &view);
 
+// View-aware navigation. Walks the display in left-to-right reading order rather than
+// storage order — relevant when bytesPerCell > 1 with littleEndian display, where the
+// physical byte at offset 0 displays *after* byte 1 in its cell. In default 8-Bit hex
+// big-endian the result is identical to the byte-order overloads.
+CursorState navigateLeft(const CursorState &cursor, const DocumentView &view, const ViewMode &mode, int bytesPerRow);
+
+CursorState navigateRight(const CursorState &cursor, const DocumentView &view, const ViewMode &mode, int bytesPerRow);
+
 ByteRange selectedOrCurrentRange(const DocumentView &view, const CursorState &cursor, const Selection &selection);
 
 bool planHexDigitEdit(const DocumentView &view,
@@ -84,6 +96,17 @@ bool planHexDigitEdit(const DocumentView &view,
                       const Selection &selection,
                       int hexValue,
                       ByteEditOperation &out);
+
+// Binary-notation single-bit edit. cursor.nibble is the bit index (0=MSB, 7=LSB) within
+// the byte at cursor.offset; bitValue must be 0 or 1. Replaces just that bit (preserving
+// the other 7) and advances the cursor: bit + 1 within the byte, rolling to the next byte
+// (offset + 1, bit = 0) when the low bit is reached. Append-at-EOF is permitted just like
+// planHexDigitEdit — the new byte starts with the requested bit set/clear.
+bool planBitEdit(const DocumentView &view,
+                 const CursorState &cursor,
+                 const Selection &selection,
+                 int bitValue,
+                 ByteEditOperation &out);
 
 bool planAsciiByteEdit(const DocumentView &view,
                        const CursorState &cursor,
