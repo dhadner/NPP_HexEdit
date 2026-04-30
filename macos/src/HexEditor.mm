@@ -15,7 +15,7 @@
 #include <vector>
 
 static const char *PLUGIN_NAME = "HEX-Editor";
-static const int NB_FUNC = 7;
+static const int NB_FUNC = 6;
 
 // Accessibility identifiers — must match the strings hard-coded in
 // macos/ui-tests-xcode/Tests/HexEditorUITests.swift.
@@ -286,6 +286,7 @@ static void redrawHexRowsPreservingScroll(size_t firstOffset, size_t secondOffse
 static NSColor *hexCurrentLineColor();
 static NSColor *hexSelectionColor();
 static NSColor *hexCurrentLineSelectionColor();
+static NSColor *hexCompareDiffColor();
 static NSString *makeStatusText();
 static hexedit::DocumentView currentDocumentView();
 static hexedit::Selection currentSelection();
@@ -419,8 +420,7 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
         const NSInteger cellIdx = [[identifier substringFromIndex:4] integerValue];
         if (compareDiffMaskCellHasDiff(row, cellIdx)) {
             textCell.drawsBackground = YES;
-            // Slightly muted red so the byte text stays readable on the highlight.
-            textCell.backgroundColor = [NSColor colorWithCalibratedRed:0.85 green:0.30 blue:0.30 alpha:1.0];
+            textCell.backgroundColor = hexCompareDiffColor();
             textCell.textColor = [NSColor whiteColor];
         }
     }
@@ -1254,19 +1254,33 @@ static CGFloat asciiGlyphLeft(NSTableView *tableView, NSInteger column, NSIntege
     return NSMinX(textDrawingRect(tableView, column, row));
 }
 
+// Semantic NSColor values throughout — they auto-flip in dark mode and follow the
+// user's accent colour. Replaced four hardcoded calibratedRGB values whose previous
+// contrast was correct only in light mode. The host (Notepad++ macOS) inherits dark
+// mode via NSAppearance with no plugin-side toggle, so we follow suit.
 static NSColor *hexCurrentLineColor()
 {
-    return [NSColor colorWithCalibratedWhite:0.87 alpha:1.0];
+    return [NSColor unemphasizedSelectedContentBackgroundColor];
 }
 
 static NSColor *hexSelectionColor()
 {
-    return [NSColor colorWithCalibratedRed:0.45 green:0.42 blue:0.86 alpha:0.82];
+    // 0.6 alpha keeps the byte text readable on top of the selection wash regardless
+    // of accent colour intensity.
+    return [[NSColor selectedContentBackgroundColor] colorWithAlphaComponent:0.6];
 }
 
 static NSColor *hexCurrentLineSelectionColor()
 {
-    return [NSColor colorWithCalibratedRed:0.68 green:0.68 blue:0.86 alpha:0.86];
+    // Lighter wash for "selected and on the current line" — the same accent colour
+    // but a softer alpha so the row highlight underneath is still discernible.
+    return [[NSColor selectedContentBackgroundColor] colorWithAlphaComponent:0.85];
+}
+
+static NSColor *hexCompareDiffColor()
+{
+    // System red adapts in dark mode; matching the bookmark highlight semantic.
+    return [NSColor systemRedColor];
 }
 
 static CGFloat paddedTextWidth(NSString *text, NSFont *font)
@@ -3240,11 +3254,6 @@ static void patternReplacePreview()
     presentPatternReplaceDialog();
 }
 
-static void showOptionsPreview()
-{
-    showNotPorted(@"Options");
-}
-
 extern "C" NPP_EXPORT void setInfo(NppData data)
 {
     nppData = data;
@@ -3285,15 +3294,10 @@ extern "C" NPP_EXPORT void setInfo(NppData data)
     funcItem[4]._init2Check = false;
     funcItem[4]._pShKey = nullptr;
 
-    strlcpy(funcItem[5]._itemName, "Options...", NPP_MENU_ITEM_SIZE);
-    funcItem[5]._pFunc = showOptionsPreview;
+    strlcpy(funcItem[5]._itemName, "Help...", NPP_MENU_ITEM_SIZE);
+    funcItem[5]._pFunc = showAbout;
     funcItem[5]._init2Check = false;
     funcItem[5]._pShKey = nullptr;
-
-    strlcpy(funcItem[6]._itemName, "Help...", NPP_MENU_ITEM_SIZE);
-    funcItem[6]._pFunc = showAbout;
-    funcItem[6]._init2Check = false;
-    funcItem[6]._pShKey = nullptr;
 }
 
 extern "C" NPP_EXPORT const char *getName()
