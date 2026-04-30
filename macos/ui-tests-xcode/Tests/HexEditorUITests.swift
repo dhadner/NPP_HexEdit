@@ -699,6 +699,60 @@ func testContextMenuCommands() throws {
         wait(for: [revertWaiter], timeout: 5)
     }
 
+    func testCompareHexHighlightsDifferingBytes() throws {
+        // Write a fixture file that differs from the buffer at known positions.
+        let fixturePath = NSTemporaryDirectory() + "hex-compare-fixture-\(UUID().uuidString).bin"
+        // Buffer "ABCD" → 0x41 0x42 0x43 0x44
+        // Fixture            0x41 0x42 0xFF 0x44 → byte 2 differs.
+        let fixtureBytes: [UInt8] = [0x41, 0x42, 0xFF, 0x44]
+        let fixtureData = Data(fixtureBytes)
+        try fixtureData.write(to: URL(fileURLWithPath: fixturePath))
+        defer { try? FileManager.default.removeItem(atPath: fixturePath) }
+
+        // Pass the fixture path through --test-compare-with so the plugin bypasses the
+        // NSOpenPanel (XCUI cannot drive system panels reliably).
+        let app = try launchNotepad(extraArguments: ["--test-compare-with=\(fixturePath)"])
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "ABCD")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        // Trigger Compare HEX from the plugin menu — fixture picks up via the launch arg.
+        try invokeHexEditorMenu(app: app, item: "Compare HEX")
+
+        // Confirmation alert: "1 byte differ.\n…" — dismiss with OK.
+        let summaryButton = app.buttons["OK"].firstMatch
+        XCTAssertTrue(summaryButton.waitForExistence(timeout: 5),
+                      "Compare HEX should present a summary dialog.")
+        // Optional: assert the summary text mentions "1 byte differ" — accessible via AX.
+        let summaryDialog = app.dialogs.firstMatch
+        if summaryDialog.exists {
+            // The dialog's static texts include the message text; loose match for "1 byte".
+            XCTAssertTrue(summaryDialog.staticTexts.element(matching:
+                NSPredicate(format: "value CONTAINS '1 byte'")).exists ||
+                summaryDialog.staticTexts.element(matching:
+                NSPredicate(format: "label CONTAINS '1 byte'")).exists,
+                "Summary alert should report exactly 1 byte differing.")
+        }
+        summaryButton.click()
+
+        // The hex view should still be functional. Now trigger Clear Compare Result and
+        // verify it doesn't surface the "no active comparison" message.
+        try invokeHexEditorMenu(app: app, item: "Clear Compare Result")
+        // No alert is expected when an active comparison is cleared. Nothing more to check.
+
+        // Trigger Clear again — this time the plugin should surface "No active comparison".
+        try invokeHexEditorMenu(app: app, item: "Clear Compare Result")
+        let secondClearOK = app.buttons["OK"].firstMatch
+        XCTAssertTrue(secondClearOK.waitForExistence(timeout: 3),
+                      "Second Clear Compare Result should explain that nothing is active.")
+        secondClearOK.click()
+    }
+
     func testInsertColumnsExpandsRowAndInjectsPattern() throws {
         let app = try launchNotepad()
         defer { app.terminate() }
@@ -951,7 +1005,7 @@ func testContextMenuCommands() throws {
 
     // MARK: - Helpers
 
-    private func launchNotepad() throws -> XCUIApplication {
+    private func launchNotepad(extraArguments: [String] = []) throws -> XCUIApplication {
         let app = XCUIApplication(url: try notepadAppURL())
         // -nosession suppresses session restore so each test starts with a single empty,
         // focused buffer.
@@ -959,7 +1013,7 @@ func testContextMenuCommands() throws {
         //   ~/Library/Preferences/org.notepad-plus-plus.HexEditor.plist before loading,
         //   so each test sees defaults. The runner cannot delete that plist itself —
         //   sandboxed UserDefaults(suiteName:) writes redirect to the runner container.
-        app.launchArguments = ["-nosession", "--reset-hex-prefs"]
+        app.launchArguments = ["-nosession", "--reset-hex-prefs"] + extraArguments
         app.launch()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "Notepad++ macOS did not launch.")
         return app

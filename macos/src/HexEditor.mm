@@ -175,6 +175,11 @@ static NSView *hexEditorView = nil;
 static NSView *hiddenScintillaView = nil;
 static std::vector<uint8_t> previewBytes;
 static std::set<size_t> bookmarkedRows;
+// Compare HEX result mask. Empty when there is no active comparison; otherwise sized to
+// max(myLen, otherLen) with `true` at byte offsets that differ between the current buffer
+// and the file the user picked.
+static std::vector<bool> g_compareDiffs;
+static NSString *g_compareOtherPath = nil;
 static size_t selectedByteStart = 0;
 static size_t selectedByteEnd = 0;
 static size_t previewTotalLength = 0;
@@ -226,6 +231,10 @@ static int executeHexReplaceAll(NSString *findText, NSString *replaceText, bool 
 static bool executeHexReplaceCurrentSelection(NSString *findText, NSString *replaceText, bool matchCase, NSString **errorMessage);
 static void presentInsertColumnsDialog();
 static int executeInsertColumns(NSString *patternText, int count, int position, NSString **errorMessage);
+static void presentHexCompareDialog();
+static int executeHexCompareWithFile(NSString *otherFilePath, NSString **errorMessage);
+static void clearHexCompareResult();
+static bool compareDiffMaskCellHasDiff(NSInteger row, NSInteger cellIndex);
 static bool replaceEditorBytes(size_t offset, const uint8_t *bytes, size_t byteCount, size_t replacedByteCount);
 static bool deleteEditorBytes(size_t offset, size_t byteCount);
 static bool applyEditorByteTransaction(size_t offset, const uint8_t *bytes, size_t byteCount, size_t replacedByteCount);
@@ -404,6 +413,14 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
         textCell.drawsBackground = YES;
         textCell.backgroundColor = [NSColor systemRedColor];
         textCell.textColor = [NSColor whiteColor];
+    } else if ([identifier hasPrefix:@"cell"] && !g_compareDiffs.empty()) {
+        const NSInteger cellIdx = [[identifier substringFromIndex:4] integerValue];
+        if (compareDiffMaskCellHasDiff(row, cellIdx)) {
+            textCell.drawsBackground = YES;
+            // Slightly muted red so the byte text stays readable on the highlight.
+            textCell.backgroundColor = [NSColor colorWithCalibratedRed:0.85 green:0.30 blue:0.30 alpha:1.0];
+            textCell.textColor = [NSColor whiteColor];
+        }
     }
 }
 
@@ -2423,6 +2440,133 @@ static void presentHexFindDialog(BOOL replaceMode)
     }
 }
 
+// MARK: - Compare HEX
+
+static bool compareDiffMaskCellHasDiff(NSInteger row, NSInteger cellIndex)
+{
+    if (g_compareDiffs.empty() || row < 0 || cellIndex < 0) {
+        return false;
+    }
+    const std::size_t bpr = static_cast<std::size_t>(currentBytesPerRow());
+    const int bpc = std::max(g_bytesPerCell, 1);
+    const std::size_t firstByte = static_cast<std::size_t>(row) * bpr + static_cast<std::size_t>(cellIndex) * static_cast<std::size_t>(bpc);
+    for (int i = 0; i < bpc; ++i) {
+        const std::size_t off = firstByte + static_cast<std::size_t>(i);
+        if (off < g_compareDiffs.size() && g_compareDiffs[off]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int executeHexCompareWithFile(NSString *otherFilePath, NSString **errorMessage)
+{
+    if (!isPreviewBufferActive()) {
+        if (errorMessage) *errorMessage = @"Open the hex view (View in HEX) before running Compare.";
+        return -1;
+    }
+    if (otherFilePath == nil || otherFilePath.length == 0) {
+        if (errorMessage) *errorMessage = @"No comparison file selected.";
+        return -1;
+    }
+
+    NSError *readError = nil;
+    NSData *otherData = [NSData dataWithContentsOfFile:otherFilePath
+                                                options:NSDataReadingMappedIfSafe
+                                                  error:&readError];
+    if (otherData == nil) {
+        if (errorMessage) {
+            *errorMessage = [NSString stringWithFormat:@"Could not read %@: %@",
+                otherFilePath, readError.localizedDescription ?: @"unknown error"];
+        }
+        return -1;
+    }
+
+    const std::uint8_t *otherBytes = static_cast<const std::uint8_t *>(otherData.bytes);
+    const std::size_t otherLen = otherData.length;
+
+    g_compareDiffs = hexedit::computeByteDiffs(previewBytes.data(), previewBytes.size(),
+                                                otherBytes, otherLen);
+    g_compareOtherPath = [otherFilePath copy];
+
+    if (hexTableView) {
+        [hexTableView reloadData];
+        [hexTableView setNeedsDisplay:YES];
+    }
+
+    if (g_compareDiffs.empty()) {
+        return 0;  // identical
+    }
+    int diffCount = 0;
+    for (bool b : g_compareDiffs) {
+        if (b) ++diffCount;
+    }
+    return diffCount;
+}
+
+static void clearHexCompareResult()
+{
+    if (g_compareDiffs.empty() && g_compareOtherPath == nil) {
+        return;
+    }
+    g_compareDiffs.clear();
+    g_compareOtherPath = nil;
+    if (hexTableView) {
+        [hexTableView reloadData];
+        [hexTableView setNeedsDisplay:YES];
+    }
+}
+
+static void presentHexCompareDialog()
+{
+    if (!isPreviewBufferActive()) {
+        showMessage(@"HEX-Editor", @"Open the hex view (View in HEX) before using Compare HEX.");
+        return;
+    }
+
+    @autoreleasepool {
+        // Test hook: --test-compare-with=<path> bypasses the file picker. Lets the XCTest
+        // harness drive Compare without trying to automate NSOpenPanel.
+        NSArray<NSString *> *args = [[NSProcessInfo processInfo] arguments];
+        NSString *fixturePath = nil;
+        for (NSString *arg in args) {
+            if ([arg hasPrefix:@"--test-compare-with="]) {
+                fixturePath = [arg substringFromIndex:[@"--test-compare-with=" length]];
+                break;
+            }
+        }
+
+        NSString *chosenPath = fixturePath;
+        if (chosenPath == nil) {
+            NSOpenPanel *panel = [NSOpenPanel openPanel];
+            panel.title = @"Compare HEX with…";
+            panel.message = @"Pick a file to compare against the current buffer.";
+            panel.canChooseFiles = YES;
+            panel.canChooseDirectories = NO;
+            panel.allowsMultipleSelection = NO;
+            panel.resolvesAliases = YES;
+            if ([panel runModal] != NSModalResponseOK) {
+                return;
+            }
+            chosenPath = panel.URL.path;
+        }
+
+        NSString *err = nil;
+        const int result = executeHexCompareWithFile(chosenPath, &err);
+        if (result < 0) {
+            presentHexValidationError(err ?: @"Compare failed.");
+            return;
+        }
+        if (result == 0) {
+            showMessage(@"HEX-Editor Compare", @"Files match.");
+        } else {
+            showMessage(@"HEX-Editor Compare",
+                [NSString stringWithFormat:@"%d byte%@ differ.\nUse Clear Compare Result to remove the highlight.",
+                    result, result == 1 ? @"" : @"s"]);
+        }
+    }
+}
+
 // MARK: - Insert Columns
 
 static int executeInsertColumns(NSString *patternText, int count, int position, NSString **errorMessage)
@@ -2977,12 +3121,16 @@ static void showNotPorted(NSString *feature)
 
 static void compareHexPreview()
 {
-    showNotPorted(@"Compare HEX");
+    presentHexCompareDialog();
 }
 
 static void clearComparePreview()
 {
-    showNotPorted(@"Clear Compare Result");
+    if (g_compareDiffs.empty()) {
+        showMessage(@"HEX-Editor", @"No active comparison to clear.");
+        return;
+    }
+    clearHexCompareResult();
 }
 
 static void insertColumnsPreview()

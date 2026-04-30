@@ -1021,6 +1021,64 @@ void testNavigateInDisplayOrder()
     }
 }
 
+void testComputeByteDiffs()
+{
+    g_currentSuite = "computeByteDiffs";
+
+    // Identical buffers → empty mask.
+    std::vector<std::uint8_t> same1 = { 0x01, 0x02, 0x03 };
+    std::vector<std::uint8_t> same2 = { 0x01, 0x02, 0x03 };
+    auto mask = computeByteDiffs(same1.data(), same1.size(), same2.data(), same2.size());
+    HEX_EXPECT(mask.empty());
+
+    // Single byte differs.
+    std::vector<std::uint8_t> a = { 0x01, 0x02, 0x03, 0x04 };
+    std::vector<std::uint8_t> b = { 0x01, 0x02, 0xFF, 0x04 };
+    mask = computeByteDiffs(a.data(), a.size(), b.data(), b.size());
+    HEX_EXPECT_EQ(mask.size(), static_cast<std::size_t>(4));
+    HEX_EXPECT(!mask[0]);
+    HEX_EXPECT(!mask[1]);
+    HEX_EXPECT(mask[2]);
+    HEX_EXPECT(!mask[3]);
+
+    // Different lengths — extra bytes count as differing.
+    std::vector<std::uint8_t> shorter = { 0x01, 0x02 };
+    std::vector<std::uint8_t> longer  = { 0x01, 0x02, 0x03, 0x04 };
+    mask = computeByteDiffs(shorter.data(), shorter.size(), longer.data(), longer.size());
+    HEX_EXPECT_EQ(mask.size(), static_cast<std::size_t>(4));
+    HEX_EXPECT(!mask[0]);
+    HEX_EXPECT(!mask[1]);
+    HEX_EXPECT(mask[2]);
+    HEX_EXPECT(mask[3]);
+
+    // Reverse order of args yields the same mask.
+    mask = computeByteDiffs(longer.data(), longer.size(), shorter.data(), shorter.size());
+    HEX_EXPECT_EQ(mask.size(), static_cast<std::size_t>(4));
+    HEX_EXPECT(!mask[0]);
+    HEX_EXPECT(mask[2]);
+    HEX_EXPECT(mask[3]);
+
+    // Empty buffers.
+    mask = computeByteDiffs(nullptr, 0, nullptr, 0);
+    HEX_EXPECT(mask.empty());
+
+    // One side empty, other has content → all bytes differ.
+    mask = computeByteDiffs(nullptr, 0, longer.data(), longer.size());
+    HEX_EXPECT_EQ(mask.size(), static_cast<std::size_t>(4));
+    for (std::size_t i = 0; i < mask.size(); ++i) {
+        HEX_EXPECT(mask[i]);
+    }
+
+    // Same length, all bytes differ.
+    std::vector<std::uint8_t> p = { 0x00, 0x00, 0x00 };
+    std::vector<std::uint8_t> q = { 0xFF, 0xFF, 0xFF };
+    mask = computeByteDiffs(p.data(), p.size(), q.data(), q.size());
+    HEX_EXPECT_EQ(mask.size(), static_cast<std::size_t>(3));
+    for (std::size_t i = 0; i < mask.size(); ++i) {
+        HEX_EXPECT(mask[i]);
+    }
+}
+
 }
 
 int main()
@@ -1048,9 +1106,10 @@ int main()
     testClampCursorMode();
     testPlanBitEdit();
     testNavigateInDisplayOrder();
+    testComputeByteDiffs();
 
     if (g_failures == 0) {
-        std::printf("PASS: %d assertions across 23 suites\n", g_assertions);
+        std::printf("PASS: %d assertions across 24 suites\n", g_assertions);
         return 0;
     }
     std::printf("FAIL: %d/%d assertions failed\n", g_failures, g_assertions);

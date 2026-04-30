@@ -194,4 +194,11 @@ bool findBytePattern(const std::uint8_t *haystack,
                      bool wrap,
                      std::size_t &outOffset);
 
+// Byte-level compare for the Compare HEX feature. Returns a bool-per-offset mask of
+// length max(lenA, lenB): mask[i] = true when the byte at offset i differs between the
+// two buffers (or when one buffer is shorter, so byte i is "missing"). Returns an empty
+// vector if both buffers are identical (i.e. lenA == lenB and all bytes match).
+std::vector<bool> computeByteDiffs(const std::uint8_t *a, std::size_t lenA,
+                                    const std::uint8_t *b, std::size_t lenB);
+
 }

@@ -765,6 +765,39 @@ bool findBytePattern(const std::uint8_t *haystack,
                          pattern.matchCase, isHex, direction, outOffset);
 }
 
+std::vector<bool> computeByteDiffs(const std::uint8_t *a, std::size_t lenA,
+                                    const std::uint8_t *b, std::size_t lenB)
+{
+    std::vector<bool> mask;
+    if (lenA == lenB && (a == nullptr || b == nullptr || std::memcmp(a, b, lenA) == 0)) {
+        return mask;  // empty = identical
+    }
+
+    const std::size_t maxLen = std::max(lenA, lenB);
+    mask.assign(maxLen, false);
+    bool anyDiff = false;
+
+    const std::size_t minLen = std::min(lenA, lenB);
+    if (a != nullptr && b != nullptr) {
+        for (std::size_t i = 0; i < minLen; ++i) {
+            if (a[i] != b[i]) {
+                mask[i] = true;
+                anyDiff = true;
+            }
+        }
+    }
+    // Bytes only present in one buffer count as "differing" (matches Windows DoCompare).
+    for (std::size_t i = minLen; i < maxLen; ++i) {
+        mask[i] = true;
+        anyDiff = true;
+    }
+
+    if (!anyDiff) {
+        mask.clear();
+    }
+    return mask;
+}
+
 PhysicalPosition physicalPositionForDisplay(std::size_t cellIndex, int digitInCell, const ViewMode &mode)
 {
     PhysicalPosition out;
