@@ -54,12 +54,41 @@ Menu wiring on Windows is in [Hex.cpp:100-117](HexEditor/src/Hex.cpp#L100-L117);
 - Inline overlay that swaps the active Scintilla view for an `NSTableView`-based hex grid (offset / hex bytes / ASCII columns)
 - Direct byte overwrite from both hex and ASCII columns; append at EOF
 - Range selection across hex and ASCII panes
-- Cut / Copy / Paste / Delete / Select All — both context menu and host **Edit** menu via responder-chain integration
+- Context-menu and host **Edit** menu Cut / Copy / Paste / Delete with Windows-faithful clipboard semantics:
+  - **Copy** from the hex pane writes lowercase space-separated hex text (`"de ad be ef"`) and also publishes the raw bytes under `public.data` so paste *within* the hex view round-trips losslessly.
+  - **Copy** from the ASCII pane writes the bytes as a UTF-8 string.
+  - **Cut Binary Content** / **Copy Binary Content** / **Paste Binary Content** always operate on raw bytes (matches the Windows menu).
+  - **Paste** auto-detects: tries `public.data` → parses pasteboard text as hex (`"DE AD"`, `"deadbeef"`, `"0xDE,0xAD"` all accepted) → falls back to the text's UTF-8 bytes.
+- Select All routes from the host Edit menu / Cmd+A through the responder chain
 - Cmd-Z / Cmd-Shift-Z undo and redo, applied as Scintilla undo groups
 - Cmd+Home / Cmd+End cursor jumps to document start/end (bare `End` only goes to row end — see [TESTING.md:127-129](macos/TESTING.md#L127-L129))
-- Bookmark toggling via context menu
-- Copy HEX Dump to clipboard (text format)
+- Bookmark toggling via offset-column click (the bookmark row highlight survives in the offset gutter)
+- View submode submenu (Windows-faithful "View in" entry) — switch grouping between **8-Bit**, **16-Bit**, **32-Bit**, **64-Bit**; toggle between **hex** and **binary** notation; toggle **Big Endian / Little Endian** display order (only meaningful for grouping > 8-bit). Auto-recomputes cells per row as `16 / bytesPerCell`, mirroring Windows. Endianness affects display order only; underlying bytes are untouched.
 - Three accessibility identifiers exposed for UI test reach (`hex-editor.root`, `hex-editor.table`, `hex-editor.status`)
+
+**Context menu — current shape:**
+
+```text
+Undo / Redo
+─────────
+Cut / Copy / Paste / Delete
+─────────
+Cut Binary Content / Copy Binary Content / Paste Binary Content
+─────────
+View in ▶  8-Bit / 16-Bit / 32-Bit / 64-Bit
+           ─────────
+           to Hex / to Binary
+           to BigEndian / to LittleEndian   (hidden when 8-Bit)
+─────────
+Zoom In / Zoom Out / Restore Default Zoom
+```
+
+Diverges from Windows in two intentional ways: Undo/Redo and Zoom In/Out/Restore are macOS additions kept for usability; Select All and Toggle Bookmark are not duplicated in the context menu (Select All is reachable via the host Edit menu / Cmd+A; bookmarks toggle via clicking the offset column). The Windows "Address Width..." / "Columns..." entries are still pending; they require an `NSUserDefaults`-backed prefs store and the corresponding Cocoa input dialogs — tracked under "Not yet ported".
+
+**View submode — known follow-ups not yet matching Windows:**
+
+- **Bit-precise editing in binary notation.** The cursor model is still byte+nibble. In binary notation the displayed byte's bits are read-only; click and caret land at the byte's position, but typing 0/1 does not modify a single bit. To match Windows, the cursor needs a bit-position field and `handleHexDigit` needs a binary-mode branch.
+- **Display-order arrow-key navigation in multi-byte / little-endian modes.** Arrow keys still walk the underlying byte array. In little-endian 32-bit mode this means pressing → from byte 0 advances to byte 1 (which on Windows would step backward across the displayed cell because byte 0 displays last). Click + caret rendering already use the display-order mapping correctly, so the visual position is right; only step-by-step arrow navigation is byte-order-based for now.
 
 **Not yet ported from Windows** (present in [HexEditor/src/](HexEditor/src/), absent on macOS):
 - Find / Replace dialog ([UserDlg/FindReplaceDialog.cpp](HexEditor/src/UserDlg/FindReplaceDialog.cpp))
@@ -69,8 +98,6 @@ Menu wiring on Windows is in [Hex.cpp:100-117](HexEditor/src/Hex.cpp#L100-L117);
 - Insert Columns ([OptionDlg/ColumnDialog.cpp](HexEditor/src/OptionDlg/ColumnDialog.cpp))
 - Options dialog with color/font configuration ([OptionDlg/OptionDialog.cpp](HexEditor/src/OptionDlg/OptionDialog.cpp))
 - Help dialog with embedded URL controls ([HelpDlg/](HexEditor/src/HelpDlg/))
-- Word / DWORD / LONG byte grouping (Windows `HEX_BYTE`/`HEX_WORD`/`HEX_DWORD`/`HEX_LONG` from [Hex.h:70-73](HexEditor/src/Hex.h#L70-L73))
-- Little-endian / big-endian display modes
 - Configurable column count and address width
 - Custom font (bold / italic / underline / capital), color theming, current-line highlight
 - Dark mode support (added on Windows in v0.9.14)

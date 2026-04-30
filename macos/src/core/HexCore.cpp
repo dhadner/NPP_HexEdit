@@ -2,8 +2,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <iomanip>
-#include <sstream>
 
 namespace hexedit {
 
@@ -249,45 +247,179 @@ bool planPasteEdit(const DocumentView &view,
     return true;
 }
 
-std::string makeHexDump(const std::vector<std::uint8_t> &bytes, std::size_t totalLength)
+std::string formatHexClipboardText(const std::uint8_t *bytes, std::size_t count)
 {
-    if (bytes.empty()) {
-        return "The current document is empty.";
+    if (bytes == nullptr || count == 0) {
+        return std::string();
     }
 
-    std::ostringstream output;
-    output << std::hex << std::setfill('0');
+    static const char digits[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(count * 3 - 1);
+    for (std::size_t i = 0; i < count; ++i) {
+        if (i > 0) {
+            out.push_back(' ');
+        }
+        out.push_back(digits[(bytes[i] >> 4) & 0x0F]);
+        out.push_back(digits[bytes[i] & 0x0F]);
+    }
+    return out;
+}
 
-    for (std::size_t offset = 0; offset < bytes.size(); offset += 16) {
-        output << std::setw(8) << offset << "  ";
+bool parseHexClipboardText(const std::string &text, std::vector<std::uint8_t> &out)
+{
+    out.clear();
 
-        std::string ascii;
-        const std::size_t rowEnd = std::min(offset + 16, bytes.size());
-        ascii.reserve(16);
+    int pendingDigit = -1;
+    bool sawAnyDigit = false;
+    std::size_t i = 0;
+    while (i < text.size()) {
+        unsigned char c = static_cast<unsigned char>(text[i]);
 
-        for (std::size_t index = offset; index < offset + 16; ++index) {
-            if (index < rowEnd) {
-                const std::uint8_t value = bytes[index];
-                output << std::setw(2) << static_cast<unsigned int>(value) << ' ';
-                ascii.push_back(std::isprint(static_cast<unsigned char>(value)) ? static_cast<char>(value) : '.');
-            } else {
-                output << "   ";
-                ascii.push_back(' ');
+        if (std::isspace(c)) {
+            if (pendingDigit >= 0) {
+                out.push_back(static_cast<std::uint8_t>(pendingDigit));
+                pendingDigit = -1;
             }
-
-            if (index == offset + 7) {
-                output << ' ';
-            }
+            ++i;
+            continue;
         }
 
-        output << " |" << ascii << "|\n";
+        if (c == '0' && i + 1 < text.size() && (text[i + 1] == 'x' || text[i + 1] == 'X')) {
+            i += 2;
+            continue;
+        }
+
+        if (c == ',' || c == ';' || c == ':' || c == '-' || c == '_') {
+            if (pendingDigit >= 0) {
+                out.push_back(static_cast<std::uint8_t>(pendingDigit));
+                pendingDigit = -1;
+            }
+            ++i;
+            continue;
+        }
+
+        const int value = hexDigitValue(c);
+        if (value < 0) {
+            out.clear();
+            return false;
+        }
+
+        sawAnyDigit = true;
+        if (pendingDigit < 0) {
+            pendingDigit = value << 4;
+        } else {
+            out.push_back(static_cast<std::uint8_t>(pendingDigit | value));
+            pendingDigit = -1;
+        }
+        ++i;
     }
 
-    if (bytes.size() < totalLength) {
-        output << "\nPreview truncated at " << std::dec << bytes.size() << " of " << totalLength << " bytes.";
+    if (pendingDigit >= 0) {
+        out.clear();
+        return false;
     }
 
-    return output.str();
+    return sawAnyDigit;
+}
+
+bool isValidBytesPerCell(int bytesPerCell)
+{
+    return bytesPerCell == 1 || bytesPerCell == 2 || bytesPerCell == 4 || bytesPerCell == 8;
+}
+
+int digitsPerCell(const ViewMode &mode)
+{
+    if (!isValidBytesPerCell(mode.bytesPerCell)) {
+        return 0;
+    }
+    return mode.notation == CellNotation::Binary ? mode.bytesPerCell * 8 : mode.bytesPerCell * 2;
+}
+
+int cellsPerRow(int bytesPerRow, int bytesPerCell)
+{
+    if (!isValidBytesPerCell(bytesPerCell) || bytesPerRow <= 0) {
+        return 0;
+    }
+    return bytesPerRow / bytesPerCell;
+}
+
+DisplayPosition displayPositionForByte(std::size_t byteInRow, int subInByte, const ViewMode &mode)
+{
+    DisplayPosition out;
+    if (!isValidBytesPerCell(mode.bytesPerCell)) {
+        return out;
+    }
+    const int bpc = mode.bytesPerCell;
+    out.cellIndex = byteInRow / static_cast<std::size_t>(bpc);
+    const int byteInCell = static_cast<int>(byteInRow % static_cast<std::size_t>(bpc));
+    const int displayedByteInCell = mode.littleEndian ? (bpc - 1 - byteInCell) : byteInCell;
+    const int subsPerByte = (mode.notation == CellNotation::Binary) ? 8 : 2;
+    int sub = subInByte;
+    if (sub < 0) sub = 0;
+    if (sub >= subsPerByte) sub = subsPerByte - 1;
+    out.digitInCell = displayedByteInCell * subsPerByte + sub;
+    return out;
+}
+
+PhysicalPosition physicalPositionForDisplay(std::size_t cellIndex, int digitInCell, const ViewMode &mode)
+{
+    PhysicalPosition out;
+    if (!isValidBytesPerCell(mode.bytesPerCell)) {
+        return out;
+    }
+    const int bpc = mode.bytesPerCell;
+    const int subsPerByte = (mode.notation == CellNotation::Binary) ? 8 : 2;
+    int digit = digitInCell;
+    if (digit < 0) digit = 0;
+    const int totalDigits = bpc * subsPerByte;
+    if (digit >= totalDigits) digit = totalDigits - 1;
+
+    const int displayedByteInCell = digit / subsPerByte;
+    const int physicalByteInCell = mode.littleEndian ? (bpc - 1 - displayedByteInCell) : displayedByteInCell;
+    out.byteInRow = cellIndex * static_cast<std::size_t>(bpc) + static_cast<std::size_t>(physicalByteInCell);
+    out.subInByte = digit % subsPerByte;
+    return out;
+}
+
+std::string formatCell(const std::uint8_t *cellBytes, std::size_t available, const ViewMode &mode)
+{
+    if (!isValidBytesPerCell(mode.bytesPerCell)) {
+        return std::string();
+    }
+
+    static const char hexDigits[] = "0123456789abcdef";
+    const int bpc = mode.bytesPerCell;
+    const int totalDigits = digitsPerCell(mode);
+
+    std::string out;
+    out.reserve(static_cast<std::size_t>(totalDigits));
+
+    for (int displayedByte = 0; displayedByte < bpc; ++displayedByte) {
+        const int physicalByteInCell = mode.littleEndian ? (bpc - 1 - displayedByte) : displayedByte;
+        const bool havePhysical = (cellBytes != nullptr) && (static_cast<std::size_t>(physicalByteInCell) < available);
+        const std::uint8_t value = havePhysical ? cellBytes[physicalByteInCell] : static_cast<std::uint8_t>(0);
+
+        if (mode.notation == CellNotation::Binary) {
+            for (int bit = 7; bit >= 0; --bit) {
+                if (havePhysical) {
+                    out.push_back(((value >> bit) & 0x01) ? '1' : '0');
+                } else {
+                    out.push_back(' ');
+                }
+            }
+        } else {
+            if (havePhysical) {
+                out.push_back(hexDigits[(value >> 4) & 0x0F]);
+                out.push_back(hexDigits[value & 0x0F]);
+            } else {
+                out.push_back(' ');
+                out.push_back(' ');
+            }
+        }
+    }
+
+    return out;
 }
 
 }

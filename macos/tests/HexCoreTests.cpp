@@ -476,29 +476,200 @@ void testPlanPasteEdit()
     HEX_EXPECT_EQ(op.replacement.size(), std::size_t(2));
 }
 
-void testMakeHexDump()
+void testFormatHexClipboardText()
 {
-    g_currentSuite = "makeHexDump";
+    g_currentSuite = "formatHexClipboardText";
 
-    HEX_EXPECT_EQ(makeHexDump({}, 0), std::string("The current document is empty."));
+    HEX_EXPECT_EQ(formatHexClipboardText(nullptr, 0), std::string());
 
-    std::vector<std::uint8_t> three = { 'A', 'B', 'C' };
-    std::string dump = makeHexDump(three, 3);
-    HEX_EXPECT(dump.find("00000000  41 42 43") != std::string::npos);
-    HEX_EXPECT(dump.find("|ABC") != std::string::npos);
-    HEX_EXPECT(dump.find("Preview truncated") == std::string::npos);
+    std::uint8_t empty = 0;
+    HEX_EXPECT_EQ(formatHexClipboardText(&empty, 0), std::string());
 
-    std::vector<std::uint8_t> sixteen(16, 0x55);
-    dump = makeHexDump(sixteen, 16);
-    HEX_EXPECT(dump.find("00000000  55 55 55 55 55 55 55 55  55 55 55 55 55 55 55 55") != std::string::npos);
+    std::vector<std::uint8_t> single = { 0x00 };
+    HEX_EXPECT_EQ(formatHexClipboardText(single.data(), single.size()), std::string("00"));
 
-    std::vector<std::uint8_t> truncated(8, 0xAA);
-    dump = makeHexDump(truncated, 1024);
-    HEX_EXPECT(dump.find("Preview truncated at 8 of 1024 bytes.") != std::string::npos);
+    std::vector<std::uint8_t> bytes = { 0xDE, 0xAD, 0xBE, 0xEF };
+    HEX_EXPECT_EQ(formatHexClipboardText(bytes.data(), bytes.size()), std::string("de ad be ef"));
 
-    std::vector<std::uint8_t> nonPrintable = { 0x00, 0x1F, 0x7F, 0x80, 'a' };
-    dump = makeHexDump(nonPrintable, 5);
-    HEX_EXPECT(dump.find("|....a") != std::string::npos);
+    std::vector<std::uint8_t> withZero = { 0x00, 0x10, 0xFF };
+    HEX_EXPECT_EQ(formatHexClipboardText(withZero.data(), withZero.size()), std::string("00 10 ff"));
+}
+
+void testParseHexClipboardText()
+{
+    g_currentSuite = "parseHexClipboardText";
+
+    std::vector<std::uint8_t> out;
+
+    HEX_EXPECT(parseHexClipboardText("DE AD BE EF", out));
+    HEX_EXPECT_EQ(out.size(), static_cast<std::size_t>(4));
+    if (out.size() == 4) {
+        HEX_EXPECT_EQ(static_cast<int>(out[0]), 0xDE);
+        HEX_EXPECT_EQ(static_cast<int>(out[1]), 0xAD);
+        HEX_EXPECT_EQ(static_cast<int>(out[2]), 0xBE);
+        HEX_EXPECT_EQ(static_cast<int>(out[3]), 0xEF);
+    }
+
+    HEX_EXPECT(parseHexClipboardText("deadbeef", out));
+    HEX_EXPECT_EQ(out.size(), static_cast<std::size_t>(4));
+    if (out.size() == 4) {
+        HEX_EXPECT_EQ(static_cast<int>(out[0]), 0xDE);
+        HEX_EXPECT_EQ(static_cast<int>(out[3]), 0xEF);
+    }
+
+    HEX_EXPECT(parseHexClipboardText("DE  AD\tBE\nEF", out));
+    HEX_EXPECT_EQ(out.size(), static_cast<std::size_t>(4));
+
+    HEX_EXPECT(parseHexClipboardText("0xDE 0xAD", out));
+    HEX_EXPECT_EQ(out.size(), static_cast<std::size_t>(2));
+
+    HEX_EXPECT(parseHexClipboardText("DE,AD;BE:EF", out));
+    HEX_EXPECT_EQ(out.size(), static_cast<std::size_t>(4));
+
+    HEX_EXPECT(!parseHexClipboardText("hello", out));
+    HEX_EXPECT_EQ(out.size(), static_cast<std::size_t>(0));
+
+    HEX_EXPECT(!parseHexClipboardText("DEA", out));
+    HEX_EXPECT_EQ(out.size(), static_cast<std::size_t>(0));
+
+    HEX_EXPECT(!parseHexClipboardText("", out));
+    HEX_EXPECT(!parseHexClipboardText("   \t\n", out));
+
+    std::vector<std::uint8_t> roundTripIn = { 0x00, 0xFF, 0x42, 0x7F };
+    std::string formatted = formatHexClipboardText(roundTripIn.data(), roundTripIn.size());
+    HEX_EXPECT(parseHexClipboardText(formatted, out));
+    HEX_EXPECT_EQ(out.size(), roundTripIn.size());
+    if (out.size() == roundTripIn.size()) {
+        for (std::size_t i = 0; i < out.size(); ++i) {
+            HEX_EXPECT_EQ(static_cast<int>(out[i]), static_cast<int>(roundTripIn[i]));
+        }
+    }
+}
+
+void testViewModeShape()
+{
+    g_currentSuite = "viewModeShape";
+
+    HEX_EXPECT(isValidBytesPerCell(1));
+    HEX_EXPECT(isValidBytesPerCell(2));
+    HEX_EXPECT(isValidBytesPerCell(4));
+    HEX_EXPECT(isValidBytesPerCell(8));
+    HEX_EXPECT(!isValidBytesPerCell(0));
+    HEX_EXPECT(!isValidBytesPerCell(3));
+    HEX_EXPECT(!isValidBytesPerCell(16));
+
+    ViewMode hex8;
+    HEX_EXPECT_EQ(digitsPerCell(hex8), 2);
+
+    ViewMode hex16; hex16.bytesPerCell = 2;
+    HEX_EXPECT_EQ(digitsPerCell(hex16), 4);
+
+    ViewMode hex32; hex32.bytesPerCell = 4;
+    HEX_EXPECT_EQ(digitsPerCell(hex32), 8);
+
+    ViewMode hex64; hex64.bytesPerCell = 8;
+    HEX_EXPECT_EQ(digitsPerCell(hex64), 16);
+
+    ViewMode bin8; bin8.notation = CellNotation::Binary;
+    HEX_EXPECT_EQ(digitsPerCell(bin8), 8);
+
+    ViewMode bin16; bin16.bytesPerCell = 2; bin16.notation = CellNotation::Binary;
+    HEX_EXPECT_EQ(digitsPerCell(bin16), 16);
+
+    HEX_EXPECT_EQ(cellsPerRow(16, 1), 16);
+    HEX_EXPECT_EQ(cellsPerRow(16, 2), 8);
+    HEX_EXPECT_EQ(cellsPerRow(16, 4), 4);
+    HEX_EXPECT_EQ(cellsPerRow(16, 8), 2);
+    HEX_EXPECT_EQ(cellsPerRow(16, 3), 0);  // invalid bpc
+    HEX_EXPECT_EQ(cellsPerRow(0, 1), 0);
+}
+
+void testFormatCell()
+{
+    g_currentSuite = "formatCell";
+
+    std::vector<std::uint8_t> bytes = { 0x12, 0x34, 0x56, 0x78 };
+
+    ViewMode hex8;
+    HEX_EXPECT_EQ(formatCell(bytes.data(), 1, hex8), std::string("12"));
+
+    ViewMode hex16; hex16.bytesPerCell = 2;
+    HEX_EXPECT_EQ(formatCell(bytes.data(), 2, hex16), std::string("1234"));
+
+    ViewMode hex16le; hex16le.bytesPerCell = 2; hex16le.littleEndian = true;
+    HEX_EXPECT_EQ(formatCell(bytes.data(), 2, hex16le), std::string("3412"));
+
+    ViewMode hex32; hex32.bytesPerCell = 4;
+    HEX_EXPECT_EQ(formatCell(bytes.data(), 4, hex32), std::string("12345678"));
+
+    ViewMode hex32le; hex32le.bytesPerCell = 4; hex32le.littleEndian = true;
+    HEX_EXPECT_EQ(formatCell(bytes.data(), 4, hex32le), std::string("78563412"));
+
+    ViewMode bin8; bin8.notation = CellNotation::Binary;
+    std::vector<std::uint8_t> aa = { 0xAA };
+    HEX_EXPECT_EQ(formatCell(aa.data(), 1, bin8), std::string("10101010"));
+
+    ViewMode bin16le; bin16le.bytesPerCell = 2; bin16le.notation = CellNotation::Binary; bin16le.littleEndian = true;
+    std::vector<std::uint8_t> ff00 = { 0xFF, 0x00 };
+    HEX_EXPECT_EQ(formatCell(ff00.data(), 2, bin16le), std::string("0000000011111111"));
+
+    // Partial cell at EOF — short bytes are rendered as spaces.
+    ViewMode hex32be; hex32be.bytesPerCell = 4;
+    std::vector<std::uint8_t> partial = { 0xAB, 0xCD };
+    HEX_EXPECT_EQ(formatCell(partial.data(), 2, hex32be), std::string("abcd    "));
+}
+
+void testDisplayPositionMapping()
+{
+    g_currentSuite = "displayPositionMapping";
+
+    ViewMode hex8;  // bpc=1, hex, BE
+    DisplayPosition d = displayPositionForByte(5, 0, hex8);
+    HEX_EXPECT_EQ(d.cellIndex, static_cast<std::size_t>(5));
+    HEX_EXPECT_EQ(d.digitInCell, 0);
+    d = displayPositionForByte(5, 1, hex8);
+    HEX_EXPECT_EQ(d.cellIndex, static_cast<std::size_t>(5));
+    HEX_EXPECT_EQ(d.digitInCell, 1);
+
+    ViewMode hex16;  hex16.bytesPerCell = 2;
+    // Byte 0 is at start of cell 0 (BE) — digit 0 (high nibble of byte 0).
+    d = displayPositionForByte(0, 0, hex16);
+    HEX_EXPECT_EQ(d.cellIndex, static_cast<std::size_t>(0));
+    HEX_EXPECT_EQ(d.digitInCell, 0);
+    // Byte 1 is the second byte of cell 0 (BE) — digit 2.
+    d = displayPositionForByte(1, 0, hex16);
+    HEX_EXPECT_EQ(d.cellIndex, static_cast<std::size_t>(0));
+    HEX_EXPECT_EQ(d.digitInCell, 2);
+    d = displayPositionForByte(1, 1, hex16);
+    HEX_EXPECT_EQ(d.digitInCell, 3);
+
+    ViewMode hex16le; hex16le.bytesPerCell = 2; hex16le.littleEndian = true;
+    // Byte 0 in LE 16-bit appears as the SECOND byte in the cell (digits 2-3).
+    d = displayPositionForByte(0, 0, hex16le);
+    HEX_EXPECT_EQ(d.cellIndex, static_cast<std::size_t>(0));
+    HEX_EXPECT_EQ(d.digitInCell, 2);
+    d = displayPositionForByte(1, 0, hex16le);
+    HEX_EXPECT_EQ(d.digitInCell, 0);  // Byte 1 displays first in LE.
+
+    ViewMode bin8; bin8.notation = CellNotation::Binary;
+    d = displayPositionForByte(3, 5, bin8);
+    HEX_EXPECT_EQ(d.cellIndex, static_cast<std::size_t>(3));
+    HEX_EXPECT_EQ(d.digitInCell, 5);
+
+    // Round-trip: physical → display → physical
+    for (int bpc : { 1, 2, 4, 8 }) {
+        for (bool little : { false, true }) {
+            ViewMode m; m.bytesPerCell = bpc; m.littleEndian = little;
+            for (std::size_t b = 0; b < static_cast<std::size_t>(bpc * 3); ++b) {
+                for (int n = 0; n < 2; ++n) {
+                    DisplayPosition dp = displayPositionForByte(b, n, m);
+                    PhysicalPosition pp = physicalPositionForDisplay(dp.cellIndex, dp.digitInCell, m);
+                    HEX_EXPECT_EQ(pp.byteInRow, b);
+                    HEX_EXPECT_EQ(pp.subInByte, n);
+                }
+            }
+        }
+    }
 }
 
 }
@@ -517,10 +688,14 @@ int main()
     testPlanAsciiByteEdit();
     testPlanDeleteEdit();
     testPlanPasteEdit();
-    testMakeHexDump();
+    testFormatHexClipboardText();
+    testParseHexClipboardText();
+    testViewModeShape();
+    testFormatCell();
+    testDisplayPositionMapping();
 
     if (g_failures == 0) {
-        std::printf("PASS: %d assertions across 13 suites\n", g_assertions);
+        std::printf("PASS: %d assertions across 17 suites\n", g_assertions);
         return 0;
     }
     std::printf("FAIL: %d/%d assertions failed\n", g_failures, g_assertions);

@@ -79,17 +79,16 @@ int main(int argc, char **argv)
     int nbF = -1;
     FuncItem *items = getFuncsArray(&nbF);
     hexExpect(items != nullptr, "getFuncsArray() returned NULL");
-    hexExpect(nbF == 8, std::string("getFuncsArray() set nbF=") + std::to_string(nbF) + ", expected 8");
+    hexExpect(nbF == 7, std::string("getFuncsArray() set nbF=") + std::to_string(nbF) + ", expected 7");
 
-    if (items && nbF == 8) {
-        const std::array<const char *, 8> expectedNames = {
+    if (items && nbF == 7) {
+        const std::array<const char *, 7> expectedNames = {
             "View in HEX",
             "Compare HEX",
             "Clear Compare Result",
             "Insert Columns...",
             "Pattern Replace...",
             "Options...",
-            "Copy HEX Dump",
             "Help...",
         };
 

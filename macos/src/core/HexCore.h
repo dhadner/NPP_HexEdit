@@ -12,6 +12,17 @@ enum class CursorField {
     Ascii
 };
 
+enum class CellNotation {
+    Hex,
+    Binary
+};
+
+struct ViewMode {
+    int bytesPerCell = 1;
+    CellNotation notation = CellNotation::Hex;
+    bool littleEndian = false;
+};
+
 struct CursorState {
     std::size_t offset = 0;
     int nibble = 0;
@@ -92,6 +103,30 @@ bool planPasteEdit(const DocumentView &view,
                    std::size_t byteCount,
                    ByteEditOperation &out);
 
-std::string makeHexDump(const std::vector<std::uint8_t> &bytes, std::size_t totalLength);
+std::string formatHexClipboardText(const std::uint8_t *bytes, std::size_t count);
+
+bool parseHexClipboardText(const std::string &text, std::vector<std::uint8_t> &out);
+
+bool isValidBytesPerCell(int bytesPerCell);
+
+int digitsPerCell(const ViewMode &mode);
+
+int cellsPerRow(int bytesPerRow, int bytesPerCell);
+
+std::string formatCell(const std::uint8_t *cellBytes, std::size_t available, const ViewMode &mode);
+
+struct DisplayPosition {
+    std::size_t cellIndex = 0;
+    int digitInCell = 0;
+};
+
+struct PhysicalPosition {
+    std::size_t byteInRow = 0;
+    int subInByte = 0;
+};
+
+DisplayPosition displayPositionForByte(std::size_t byteInRow, int subInByte, const ViewMode &mode);
+
+PhysicalPosition physicalPositionForDisplay(std::size_t cellIndex, int digitInCell, const ViewMode &mode);
 
 }

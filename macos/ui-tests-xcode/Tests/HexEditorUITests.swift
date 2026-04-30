@@ -126,7 +126,9 @@ func testStatusLabelReportsByteCount() throws {
         let copied = pasteboard.string(forType: .string)
         XCTAssertNotEqual(copied, sentinel, "Copy from the Edit menu should have replaced the sentinel.")
         XCTAssertNotNil(copied, "Pasteboard should contain a string after Copy.")
-        XCTAssertFalse(copied?.isEmpty ?? true, "Copied bytes from a non-empty buffer should not be empty.")
+        // Copy from the hex field emits lowercase, space-separated hex text matching Windows.
+        // "Hex" = 0x48 0x65 0x78.
+        XCTAssertEqual(copied, "48 65 78", "Copy should produce lowercase space-separated hex text.")
     }
 
     func testHexByteAppendUndoRedo() throws {
@@ -294,16 +296,6 @@ func testStatusLabelReportsByteCount() throws {
         offsetCell.click()
         Thread.sleep(forTimeInterval: 0.2)
         XCTAssertTrue(hexTable.exists, "Hex table should remain visible after un-bookmark click.")
-
-        // The right-click context menu's Toggle Bookmark must also reach the plugin.
-        hexTable.rightClick()
-        let bookmarkItem = app.menuItems["Toggle Bookmark"]
-        XCTAssertTrue(bookmarkItem.waitForExistence(timeout: 3))
-        XCTAssertTrue(bookmarkItem.isEnabled, "Toggle Bookmark should always be enabled.")
-        bookmarkItem.click()
-        Thread.sleep(forTimeInterval: 0.2)
-
-        XCTAssertTrue(hexTable.exists, "Hex table should remain visible after Toggle Bookmark via context menu.")
     }
 
 func testContextMenuCommands() throws {
@@ -318,7 +310,13 @@ func testContextMenuCommands() throws {
 
         hexTable.rightClick()
 
-        let expectedItems = ["Undo", "Redo", "Cut", "Copy", "Paste", "Delete", "Select All", "Toggle Bookmark", "Copy HEX Dump"]
+        let expectedItems = [
+            "Undo", "Redo",
+            "Cut", "Copy", "Paste", "Delete",
+            "Cut Binary Content", "Copy Binary Content", "Paste Binary Content",
+            "View in",
+            "Zoom In", "Zoom Out", "Restore Default Zoom",
+        ]
         for label in expectedItems {
             let item = app.menuItems[label]
             XCTAssertTrue(item.waitForExistence(timeout: 3), "Context menu missing item: \(label)")

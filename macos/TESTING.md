@@ -22,7 +22,6 @@ The macOS port should use Scintilla as the source of truth for document bytes an
    - `hexedit::selectedOrCurrentRange` — cut/copy/delete target range
    - `hexedit::planHexDigitEdit` — hex nibble overwrite/append
    - `hexedit::planAsciiByteEdit` — ASCII overwrite/append
-   - `hexedit::makeHexDump` — hex dump text formatting
 
    Still to extract:
 
@@ -102,11 +101,11 @@ Current XCTest coverage:
 - `testViewInHexToggle` — toggles `Plugins > HEX-Editor > View in HEX` on and off, asserting the hex table appears and disappears (queried by accessibility identifier `hex-editor.table`).
 - `testStatusLabelReportsByteCount` — seeds the buffer with a known string and asserts the status label reports the exact byte count.
 - `testEditMenuActionsRouteToHexOverlay` — with the hex overlay focused, asserts that `Cut`, `Copy`, `Paste`, `Delete`, and `Select All` in the host `Edit` menu are all *enabled*, proving the plugin's responder chain integration.
-- `testEditMenuCopyFromHexView` — Edit > Select All followed by Edit > Copy from a seeded hex buffer round-trips through the system pasteboard with a sentinel-detection check.
+- `testEditMenuCopyFromHexView` — Edit > Select All followed by Edit > Copy from a seeded "Hex" buffer round-trips through the system pasteboard and asserts the pasteboard string equals the lowercase space-separated hex form `"48 65 78"` (Windows-faithful Copy semantics).
 - `testHexByteAppendUndoRedo` — seeds a 3-byte buffer, navigates to EOF, types a hex digit to append, asserts byte count goes 3→4, asserts Cmd+Z reverts to 3, asserts Cmd+Shift+Z restores to 4. Validates the full plan-edit-undo loop end-to-end.
 - `testHexCutAndUndo` — seeds 6 bytes, Edit > Select All + Edit > Cut, asserts status reports empty document; Cmd+Z restores to 6, Cmd+Shift+Z re-cuts. Exercises the menu → responder → plugin `cut:` path end-to-end.
-- `testHexPasteAtCmdEnd` — seeds 3 bytes, sends `Cmd+End` (jumps cursor to EOF via the new plugin shortcut), pastes 3 bytes from clipboard via Edit > Paste, asserts byte count grows from 3 to 6.
-- `testContextMenuCommands` — right-clicking the hex table exposes Undo/Redo/Cut/Copy/Paste/Delete/Select All/Toggle Bookmark/Copy HEX Dump.
+- `testHexPasteAtCmdEnd` — seeds 3 bytes, sends `Cmd+End` (jumps cursor to EOF via the new plugin shortcut), pastes 3 bytes from clipboard via Edit > Paste, asserts byte count grows from 3 to 6. Exercises the Paste fallback that decodes plain-text pasteboard content as raw bytes when it is not parseable as hex.
+- `testContextMenuCommands` — right-clicking the hex table exposes the current Windows-faithful set: Undo/Redo, Cut/Copy/Paste/Delete, Cut Binary Content / Copy Binary Content / Paste Binary Content, and the macOS-only Zoom In/Out/Restore. Select All and Toggle Bookmark are deliberately not in the context menu — Select All routes through the host Edit menu / Cmd+A, bookmarks toggle by clicking the offset column.
 
 The hex view exposes three accessibility identifiers (defined in `macos/src/HexEditor.mm` and mirrored in the Swift test file):
 
