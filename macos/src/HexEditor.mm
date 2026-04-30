@@ -231,6 +231,8 @@ static int executeHexReplaceAll(NSString *findText, NSString *replaceText, bool 
 static bool executeHexReplaceCurrentSelection(NSString *findText, NSString *replaceText, bool matchCase, NSString **errorMessage);
 static void presentInsertColumnsDialog();
 static int executeInsertColumns(NSString *patternText, int count, int position, NSString **errorMessage);
+static void presentPatternReplaceDialog();
+static int executePatternReplace(NSString *patternText, NSString **errorMessage);
 static void presentHexCompareDialog();
 static int executeHexCompareWithFile(NSString *otherFilePath, NSString **errorMessage);
 static void clearHexCompareResult();
@@ -2733,6 +2735,97 @@ static void presentInsertColumnsDialog()
     }
 }
 
+// MARK: - Pattern Replace
+
+static int executePatternReplace(NSString *patternText, NSString **errorMessage)
+{
+    if (!isPreviewBufferActive()) {
+        if (errorMessage) *errorMessage = @"Open the hex view (View in HEX) before using Pattern Replace.";
+        return -1;
+    }
+    if (!hasByteSelection() || selectedByteEnd <= selectedByteStart) {
+        if (errorMessage) *errorMessage = @"Select something in the hex view first — Pattern Replace fills the selection.";
+        return -1;
+    }
+    if (patternText == nil || patternText.length == 0) {
+        if (errorMessage) *errorMessage = @"Pattern is empty.";
+        return -1;
+    }
+
+    std::vector<std::uint8_t> patternBytes;
+    if (!hexedit::parseHexClipboardText(std::string([patternText UTF8String]), patternBytes) || patternBytes.empty()) {
+        if (errorMessage) *errorMessage = @"Pattern must be a sequence of hex bytes (e.g. 0xFF or DE AD BE EF).";
+        return -1;
+    }
+
+    const std::size_t length = selectedByteEnd - selectedByteStart;
+    std::vector<std::uint8_t> filler(length);
+    for (std::size_t i = 0; i < length; ++i) {
+        filler[i] = patternBytes[i % patternBytes.size()];
+    }
+
+    if (!applyEditorByteTransaction(selectedByteStart, filler.data(), filler.size(), length)) {
+        if (errorMessage) *errorMessage = @"Pattern Replace failed.";
+        return -1;
+    }
+
+    activeByteOffset = std::min(selectedByteStart + length, previewTotalLength);
+    activeHexNibble = 0;
+    activeCursorField = HexCursorField::Hex;
+    clearByteSelection();
+    if (hexTableView) {
+        [hexTableView reloadData];
+        [hexTableView setNeedsDisplay:YES];
+    }
+    return static_cast<int>(length);
+}
+
+static void presentPatternReplaceDialog()
+{
+    if (!isPreviewBufferActive()) {
+        showMessage(@"HEX-Editor", @"Open the hex view (View in HEX) before using Pattern Replace.");
+        return;
+    }
+    if (!hasByteSelection() || selectedByteEnd <= selectedByteStart) {
+        showMessage(@"HEX-Editor", @"Select something in the hex view first — Pattern Replace fills the selection.");
+        return;
+    }
+
+    @autoreleasepool {
+        const std::size_t length = selectedByteEnd - selectedByteStart;
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"Pattern Replace";
+        alert.informativeText = [NSString stringWithFormat:
+            @"Fill the current %zu-byte selection with a repeating hex pattern.\n"
+            @"\n"
+            @"Pattern: hex bytes only (e.g. 0xFF or DE AD).", length];
+        [alert addButtonWithTitle:@"Replace"];
+        [alert addButtonWithTitle:@"Cancel"];
+
+        NSTextField *patternField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)];
+        patternField.placeholderString = @"Pattern (hex): 0xFF or DE AD";
+        patternField.accessibilityIdentifier = @"hex-editor.patternreplace.pattern";
+        alert.accessoryView = patternField;
+        [alert.window setInitialFirstResponder:patternField];
+
+        const NSModalResponse response = [alert runModal];
+        if (response != NSAlertFirstButtonReturn) {
+            return;
+        }
+
+        NSString *pattern = [patternField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        NSString *err = nil;
+        const int bytesWritten = executePatternReplace(pattern, &err);
+        if (bytesWritten < 0) {
+            presentHexValidationError(err ?: @"Pattern Replace failed.");
+            return;
+        }
+        showMessage(@"HEX-Editor",
+            [NSString stringWithFormat:@"Replaced %d byte%@ with the pattern.",
+                bytesWritten, bytesWritten == 1 ? @"" : @"s"]);
+    }
+}
+
 static void configureTableColumn(NSTableView *tableView, NSString *identifier, NSString *title, CGFloat width, NSFont *font)
 {
     NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:identifier];
@@ -3144,7 +3237,7 @@ static void insertColumnsPreview()
 
 static void patternReplacePreview()
 {
-    showNotPorted(@"Pattern Replace");
+    presentPatternReplaceDialog();
 }
 
 static void showOptionsPreview()

@@ -753,6 +753,95 @@ func testContextMenuCommands() throws {
         secondClearOK.click()
     }
 
+    func testPatternReplaceFillsSelectionWithRepeatingPattern() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 4 bytes: 'A' 'B' 'C' 'D' → 0x41 0x42 0x43 0x44.
+        try createBufferWithText(app: app, text: "ABCD")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        // Select All so Pattern Replace has something to fill.
+        let editMenu = app.menuBars.menuBarItems["Edit"]
+        editMenu.click()
+        let selectAllItem = app.menuBars.menuItems["Select All"]
+        XCTAssertTrue(selectAllItem.waitForExistence(timeout: 5))
+        selectAllItem.click()
+        Thread.sleep(forTimeInterval: 0.3)
+
+        // Trigger Pattern Replace from the plugin menu.
+        try invokeHexEditorMenu(app: app, item: "Pattern Replace...")
+
+        let patternField = app.textFields["hex-editor.patternreplace.pattern"]
+        XCTAssertTrue(patternField.waitForExistence(timeout: 5),
+                      "Pattern Replace pattern field should appear.")
+        // 2-byte pattern; selection is 4 bytes; pattern cycles to fill: AB AB.
+        patternField.replaceFieldText(with: "AB CD")
+
+        let replaceButton = app.buttons["Replace"].firstMatch
+        XCTAssertTrue(replaceButton.waitForExistence(timeout: 3))
+        replaceButton.click()
+
+        // Confirmation alert "Replaced 4 bytes…". Dismiss with OK.
+        let okButton = app.buttons["OK"].firstMatch
+        XCTAssertTrue(okButton.waitForExistence(timeout: 3))
+        okButton.click()
+
+        // Verify the buffer is now AB CD AB CD across the 4-byte row.
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 5))
+        let predicateAB = NSPredicate(format: "value == %@", "ab")
+        let predicateCD = NSPredicate(format: "value == %@", "cd")
+        let waiterByte0 = expectation(for: predicateAB,
+                                       evaluatedWith: firstRow.staticTexts.element(boundBy: 1),
+                                       handler: nil)
+        let waiterByte1 = expectation(for: predicateCD,
+                                       evaluatedWith: firstRow.staticTexts.element(boundBy: 2),
+                                       handler: nil)
+        let waiterByte2 = expectation(for: predicateAB,
+                                       evaluatedWith: firstRow.staticTexts.element(boundBy: 3),
+                                       handler: nil)
+        let waiterByte3 = expectation(for: predicateCD,
+                                       evaluatedWith: firstRow.staticTexts.element(boundBy: 4),
+                                       handler: nil)
+        wait(for: [waiterByte0, waiterByte1, waiterByte2, waiterByte3], timeout: 5)
+
+        // Single undo reverts the entire pattern fill (one undo group).
+        app.typeKey("z", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        let firstRowAfterUndo = hexTable.tableRows.element(boundBy: 0)
+        let revertPredicate = NSPredicate(format: "value == %@", "41")
+        let revertWaiter = expectation(for: revertPredicate,
+                                        evaluatedWith: firstRowAfterUndo.staticTexts.element(boundBy: 1),
+                                        handler: nil)
+        wait(for: [revertWaiter], timeout: 5)
+    }
+
+    func testPatternReplaceRequiresSelection() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "AB")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        // No selection: Pattern Replace should surface a directive instead of opening the dialog.
+        try invokeHexEditorMenu(app: app, item: "Pattern Replace...")
+        let okButton = app.buttons["OK"].firstMatch
+        XCTAssertTrue(okButton.waitForExistence(timeout: 3),
+                      "Pattern Replace without a selection should present a clarifying alert.")
+        okButton.click()
+
+        // The pattern field must NOT have appeared.
+        let patternField = app.textFields["hex-editor.patternreplace.pattern"]
+        XCTAssertFalse(patternField.exists,
+                       "The Pattern Replace dialog should not open when there is no selection.")
+    }
+
     func testInsertColumnsExpandsRowAndInjectsPattern() throws {
         let app = try launchNotepad()
         defer { app.terminate() }
