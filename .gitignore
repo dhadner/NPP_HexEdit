@@ -80,6 +80,10 @@ $RECYCLE.BIN/
 *.swp
 *.out
 *.zip
+macos/build*/
+macos/ui-tests-xcode/*.xcodeproj/
+macos/ui-tests-xcode/build/
+macos/ChatGPT5.5-Chat.md
 
 #-------------------------------------------------------------------------------
 # GNU GCC MinGW

@@ -1,0 +1,9 @@
+# Tells clangd (the C++ language server VS Code's C/C++ extension uses) where to find
+# the compile_commands.json that CMake emits. Without this, clangd guesses include
+# paths and standard, producing fake errors like "HexCore.h not found" or
+# "no member named 'clamp' in namespace 'std'" — but the actual CMake build is fine.
+#
+# Run cmake at least once to generate the compile_commands.json this points at:
+#   cmake -S macos -B macos/build-universal
+CompileFlags:
+  CompilationDatabase: build-universal

@@ -1,0 +1,162 @@
+/* Notepad++ HEX-Editor — Deutsch (de)
+ *
+ * Übersetzung des kanonischen Localizable.en.strings. Technische Begriffe
+ * (Hex, ASCII, Cmd+F, 0x-Präfix) bleiben unverändert, weil sie auch im
+ * deutschen Sprachraum so verwendet werden.
+ *
+ * Beim Hinzufügen einer neuen Sprache: diese Datei kopieren, Werte
+ * übersetzen, in der CMakeLists.txt registrieren.
+ */
+
+/* Plugin-Menü (Plugins > HEX-Editor > …) */
+"menu.plugin.viewInHex"            = "In HEX anzeigen";
+"menu.plugin.compareHex"           = "HEX vergleichen";
+"menu.plugin.clearCompareResult"   = "Vergleichsergebnis löschen";
+"menu.plugin.insertColumns"        = "Spalten einfügen...";
+"menu.plugin.patternReplace"       = "Muster ersetzen...";
+"menu.plugin.help"                 = "Hilfe...";
+
+/* Rechtsklick-Kontextmenü auf der Hex-Ansicht */
+"menu.context.undo"                = "Rückgängig";
+"menu.context.redo"                = "Wiederherstellen";
+"menu.context.cut"                 = "Ausschneiden";
+"menu.context.copy"                = "Kopieren";
+"menu.context.paste"               = "Einfügen";
+"menu.context.delete"              = "Löschen";
+"menu.context.cutBinary"           = "Binärinhalt ausschneiden";
+"menu.context.copyBinary"          = "Binärinhalt kopieren";
+"menu.context.pasteBinary"         = "Binärinhalt einfügen";
+"menu.context.find"                = "Suchen…";
+"menu.context.findReplace"         = "Suchen und Ersetzen…";
+"menu.context.findNext"            = "Weitersuchen";
+"menu.context.findPrevious"        = "Rückwärts suchen";
+"menu.context.gotoOffset"          = "Gehe zu Offset…";
+"menu.context.viewIn"              = "Anzeigen als";
+"menu.context.addressWidth"        = "Adressbreite...";
+"menu.context.columns"             = "Spalten...";
+"menu.context.zoomIn"              = "Vergrößern";
+"menu.context.zoomOut"             = "Verkleinern";
+"menu.context.zoomReset"           = "Standardgröße";
+
+/* Untermenü „Anzeigen als" */
+"menu.viewIn.bits8"                = "8-Bit";
+"menu.viewIn.bits16"               = "16-Bit";
+"menu.viewIn.bits32"               = "32-Bit";
+"menu.viewIn.bits64"               = "64-Bit";
+"menu.viewIn.toBinary"             = "als Binär";
+"menu.viewIn.toHex"                = "als Hex";
+"menu.viewIn.toBigEndian"          = "als BigEndian";
+"menu.viewIn.toLittleEndian"       = "als LittleEndian";
+
+/* Allgemeine Schaltflächen */
+"button.ok"                        = "OK";
+"button.cancel"                    = "Abbrechen";
+
+/* App-/Dialog-Bezeichner */
+"app.title"                        = "HEX-Editor";
+"app.titleMac"                     = "HEX-Editor für macOS";
+"app.titleCompare"                 = "HEX-Editor Vergleich";
+
+/* Adressbreite-Dialog */
+"addressWidth.title"               = "Adressbreite";
+"addressWidth.message"             = "Anzahl der Stellen in der Offset-Spalte (%d–%d).";
+"addressWidth.invalidRange"        = "Nur Werte zwischen %d und %d sind möglich.";
+
+/* Spalten-Dialog */
+"columns.title"                    = "Spalten";
+"columns.message"                  = "Anzahl der Zellen pro Zeile (1–%d bei der aktuellen Bitbreite).";
+"columns.invalidMaximum"           = "Maximal %d Bytes können in einer Zeile angezeigt werden.";
+
+/* Gehe-zu-Offset-Dialog */
+"goto.title"                       = "Gehe zu Offset";
+"goto.message"                     = "Byte-Offset eingeben.\n  • Dezimal: 1234\n  • Hex: 0x4A2 (oder 0X4A2)\n  • Relativ: +0x10 vorwärts, -100 rückwärts\n\nAktuell: 0x%0*zx    Ende: 0x%0*zx";
+"goto.button"                      = "Gehe zu";
+"goto.placeholder"                 = "z. B. 0x1F oder +16";
+"goto.errorParse"                  = "Offset konnte nicht gelesen werden. Verwende einen Dezimalwert, einen Hex-Wert mit 0x-Präfix oder ein +/− -Präfix für relative Sprünge.";
+
+/* Suchen / Suchen-und-Ersetzen-Dialog */
+"find.titleFind"                   = "In Hex suchen";
+"find.titleReplace"                = "Suchen und Ersetzen";
+"find.message"                     = "Klartext sucht im Puffer als ASCII-Bytes.\nVerwende 0x-Präfix oder durch Leerzeichen getrennte Hex-Werte (z. B. 0xDEADBEEF oder DE AD BE EF) für Bytemuster.";
+"find.button.findNext"             = "Weitersuchen";
+"find.button.replaceAll"           = "Alle ersetzen";
+"find.placeholder.find"            = "Suchen: Text oder 0xDEADBEEF";
+"find.placeholder.replace"         = "Ersetzen durch: Text oder Hex-Bytes";
+"find.toggle.matchCase"            = "Groß-/Kleinschreibung beachten (nur ASCII)";
+"find.toggle.wrap"                 = "Am Ende des Puffers umlaufen";
+"find.errorNotFound"               = "Muster nicht gefunden.";
+"find.errorNoPriorSearch"          = "Keine vorherige Suche. Verwende zuerst Suchen (Cmd+F).";
+"find.errorParseFind"              = "Suchmuster konnte nicht gelesen werden.";
+"find.errorParseReplace"           = "Ersetzungsmuster konnte nicht gelesen werden.";
+"find.errorPatternEmpty"           = "Suchmuster ist leer.";
+"find.errorNoBuffer"               = "Kein aktiver Hex-Puffer.";
+"find.errorNoEditor"               = "Kein aktiver Editor.";
+"find.errorReplaceFailed"          = "Ersetzen fehlgeschlagen.";
+"find.errorReplaceCurrent"         = "Keine Auswahl zum Ersetzen. Verwende zuerst Weitersuchen.";
+"find.errorReplaceLength"          = "Aktuelle Auswahl entspricht nicht der Länge des Suchmusters.";
+"find.errorReplaceFailedShort"     = "Ersetzung fehlgeschlagen.";
+"find.replacedSingular"            = "1 Vorkommen ersetzt.";
+"find.replacedPlural"              = "%d Vorkommen ersetzt.";
+
+/* HEX vergleichen */
+"compare.openHexFirstCompare"      = "Öffne die Hex-Ansicht (In HEX anzeigen) vor dem Verwenden von HEX vergleichen.";
+"compare.openHexFirstRun"          = "Öffne die Hex-Ansicht (In HEX anzeigen), bevor du den Vergleich startest.";
+"compare.errorNoFile"              = "Keine Vergleichsdatei ausgewählt.";
+"compare.errorReadFile"            = "Konnte %@ nicht lesen: %@";
+"compare.errorReadUnknown"         = "unbekannter Fehler";
+"compare.errorFailed"              = "Vergleich fehlgeschlagen.";
+"compare.openPanelTitle"           = "HEX vergleichen mit…";
+"compare.openPanelMessage"         = "Wähle eine Datei zum Vergleich mit dem aktuellen Puffer.";
+"compare.summaryMatch"             = "Dateien stimmen überein.";
+"compare.summaryDifferSingular"    = "1 Byte unterscheidet sich.\nVerwende Vergleichsergebnis löschen, um die Markierung zu entfernen.";
+"compare.summaryDifferPlural"      = "%d Bytes unterscheiden sich.\nVerwende Vergleichsergebnis löschen, um die Markierung zu entfernen.";
+"compare.noActiveResult"           = "Kein aktives Vergleichsergebnis zum Löschen.";
+
+/* Spalten einfügen */
+"insertColumns.openHexFirst"       = "Öffne die Hex-Ansicht (In HEX anzeigen) vor dem Verwenden von Spalten einfügen.";
+"insertColumns.title"              = "Spalten einfügen";
+"insertColumns.message"            = "Hex-Muster in jede Zeile an einer gewählten Spaltenposition einfügen. Jede Zeile wächst um (Anzahl × %d) Bytes; die Spaltenanzahl wächst um `Anzahl`.\n\nMuster: nur Hex-Bytes (z. B. 0x00 oder DE AD).\nAnzahl: 1 bis %d bei der aktuellen %d-Bit-Gruppierung.\nPosition: 0 bis %d (aktuelle Spaltenanzahl).";
+"insertColumns.button"             = "Einfügen";
+"insertColumns.placeholder.pattern"  = "Muster (Hex): 0xFF oder DE AD";
+"insertColumns.placeholder.count"    = "Anzahl (einzufügende Spalten)";
+"insertColumns.placeholder.position" = "Position (Spaltenindex, 0 = linker Rand)";
+"insertColumns.errorEmptyPattern"  = "Muster ist leer.";
+"insertColumns.errorParsePattern"  = "Muster muss eine Folge von Hex-Bytes sein (z. B. 0x00, DE AD BE EF).";
+"insertColumns.errorRangeCount"    = "Spaltenanzahl muss zwischen 1 und %d bei der aktuellen Bitbreite liegen.";
+"insertColumns.errorRangePosition" = "Einfügeposition muss zwischen 0 und %d (aktuelle Spaltenanzahl) liegen.";
+"insertColumns.errorBufferEmpty"   = "Puffer ist leer — nichts zum Einfügen vorhanden.";
+"insertColumns.errorRowSize"       = "Ungültige aktuelle Zeilengröße.";
+"insertColumns.errorFailed"        = "Einfügen fehlgeschlagen.";
+"insertColumns.summarySingularRows" = "%d Spalte%@ in 1 Zeile eingefügt.";
+"insertColumns.summaryPluralRows"   = "%d Spalte%@ in %d Zeilen eingefügt.";
+
+/* Muster ersetzen */
+"patternReplace.openHexFirst"      = "Öffne die Hex-Ansicht (In HEX anzeigen) vor dem Verwenden von Muster ersetzen.";
+"patternReplace.requireSelection"  = "Wähle zuerst etwas in der Hex-Ansicht aus — Muster ersetzen füllt die Auswahl.";
+"patternReplace.title"             = "Muster ersetzen";
+"patternReplace.message"           = "Aktuelle Auswahl von %zu Bytes mit einem sich wiederholenden Hex-Muster füllen.\n\nMuster: nur Hex-Bytes (z. B. 0xFF oder DE AD).";
+"patternReplace.button"            = "Ersetzen";
+"patternReplace.placeholder"       = "Muster (Hex): 0xFF oder DE AD";
+"patternReplace.errorEmptyPattern" = "Muster ist leer.";
+"patternReplace.errorParsePattern" = "Muster muss eine Folge von Hex-Bytes sein (z. B. 0xFF oder DE AD BE EF).";
+"patternReplace.errorFailed"       = "Muster ersetzen fehlgeschlagen.";
+"patternReplace.summarySingular"   = "1 Byte mit dem Muster ersetzt.";
+"patternReplace.summaryPlural"     = "%d Bytes mit dem Muster ersetzt.";
+
+/* Statusleiste (UI-Tests prüfen Substrings — Wortlaut ist vertraglich) */
+"status.empty"                     = "Aktuelles Dokument ist leer.";
+"status.showing"                   = "Zeige %zu Bytes.";
+"status.showingTruncated"          = "Zeige %zu von %zu Bytes. Vorschau ist aus Performance-Gründen gekürzt.";
+
+/* Über / Hilfe-Dialog */
+"about.body"                       = "Native macOS-Portierung des HEX-Editor-Plugins für Notepad++. Bietet eine eingebettete Hex-Tabelle mit direkter Byte-Bearbeitung, Auswahl, Lesezeichen, Suchen/Ersetzen, Vergleich und Ansichtswechsel.";
+/* Diagnose-Zeile im Über-Dialog — zeigt die aktuell geladene .strings-Datei. */
+"about.localeTag"                  = "Strings: de";
+
+/* Allgemeine Fehler beim Wechsel zwischen Scintilla und Hex-Ansicht */
+"editor.noActiveBuffer"            = "Kein aktiver Editor-Puffer verfügbar.";
+"editor.noActiveView"              = "Konnte die aktive Editoransicht zum Ersetzen nicht finden.";
+
+/* Spaltenüberschriften in der Hex-Tabelle */
+"table.header.offset"              = "Offset";
+"table.header.ascii"               = "ASCII";
