@@ -1364,6 +1364,108 @@ void testRectPayloadCodecRoundTrip()
     }
 }
 
+void testFormatHexDumpText()
+{
+    g_currentSuite = "formatHexDumpText";
+
+    // Simple full-row case: 16 bytes "Hello world!\n\0\0\0" exported as one line.
+    {
+        const std::vector<std::uint8_t> bytes = {
+            0x48,0x65,0x6c,0x6c,0x6f,0x20,0x77,0x6f,
+            0x72,0x6c,0x64,0x21,0x0a,0x00,0x00,0x00};
+        const std::string out = formatHexDumpText(bytes.data(), bytes.size(), 0, 16, 8, 16);
+        // Expected: address ":" + 16 bytes (with mid-row gap) + 2-space gap + ASCII gloss.
+        // "Hello world!" then NL=. then 3 NULs=...
+        const std::string expected =
+            "00000000: 48 65 6C 6C 6F 20 77 6F  72 6C 64 21 0A 00 00 00  Hello world!....\n";
+        if (out != expected) {
+            std::fprintf(stderr, "FAIL [%s] got:%s\nwant:%s\n", g_currentSuite,
+                         out.c_str(), expected.c_str());
+            ++g_failures;
+        } else {
+            ++g_assertions;
+        }
+    }
+
+    // Multi-row partial selection: bytes 5..30 of a 32-byte buffer. Bytes 0..4 and
+    // 30..31 must render as blanks (column-aligned), with the address still tracking
+    // each row's actual file offset.
+    {
+        std::vector<std::uint8_t> bytes(32);
+        for (std::size_t i = 0; i < 32; ++i) bytes[i] = static_cast<std::uint8_t>(0x40 + i);
+        const std::string out = formatHexDumpText(bytes.data(), bytes.size(), 5, 30, 8, 16);
+        // Two rows: offset 0..15 (bytes 5..15 rendered, 0..4 blank), offset 16..31
+        // (bytes 16..29 rendered, 30..31 blank).
+        // Row 0: "                45 46 47 48  49 4A 4B 4C 4D 4E 4F 50  ..... EFGHIJKLMNOP"
+        // (5 blank bytes = 14 chars: "   " * 5 minus extra space, plus mid-gap adjustment)
+        // Easier: just validate key landmarks rather than the full string.
+        HEX_EXPECT(out.find("00000000:") != std::string::npos);
+        HEX_EXPECT(out.find("00000010:") != std::string::npos);
+        // bytes 5..7 then mid-row gap then byte 8 (so " 47  48" with 2 spaces between)
+        HEX_EXPECT(out.find("45 46 47  48") != std::string::npos);
+        HEX_EXPECT(out.find("50 51 52") != std::string::npos);     // bytes 16..18
+        // Bytes outside the selection must NOT appear as their hex value.
+        HEX_EXPECT(out.find("40 41 42 43 44") == std::string::npos);  // bytes 0..4 should be blank
+        HEX_EXPECT(out.find("5E 5F\n") == std::string::npos);          // bytes 30..31 should be blank
+    }
+
+    // Address width respected: addressWidth=4 produces 4-char addresses.
+    {
+        const std::vector<std::uint8_t> bytes = {0xDE, 0xAD};
+        const std::string out = formatHexDumpText(bytes.data(), bytes.size(), 0, 2, 4, 16);
+        HEX_EXPECT(out.substr(0, 6) == "0000: ");
+    }
+
+    // Empty input → empty output.
+    {
+        const std::vector<std::uint8_t> bytes;
+        HEX_EXPECT(formatHexDumpText(bytes.data(), 0, 0, 0, 8, 16).empty());
+    }
+}
+
+void testFormatRectHexDump()
+{
+    g_currentSuite = "formatRectHexDump";
+
+    // 4×2 rect at offset 4 in a 32-byte buffer of distinct values.
+    std::vector<std::uint8_t> bytes(32);
+    for (std::size_t i = 0; i < 32; ++i) bytes[i] = static_cast<std::uint8_t>(0x40 + i);
+
+    {
+        RectSelection rect;
+        rect.originOffset = 4;
+        rect.width = 4;
+        rect.height = 2;
+        rect.bytesPerRow = 16;
+        const std::string out = formatRectHexDump(bytes.data(), bytes.size(), rect, 8);
+        // Row 0 covers bytes 4..7 = 0x44 0x45 0x46 0x47, row 1 covers 20..23 = 0x54 0x55 0x56 0x57.
+        // Each row: address + 4 hex bytes + 2-space gap + 4 ASCII chars.
+        const std::string expected =
+            "00000004: 44 45 46 47  DEFG\n"
+            "00000014: 54 55 56 57  TUVW\n";
+        if (out != expected) {
+            std::fprintf(stderr, "FAIL [%s] got:%s\nwant:%s\n", g_currentSuite,
+                         out.c_str(), expected.c_str());
+            ++g_failures;
+        } else {
+            ++g_assertions;
+        }
+    }
+
+    // Past-EOF row: rect with height=3 against buffer that doesn't cover row 2 in full.
+    {
+        RectSelection rect;
+        rect.originOffset = 0;
+        rect.width = 4;
+        rect.height = 3;
+        rect.bytesPerRow = 16;
+        const std::string out = formatRectHexDump(bytes.data(), 32, rect, 8);
+        // Rows 0, 1 have data; row 2 starts at offset 32 = exactly EOF, so all 4
+        // bytes of row 2 should render as blanks (no value).
+        HEX_EXPECT(out.find("00000020:") != std::string::npos);
+    }
+}
+
 void testStripHexDumpAddressAndAscii()
 {
     g_currentSuite = "stripHexDumpAddressAndAscii";
@@ -1660,9 +1762,11 @@ int main()
     testStripHexDumpAddressAndAscii();
     testParseHexClipboardTextFromDebuggerOutput();
     testParseRectClipboardTextFromDebuggerOutput();
+    testFormatHexDumpText();
+    testFormatRectHexDump();
 
     if (g_failures == 0) {
-        std::printf("PASS: %d assertions across 35 suites\n", g_assertions);
+        std::printf("PASS: %d assertions across 37 suites\n", g_assertions);
         return 0;
     }
     std::printf("FAIL: %d/%d assertions failed\n", g_failures, g_assertions);

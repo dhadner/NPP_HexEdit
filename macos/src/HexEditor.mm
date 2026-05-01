@@ -2738,8 +2738,14 @@ static bool copyRectToPasteboard()
         text = hexedit::formatRectClipboardAscii(previewBytes.data(), g_rectSelection,
                                                   previewBytes.size());
     } else {
-        text = hexedit::formatRectClipboardHex(previewBytes.data(), g_rectSelection,
-                                                previewBytes.size());
+        // Same documentation-friendly format as linear copy from the HEX pane:
+        // xxd-style addresses + bytes + ASCII gloss, scoped to the rect's columns.
+        // Custom UTI still carries the binary shape for shape-perfect round-trip
+        // back into the plugin; this text fallback is what other apps see.
+        text = hexedit::formatRectHexDump(previewBytes.data(), previewBytes.size(),
+                                           g_rectSelection,
+                                           std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH,
+                                                      HEX_MAX_ADDRESS_WIDTH));
     }
 
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
@@ -2786,7 +2792,19 @@ static bool copyHexSelectionToPasteboard()
             [pasteboard setString:string forType:NSPasteboardTypeString];
         }
     } else {
-        std::string hexText = hexedit::formatHexClipboardText(src, byteCount);
+        // Linear copy from the HEX byte pane: emit the documentation-friendly
+        // xxd-style format with addresses + ASCII gloss, mirroring what's on
+        // screen. The user's mental model is "Copy = text representation, Copy
+        // Binary Content = raw bytes" — this is the text path. Round-trip
+        // back into the plugin works because stripHexDumpAddressAndAscii in
+        // the inbound parser strips both columns natively.
+        std::string hexText = hexedit::formatHexDumpText(
+            previewBytes.data(),
+            previewBytes.size(),
+            offset,
+            offset + byteCount,
+            std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH),
+            currentBytesPerRow());
         NSString *string = [NSString stringWithUTF8String:hexText.c_str()];
         if (string != nil) {
             [pasteboard setString:string forType:NSPasteboardTypeString];
