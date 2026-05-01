@@ -86,9 +86,13 @@ cmake --install "$BUILD_DIR" >/dev/null
 # the host's current state.
 echo "==> Syncing test source from shared folder to $LOCAL_TESTS"
 mkdir -p "$LOCAL_TESTS"
+# --exclude='fixtures/100MB.bin': the 100 MB UI test fixture is generated
+# in-place on the VM by run-tests.sh; without the exclude, --delete would
+# wipe it whenever the host doesn't have a matching file locally.
 rsync -a --delete --checksum \
     --exclude=build \
     --exclude='*.xcodeproj' \
+    --exclude='fixtures/100MB.bin' \
     "$NPP_HEXEDIT/macos/ui-tests-xcode/" \
     "$LOCAL_TESTS/"
 

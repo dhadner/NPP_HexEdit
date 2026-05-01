@@ -92,3 +92,8 @@ macos/ChatGPT5.5-Chat.md
 *.d
 *.o
 
+#-- Generated UI test fixture: too large for git, manufactured deterministically
+#   by macos/ui-tests-xcode/run-tests.sh on first invocation. Smaller fixtures
+#   stay checked in.
+macos/ui-tests-xcode/fixtures/100MB.bin
+

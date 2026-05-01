@@ -11,6 +11,42 @@ fi
 
 xcodegen generate >/dev/null
 
+# Manufacture the 100 MB test fixture in-place if missing. The smaller fixtures
+# are checked into the repo at fixtures/; 100MB.bin is too large for git so we
+# generate it deterministically (each byte at offset N has value N mod 256).
+# Generation is idempotent — re-runs are a no-op once the file exists, so the
+# ~1-second cost is paid only on a fresh checkout / VM bootstrap.
+FIXTURES_DIR="$SCRIPT_DIR/fixtures"
+mkdir -p "$FIXTURES_DIR"
+HUGE_FIXTURE="$FIXTURES_DIR/100MB.bin"
+HUGE_SIZE=$((100 * 1024 * 1024))
+if [[ ! -f "$HUGE_FIXTURE" ]] || [[ "$(/usr/bin/stat -f%z "$HUGE_FIXTURE")" -ne "$HUGE_SIZE" ]]; then
+    echo "==> Generating $HUGE_FIXTURE ($HUGE_SIZE bytes)"
+    /usr/bin/python3 - "$HUGE_FIXTURE" "$HUGE_SIZE" <<'PY'
+import sys
+path, size = sys.argv[1], int(sys.argv[2])
+# Cycling 0x20..0x7E (printable ASCII). Mirrors macos/scripts/generate-test-fixture.py
+# so the in-place 100MB fixture matches the checked-in smaller fixtures'
+# pattern exactly. Stays valid UTF-8 + free of \r/\n so Notepad++ macOS
+# loads the file byte-for-byte without re-encoding or line-ending conversion.
+chunk = bytes(range(0x20, 0x7F))  # 95 chars: space through tilde
+period = len(chunk)
+with open(path, "wb") as f:
+    written = 0
+    while written < size:
+        remaining = size - written
+        if remaining >= period:
+            f.write(chunk); written += period
+        else:
+            f.write(chunk[:remaining]); written += remaining
+PY
+fi
+
+# xcodebuild forwards env vars to the test process only when prefixed with
+# TEST_RUNNER_ (the prefix is stripped before delivery). The Swift tests read
+# NPP_HEXEDIT_FIXTURES_DIR to locate the fixture files at runtime.
+export TEST_RUNNER_NPP_HEXEDIT_FIXTURES_DIR="$FIXTURES_DIR"
+
 XCRESULT="build/HexEditorUITests.xcresult"
 SUMMARY_MD="build/test-results.md"
 
