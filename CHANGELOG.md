@@ -1,30 +1,40 @@
 # Changelog
 
-This file tracks the macOS port of the HEX-Editor plugin against the original Windows baseline preserved in [HexEditor/](HexEditor/). The Windows plugin's own historical change log lives at [HexEditor/change.log](HexEditor/change.log) and is unchanged by the porting work.
+This file lists what's changed in the macOS port of the HEX-Editor plugin. The
+original Windows version, kept untouched in [HexEditor/](HexEditor/), has its
+own history in [HexEditor/change.log](HexEditor/change.log).
 
 ## v1.0.0 — first macOS release
 
-First public release of the native macOS port. Ships as `HexEditor.dylib` for [Notepad++ macOS](https://github.com/notepad-plus-plus-macos), with English and German localization, dark-mode-aware semantic colours, and feature parity with the Windows plugin's plugin-menu surface (View in HEX, Compare HEX, Clear Compare Result, Insert Columns, Pattern Replace, Help).
+The first public release of the macOS port. It runs as a plugin (`HexEditor.dylib`)
+inside [Notepad++ macOS](https://github.com/notepad-plus-plus-macos) and matches
+every entry on the Windows plugin's menu: View in HEX, Compare HEX, Clear
+Compare Result, Insert Columns, Pattern Replace, and Help. It ships with English
+(`en`, `en-GB`, `en-US`) and German (`de`) text, follows the host's dark/light
+mode, and supports two-finger trackpad pinch to zoom (the same gesture that
+already works in the host's text view).
 
 ### What works
 
-- **Hex view** — inline `NSTableView` overlay swaps the active Scintilla view for an offset / hex bytes / ASCII grid with direct overwrite + append editing, range selection across both panes, bookmark toggling on the offset gutter, and Cmd+Home / Cmd+End navigation to document edges.
+- **Hex view** — inline `NSTableView` overlay swaps the active Scintilla view for an offset / hex bytes / ASCII grid with direct overwrite + append editing, range selection across both panes, bookmark toggling on the offset gutter, and Cmd+Home / Cmd+End navigation to document edges. The hex view mirrors the Scintilla caret position when toggled — open it with the cursor anywhere in the source buffer and the hex view scrolls to the corresponding byte; selections are mirrored too, with the hex caret landing at the end of the selected range.
 - **Clipboard** — Cut / Copy / Paste / Delete with Windows-faithful semantics (Copy emits lowercase `de ad be ef` text, Copy Binary emits raw bytes; Paste auto-detects). Edit menu integration via responder-chain routing.
 - **View modes** — 8/16/32/64-bit grouping, hex / binary notation, big / little-endian display, configurable address width (4–16 digits) and columns (1..128/bpc). Bit-precise editing in binary notation. Display-order arrow-key navigation in little-endian and multi-byte modes. All settings persist via `NSUserDefaults` suite `org.notepad-plus-plus.HexEditor`.
+- **Zoom** — Cmd+Scroll or two-finger trackpad pinch resizes the hex font in discrete steps. The pinch algorithm matches Scintilla's (`ScintillaView.mm:magnifyWithEvent:`) so the gesture feels identical in the hex view and in the host's main text editor.
 - **Search** — Find (Cmd+F), Find and Replace (Cmd+Alt+F), Find Next (Cmd+G), Find Previous (Cmd+Shift+G). Auto-detects ASCII vs hex byte patterns; match-case (ASCII only) and wrap-around toggles persist. Replace All wraps in a single Scintilla undo group.
 - **Navigation** — Go to Offset (Cmd+L) accepts decimal, `0x`-prefixed hex, and relative `+`/`-` offsets with underscore / comma separators.
 - **Compare** — pick any file via the system Open panel; differing bytes highlight in red; Clear Compare Result drops the mask.
 - **Pattern editing** — Insert Columns (inject a repeating hex pattern into every row at a chosen column position) and Pattern Replace (fill a selection with a repeating pattern). Both apply as one undo group.
-- **Localization** — English (`Localizable.en.strings`) and German (`Localizable.de.strings`) shipped. New languages plug in by adding a `Localizable.<lang>.strings` file. `[NSLocale preferredLanguages]` selects the active file at startup.
-- **Appearance** — semantic `NSColor` values (`unemphasizedSelectedContentBackgroundColor`, `selectedContentBackgroundColor`, `systemRedColor`) auto-flip in dark mode and follow the user's accent colour. The plugin inherits the host's font and theme; there is no Options dialog (the host owns appearance).
+- **Localization** — Four shipped strings files: full translations for English (`Localizable.en.strings`, the canonical / US-spelling source) and German (`Localizable.de.strings`); regional override files for British English (`Localizable.en-GB.strings`) and American English (`Localizable.en-US.strings`) demonstrate the cascade pattern (override files contain only the keys that diverge from the base; everything else cascades from the base translation, then from embedded English defaults). Diagnostic line in the About dialog identifies which language file the runtime is using. Selection reads `CFPreferencesCopyAppValue` rather than `[NSLocale preferredLanguages]` so user-set tags aren't filtered against the host's bundle lprojs.
+- **Appearance** — semantic `NSColor` values (`unemphasizedSelectedContentBackgroundColor`, `selectedContentBackgroundColor`, `systemRedColor`) auto-flip in dark mode and follow the user's accent colour. No vertical gridlines between hex columns (cleaner, matches the visual density users expect from a hex viewer). Status row above the column headers sizes its frame from the font's `ascender - descender` so descender glyphs ('y' / 'g' / 'p') never clip. The plugin inherits the host's font and theme; there is no Options dialog (the host owns appearance).
 
 ### Tests
 
-Three tiers, all green at release:
+Three tiers, all green at release. See [DEVELOPER.md](DEVELOPER.md) for setup and the
+recommended Parallels VM workflow that runs the UI tier without locking your desktop.
 
-- **HexCore unit tests** — 24 suites, ~700 assertions covering cursor math, edit planners, clipboard format/parse helpers, view-mode mappings, byte-pattern search, byte-diff computation, and localization-independent logic. Run via `ctest -L unit`.
-- **Plugin smoke** — `dlopen`s the dylib, asserts the 5 NPP exports, the `getName()` value, and the 6 `funcItem` entries with English titles. Forces `AppleLanguages = en` so the assertions stay valid on any locale. Run via `ctest -L smoke`.
-- **XCTest UI** — 25 cases against the running Notepad++.app: hex-toggle, undo/redo, append-at-EOF, cut/copy/paste round-trips, view-submode rendering, dialog flows for Find / Find-Replace / Goto / Address Width / Columns / Insert Columns / Pattern Replace / Compare HEX, bit-precise binary editing, validation-error paths, and the bookmark click. Run via `macos/ui-tests-xcode/run-tests.sh`.
+- **HexCore unit tests** — pure C++, ~700 assertions covering cursor math, edit planners, clipboard format/parse helpers, view-mode mappings, byte-pattern search, byte-diff computation, and localization-independent logic. Runs in milliseconds. `ctest -L unit`.
+- **Plugin smoke** — `dlopen`s the dylib, asserts the 5 NPP exports, the `getName()` value, and the `funcItem` entries with English titles. Forces `AppleLanguages = en` so the assertions stay valid on any locale. `ctest -L smoke`.
+- **XCTest UI** — 37 cases against the running Notepad++.app: hex-toggle, undo/redo, append-at-EOF, cut/copy/paste round-trips, view-submode rendering, dialog flows for Find / Find-Replace / Goto / Address Width / Columns / Insert Columns / Pattern Replace / Compare HEX, bit-precise binary editing, validation-error paths, the bookmark click, status-label glyph clipping, hex-view row-0 visibility, cursor + selection mirroring from Scintilla, and the localization cascade for en, en-GB, en-US, de, and unsupported tags. Driven by the `HEX_EDITOR_LANG_OVERRIDE` env var (set via `launchEnvironment`) for cascade tests, since `defaults write` from the XCUI runner is sandbox-redirected. Each run writes a Markdown summary at `macos/ui-tests-xcode/build/test-results.md`. `macos/ui-tests-xcode/run-tests.sh`.
 
 ### Documented divergences from Windows
 
