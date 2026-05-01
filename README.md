@@ -8,7 +8,7 @@ This repo holds two versions of the same plugin:
   v0.9.x, copied without changes from
   [SourceForge](https://sourceforge.net/projects/npp-plugins/files/Hex%20Editor/).
 - **A macOS port** (`macos/`) — a fresh rewrite that runs as a plugin file
-  (`HexEditor.dylib`) inside [Notepad++ macOS](https://github.com/notepad-plus-plus-macos).
+  (`HEX-Editor.dylib`) inside [Notepad++ macOS](https://github.com/notepad-plus-plus-macos).
   ".dylib" is just the macOS file extension for a dynamically loaded library;
   Notepad++ loads it on launch.
 
@@ -46,7 +46,7 @@ cmake --install macos/build-universal                                 # copy the
 The install step copies the plugin and its language files to:
 
 ```text
-~/.notepad++/plugins/HexEditor/
+~/.notepad++/plugins/HEX-Editor/
 ```
 
 Restart Notepad++ macOS. You'll see a new **Plugins → HEX-Editor** submenu with seven entries:

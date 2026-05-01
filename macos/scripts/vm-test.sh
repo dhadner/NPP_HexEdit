@@ -76,7 +76,7 @@ NPP_APP="$NPP_MACOS/build/Notepad++.app"
 echo "==> Rebuilding plugin (incremental)"
 cmake --build "$BUILD_DIR"
 
-echo "==> Reinstalling to ~/.notepad++/plugins/HexEditor/"
+echo "==> Reinstalling to ~/.notepad++/plugins/HEX-Editor/"
 cmake --install "$BUILD_DIR" >/dev/null
 
 # Mirror the test source from shared folder to VM-local FS. swiftc reading

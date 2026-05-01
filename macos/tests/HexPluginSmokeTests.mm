@@ -36,7 +36,7 @@ void *resolve(void *handle, const char *symbol)
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: %s <path-to-HexEditor.dylib>\n", argv[0]);
+        std::fprintf(stderr, "usage: %s <path-to-HEX-Editor.dylib>\n", argv[0]);
         return 2;
     }
 
@@ -113,7 +113,7 @@ int main(int argc, char **argv)
     dlclose(handle);
 
     if (g_failures == 0) {
-        std::printf("PASS: HexEditor.dylib smoke test (%d assertions)\n", g_assertions);
+        std::printf("PASS: HEX-Editor.dylib smoke test (%d assertions)\n", g_assertions);
         return 0;
     }
     std::fprintf(stderr, "FAIL: %d/%d assertions failed\n", g_failures, g_assertions);

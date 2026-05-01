@@ -97,3 +97,7 @@ macos/ChatGPT5.5-Chat.md
 #   stay checked in.
 macos/ui-tests-xcode/fixtures/100MB.bin
 
+#-- Distribution zip produced by `cmake --build`. The artifact to upload to a
+#   GitHub Release, regenerated on every successful build, never checked in.
+nppHEX-EditorPlugin-*.zip
+

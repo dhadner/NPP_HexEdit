@@ -103,14 +103,19 @@ target_link_libraries(HexEditor PRIVATE
 set_target_properties(HexEditor PROPERTIES
     PREFIX ""
     SUFFIX ".dylib"
-    OUTPUT_NAME "HexEditor"
+    # OUTPUT_NAME is the on-disk file name; the CMake target name (HexEditor)
+    # stays unchanged to keep cross-references stable. The shipped artifact is
+    # HEX-Editor.dylib because that's the directory + binary name the upstream
+    # Notepad++ plugin registry expects (must match the directory name under
+    # ~/.notepad++/plugins/, see PLUGIN_INSTALL_DIR below).
+    OUTPUT_NAME "HEX-Editor"
 )
 
-set(PLUGIN_INSTALL_DIR "$ENV{HOME}/.notepad++/plugins/HexEditor")
+set(PLUGIN_INSTALL_DIR "$ENV{HOME}/.notepad++/plugins/HEX-Editor")
 install(TARGETS HexEditor DESTINATION "${PLUGIN_INSTALL_DIR}")
 
 # Localizable.<lang>.strings — the plugin reads these at runtime from the install
-# directory next to HexEditor.dylib. Embedded English defaults in HexEditor.mm
+# directory next to HEX-Editor.dylib. Embedded English defaults in HexEditor.mm
 # carry the UI when these files are missing, but shipping them is required for
 # any non-English language to render.
 set(HEX_LOCALIZATION_FILES
@@ -121,13 +126,46 @@ set(HEX_LOCALIZATION_FILES
 )
 install(FILES ${HEX_LOCALIZATION_FILES} DESTINATION "${PLUGIN_INSTALL_DIR}")
 
-# Also copy the .strings into the build directory next to the dylib so the test
-# harness (which dlopens the build-tree dylib) finds them via dladdr at runtime.
+# Toolbar icons — light + dark variants. Shipped flat in the plugin directory
+# (the host picks the appropriate one based on appearance).
+set(HEX_ICON_FILES
+    "${CMAKE_CURRENT_LIST_DIR}/resources/toolbar.png"
+    "${CMAKE_CURRENT_LIST_DIR}/resources/toolbar_dark.png"
+)
+install(FILES ${HEX_ICON_FILES} DESTINATION "${PLUGIN_INSTALL_DIR}")
+
+# Also copy the .strings + icons into the build directory next to the dylib so the
+# test harness (which dlopens the build-tree dylib) finds them via dladdr at runtime.
 add_custom_command(TARGET HexEditor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${HEX_LOCALIZATION_FILES}
+        ${HEX_ICON_FILES}
         "$<TARGET_FILE_DIR:HexEditor>"
-    COMMENT "Copying Localizable.*.strings next to HexEditor.dylib"
+    COMMENT "Copying Localizable.*.strings + toolbar icons next to HEX-Editor.dylib"
+    VERBATIM
+)
+
+# Distribution zip: package the dylib + .strings + icons in a flat layout under a
+# top-level "HEX-Editor/" directory inside the archive, so unzipping into
+# ~/.notepad++/plugins/ produces the expected ~/.notepad++/plugins/HEX-Editor/
+# layout. Built as a POST_BUILD step on the dylib target so every build produces
+# the artifact ready for upload to a GitHub Release; the .zip itself is gitignored.
+# Naming convention: nppHEX-EditorPlugin-x.y.z.zip per upstream NPP plugin
+# distribution conventions.
+set(HEX_DIST_STAGING "${CMAKE_BINARY_DIR}/dist-staging/HEX-Editor")
+set(HEX_DIST_ZIP "${CMAKE_BINARY_DIR}/nppHEX-EditorPlugin-${PROJECT_VERSION}.zip")
+add_custom_command(TARGET HexEditor POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "${HEX_DIST_STAGING}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${HEX_DIST_STAGING}"
+    COMMAND ${CMAKE_COMMAND} -E copy
+        "$<TARGET_FILE:HexEditor>"
+        ${HEX_LOCALIZATION_FILES}
+        ${HEX_ICON_FILES}
+        "${HEX_DIST_STAGING}"
+    COMMAND ${CMAKE_COMMAND} -E rm -f "${HEX_DIST_ZIP}"
+    COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_BINARY_DIR}/dist-staging"
+        ${CMAKE_COMMAND} -E tar c "${HEX_DIST_ZIP}" --format=zip "HEX-Editor"
+    COMMENT "Packaging nppHEX-EditorPlugin-${PROJECT_VERSION}.zip"
     VERBATIM
 )
 

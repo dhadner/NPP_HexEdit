@@ -30,11 +30,11 @@ If the unit + smoke tiers pass and the host launches with the plugin enabled
 ## Prerequisites
 
 | Tool | Why | Install |
-|---|---|---|
+| --- | --- | --- |
 | macOS 11+ | Build target | n/a |
 | Xcode 15+ | Compiler, SDK, XCTest | App Store, or `xcodes install --latest` |
 | Xcode CLT | `xcode-select`, `clang`, `cmake` discovery | `sudo xcode-select --install` |
-| Homebrew | Dependency installer | https://brew.sh |
+| Homebrew | Dependency installer | <https://brew.sh> |
 | CMake ≥ 3.20 | Build system | `brew install cmake` |
 | Git | Source control | `brew install git` |
 | XcodeGen | Generates the XCTest UI project from `project.yml` | `brew install xcodegen` |
@@ -138,7 +138,7 @@ Either way, the plugin itself rebuilds in seconds every time you change a
 cmake -S macos -B macos/build-universal -DCMAKE_BUILD_TYPE=Release
 cmake --build macos/build-universal
 
-# Install to ~/.notepad++/plugins/HexEditor/ (also copies the .strings files).
+# Install to ~/.notepad++/plugins/HEX-Editor/ (also copies the .strings files + toolbar icons).
 cmake --install macos/build-universal
 ```
 
@@ -272,6 +272,7 @@ about 30 minutes (mostly Xcode download time).
 
 2. **Install Xcode** in the guest from the App Store (~30 GB download). Open
    it once to accept the license. Then in a guest Terminal:
+
    ```sh
    sudo xcodebuild -runFirstLaunch
    sudo xcodebuild -license accept
@@ -286,6 +287,7 @@ about 30 minutes (mostly Xcode download time).
    folder, installs Homebrew + xcodegen + cmake + git, builds the plugin to a
    VM-local directory for speed, runs the unit + smoke tiers, and writes
    `~/.npp-hexedit-vm.env` with the discovered paths):
+
    ```sh
    "/Volumes/My Shared Files/.../NPP_HexEdit/macos/scripts/vm-bootstrap.sh"
    ```
