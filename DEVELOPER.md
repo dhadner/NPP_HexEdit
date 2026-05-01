@@ -260,6 +260,17 @@ about 30 minutes (mostly Xcode download time).
    System Settings → Privacy & Security → Accessibility (same as the host
    pre-flight above).
 
+6. **Grant Accessibility permission to the test runner on its first run.**
+   Run `~/vm-test-local.sh` once with the VM's desktop visible. macOS will
+   show a one-time prompt for `HexEditorUITestRunner` — click "Allow",
+   then verify the entry is checked in System Settings → Privacy & Security
+   → Accessibility. Subsequent runs are unattended (the script preserves
+   DerivedData so the runner's ad-hoc code hash stays stable, which keeps
+   the TCC grant valid). If you see "Timed out while enabling automation
+   mode" in the test log, the grant was lost — repeat this step. Pass
+   `--clean` to vm-test-local.sh to force a DerivedData wipe (you'll need
+   to re-grant after).
+
 ### Daily UI test runs
 
 Inside the guest, after a host-side edit:
@@ -274,11 +285,15 @@ Inside the guest, after a host-side edit:
 The local copy avoids a Parallels SMB caching quirk where bash reads the
 shared script with stale content even after the host edits it.
 
-The script: rebuilds the plugin, wipes `~/Library/Developer/Xcode/DerivedData/HexEditorUITests-*`
-(needed because SMB mtime staleness confuses xcodebuild's incremental
-compiler), runs xcodebuild against a VM-local mirror of the test source, and
-copies the result bundle + Markdown summary back to the shared folder so you
-can read them on the host.
+The script: rebuilds the plugin; rsyncs `--checksum` the test source from the
+shared folder to a VM-local mirror (so xcodebuild compiles from VM-local
+files, sidestepping the SMB-caching quirk where swiftc would see stale
+content); runs xcodebuild from there; and copies the result bundle + Markdown
+summary back to the shared folder so you can read them on the host. By
+default DerivedData is preserved between runs so the test runner's ad-hoc
+code hash stays stable and TCC's Accessibility grant survives. Pass
+`--clean` to wipe DerivedData (and re-grant the runner's Accessibility
+permission afterward).
 
 You can also drive everything via SSH from the host:
 
@@ -406,12 +421,64 @@ The plugin is two files plus a header: an Objective-C++ adapter
   the plugin's `setInfo` function (which sets the menu count and the title
   of each entry), then update `HexEditorPluginSmokeTests` so it asserts the
   new count and title.
+- **Localized strings with two or more parameters** → use numbered
+  positional placeholders (`%1$d`, `%2$@`, ...). Bare `%d`/`%@` repeated
+  prevents translators from reordering for languages where parameters
+  naturally appear in a different sequence. If the call site needs dynamic
+  width (e.g. `%0*zx`), pre-format that argument into an `NSString *` at
+  the call site and pass it as a simple `%1$@` so translators don't have
+  to know printf's dynamic-width syntax. The grep
+  `grep -E '"[^"]+"\s*=\s*"[^"]*%[^1-9$%][^%]*%[^1-9$]' Localizable.*.strings`
+  finds violators.
+
+### Rectangular (block) selection internals
+
+Three layers, mirrored across `HexCore` and `HexEditor.mm`:
+
+- **Geometry** — `hexedit::RectSelection` carries `originOffset`, `width`,
+  `height`, and the `bytesPerRow` it was anchored to. Pure helpers
+  (`makeRectSelection`, `rectToRanges`, `extractRectBytes`) live in
+  `HexCore` and are unit-tested. The "anchored to bytesPerRow" field is
+  the load-bearing invariant: any code path that changes `currentBytesPerRow()`
+  (Columns dialog, View-in submode, hex-view toggle) must call
+  `clearRectSelection()` because the rect's column coordinates no longer
+  map to the same bytes on screen.
+- **Interaction** in `HexEditor.mm` — `mouseDown:` / `mouseDragged:` /
+  `mouseUp:` branch on a modifier match against `currentRectModifierFlags()`
+  (Option or Shift+Option, per Options dialog). Address-column drags snap
+  to whole-row width. `keyDown:` matches Shift+modifier+arrow before the
+  plain-arrow switch and bootstraps a 1×1 rect at the caret on first use.
+  Plain arrows / typing / `clearAllByteSelections()` collapse the rect.
+- **Clipboard** — every rect copy emits two pasteboard items: a
+  public-text fallback (hex per row, ASCII per row, or address strings
+  joined by `\n` depending on the source pane) for cross-app use, plus a
+  custom UTI `org.notepad-plus-plus.HexEditor.rectangular` that carries
+  a 20-byte header (`HXR1` magic, version, kind, width, height,
+  dataLength) followed by the raw bytes. Paste reads the custom UTI
+  first (preserving shape and source-pane kind), falling back to
+  `parseRectClipboardText` on the public-text payload when no custom UTI
+  is present. Source-pane `kind = Addresses` is rejected at paste time as
+  "cannot paste as bytes"; `kind = Bytes` and `kind = Ascii` are
+  interchangeable since both carry the same byte data with different
+  display interpretations. Strict shape-match — `dest.width × dest.height`
+  must equal payload `width × height` — is enforced before any byte is
+  written.
+
+The diagnostic AX value (`hex-editor.cursor.diagnostic`) exposes
+`rectActive`, `rectOrigin`, `rectWidth`, `rectHeight`, `rectBpr`, and
+`rectOriginPane` so XCUI tests can verify rect state structurally rather
+than via fragile drag mechanics. The Swift parser in
+[macos/ui-tests-xcode/Tests/HexEditorUITests.swift](macos/ui-tests-xcode/Tests/HexEditorUITests.swift)
+reads these into `HexCursorState` for assertion.
 
 ## Releasing
 
-See [CHANGELOG.md](CHANGELOG.md) for the v1.0.0 release notes structure. Each
-release entry documents shipped behavior, divergences from the Windows
-baseline, and the test tiers' state at release time.
+See [CHANGELOG.md](CHANGELOG.md) for the release-notes structure (current
+shape: a v1.x.x heading, sub-sections for "What's new" / tests added /
+divergence updates). Each release entry documents shipped behavior,
+divergences from the Windows baseline, and the test tiers' state at release
+time. Bump `project(... VERSION x.y.z ...)` in
+[macos/CMakeLists.txt](macos/CMakeLists.txt) before tagging.
 
 ## License
 

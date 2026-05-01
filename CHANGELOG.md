@@ -4,6 +4,41 @@ This file lists what's changed in the macOS port of the HEX-Editor plugin. The
 original Windows version, kept untouched in [HexEditor/](HexEditor/), has its
 own history in [HexEditor/change.log](HexEditor/change.log).
 
+## v1.1.0 — rectangular (block) selection
+
+Adds full rectangular selection support — the macOS port now matches the
+Windows plugin's `eSel::HEX_SEL_BLOCK` capability (the one divergence v1.0.0
+called out as not yet ported). Also brings back the Options menu, this time
+with real settings, and converts every multi-parameter localized string to
+numbered positional syntax so translators can reorder freely.
+
+### What's new
+
+- **Rectangular drag** — Option-drag inside the hex byte pane or ASCII pane draws a 2D rectangle (cell-granular). Option-drag in the address column drags whole rows (full bytes-per-row width). The modifier is configurable in the new Options dialog (Option, matching Scintilla / Windows; or Shift+Option, matching VS Code).
+- **Keyboard extension** — Shift+Option+arrow keys grow / shrink the rectangle from the dragged-to corner; the first such press while no rect is active bootstraps a 1×1 rect at the caret. Plain arrow / Home / End / typing any character collapses the rect (typing replaces it with normal byte editing at the cursor).
+- **Cut / Copy / Paste / Delete on a rectangle** — Copy emits both a public-text fallback (hex per row, or ASCII per row, or address strings, joined by `\n` depending on the source pane) and a custom pasteboard type `org.notepad-plus-plus.HexEditor.rectangular` carrying a `kind` tag (Bytes / Ascii / Addresses) plus the rectangle's shape. Round-tripping through the plugin's clipboard preserves geometry. Delete is zero-fill (file size unchanged, offsets preserved).
+- **Strict-shape paste** — Pasting a rectangular payload requires the destination to be a rectangle of the exact same width × height. Mismatches show a clarifying dialog naming the required dimensions. Address-source clipboards are rejected with "cannot paste as bytes" since they're meta about the data, not the data itself. External text-only clipboards (no custom UTI) are parsed as `\n`-separated rows per the same rules; single-line text falls through to the existing linear paste path so cross-app copy/paste behaves as before.
+- **Pattern Replace on a rectangle** fills row-by-row with the pattern restarting at each row's first byte — matches the Windows `eSel::HEX_SEL_BLOCK` semantics. Dialog wording forks: the rect path explains the per-row restart so the user knows it won't run continuously across rows.
+- **Options dialog** (Plugins → HEX-Editor → Options...) — the menu entry removed in 0457695 returns, now backing real settings rather than a stub. Today's only entry is the rectangular-selection modifier; the layout is built so additional preferences can be appended without restructuring or churning the plugin menu.
+- **Numbered localized parameters** — every `.strings` key with two or more format placeholders now uses numbered positional syntax (`%1$d`, `%2$@`, ...) so translators can swap parameter order. The dynamic-width address formatting in `goto.message` was refactored at the call site to pre-format the hex strings, leaving translators with simple `%1$@` / `%2$@` slots they don't need printf knowledge to translate.
+
+### v1.1.0 test additions
+
+- **HexCore** added 4 new suites: `extractRectBytes`, `formatRectClipboardHex`, `formatRectClipboardAscii`, and `parseRectClipboardText` (which exercises the external-text inbound parser — `\n`-separated hex with mixed separators, raw-ASCII fallback when any line fails as hex, CRLF tolerance, shape-mismatch rejection, empty/blank rejection). 30 suites total, all green.
+- **Smoke** updated for the 7-item menu (View in HEX, Compare HEX, Clear Compare Result, Insert Columns, Pattern Replace, Options, Help).
+- **UI** — diagnostic AX value extended with rect fields (`rectActive`, `rectOrigin`, `rectWidth`, `rectHeight`, `rectBpr`, `rectOriginPane`) so future tests can verify rect state structurally rather than via fragile drag mechanics. The Swift `HexCursorState` parser was updated in lock-step. New test: Options dialog opens and cancels cleanly.
+
+### Updates to v1.0.0 divergences
+
+- ~~"Pattern Replace operates on the linear selection only — the rectangular `eSel::HEX_SEL_BLOCK` branch isn't ported"~~ — **resolved in v1.1.0**: rectangular Pattern Replace is now supported with per-row pattern restart matching the Windows semantics.
+- ~~"No Options dialog"~~ — partly resolved: the dialog is back, but for plugin-specific behavior (rect modifier) rather than appearance. Color / font choices remain delegated to the host's `NSAppearance` + Style Configurator.
+
+### IDE configuration
+
+- `.vscode/c_cpp_properties.json` — switched the Microsoft C/C++ extension from compileCommands to explicit `includePath` + `defines`. CMake's universal-binary build emits `-arch arm64 -arch x86_64`, which the extension's IntelliSense engine cannot consume in a single AST and was silently falling back to defaults — surfacing fake "HexCore.h not found" / "no member named 'clamp'" errors in the Problems pane that never reached the actual build. The clangd extension continues to use `macos/.clangd` (which already strips the dual-arch via its compilation-database loader), so both engines are now quiet.
+
+---
+
 ## v1.0.0 — first macOS release
 
 The first public release of the macOS port. It runs as a plugin (`HexEditor.dylib`)
@@ -84,17 +119,17 @@ The split is new: HexCore exposes pure planning functions (`planHexDigitEdit`, `
 
 ### Plugin menu commands
 
+The macOS port has 7 menu entries (Windows separates several with menu separators, which macOS plugins can't emit; the macOS sequence is the same items minus the visual separators).
+
 | # | Windows | macOS | Status |
 | --- | --- | --- | --- |
 | 0 | View in HEX | View in HEX | Implemented (with shortcut binding via `_pShKey`) |
-| 1 | Compare HEX | Compare HEX | **Implemented** (compares against a file rather than Windows' second split view) |
-| 2 | Clear Compare Result | Clear Compare Result | **Implemented** |
-| 3 | *(separator)* | Insert Columns... | macOS has no menu separators; commands renumbered. **Implemented**. |
-| 4 | Insert Columns... | Pattern Replace... | **Implemented** on macOS (linear selections only — no rectangular selection model) |
-| 5 | Pattern Replace... | Options... | **Stub** on macOS |
-| 6 | *(separator)* | **Copy HEX Dump** | New on macOS — not in the Windows menu |
-| 7 | Options... | Help... | macOS Help is a simple About dialog, not the Windows [HelpDlg](HexEditor/src/HelpDlg/) URL-control window |
-| 8 | Help... | — | One fewer entry on macOS |
+| 1 | Compare HEX | Compare HEX | Implemented (compares against a file rather than Windows' second split view) |
+| 2 | Clear Compare Result | Clear Compare Result | Implemented |
+| 3 | Insert Columns... | Insert Columns... | Implemented |
+| 4 | Pattern Replace... | Pattern Replace... | Implemented for both linear and rectangular selections (v1.1.0 added the rect path; per-row pattern restart matches Windows `eSel::HEX_SEL_BLOCK`) |
+| 5 | Options... | Options... | Real dialog as of v1.1.0 (rect-modifier preference); was a stub from v1.0.0 |
+| 6 | Help... | Help... | macOS Help is a simple About dialog, not the Windows [HelpDlg](HexEditor/src/HelpDlg/) URL-control window |
 
 The Windows plugin separately exposes Find / Replace / Goto from inside the docked HEX dialog rather than the plugin menu; those entry points have no macOS equivalent yet (see "Not yet ported" below).
 
