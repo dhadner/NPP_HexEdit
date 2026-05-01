@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-static const char *PLUGIN_NAME = "HEX-Editor";
+static const char *PLUGIN_NAME = "HexEditor";
 static const int NB_FUNC = 7;
 
 // MARK: - Localization
@@ -190,7 +190,7 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         defaults = @{
-            // Plugin menu (Plugins > HEX-Editor > …)
+            // Plugin menu (Plugins > HexEditor > …)
             @"menu.plugin.viewInHex":            @"View in HEX",
             @"menu.plugin.compareHex":           @"Compare HEX",
             @"menu.plugin.clearCompareResult":   @"Clear Compare Result",
@@ -236,9 +236,9 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"button.cancel":                    @"Cancel",
 
             // App / dialog identity
-            @"app.title":                        @"HEX-Editor",
-            @"app.titleMac":                     @"HEX-Editor for macOS",
-            @"app.titleCompare":                 @"HEX-Editor Compare",
+            @"app.title":                        @"HexEditor",
+            @"app.titleMac":                     @"HexEditor for macOS",
+            @"app.titleCompare":                 @"HexEditor Compare",
 
             // Address Width dialog
             @"addressWidth.title":               @"Address Width",
@@ -333,7 +333,6 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"status.rectangle":                 @"Rectangle: %1$lu × %2$lu (%3$lu bytes)",
 
             // Rectangular paste error dialogs (strict shape-match)
-            @"paste.rect.errorAddressSource":      @"Address selections cannot be pasted as bytes. Copy a hex or ASCII rectangle and try again.",
             @"paste.rect.errorNeedsRectDestination": @"Destination must be a rectangular selection of %1$lu × %2$lu bytes. Option-drag (or Shift+Option-drag, per Options) to create one.",
             @"paste.rect.errorShapeMismatch":      @"Destination is the wrong size — must be %1$lu bytes wide and %2$lu bytes high.",
 
@@ -342,7 +341,7 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"patternReplace.summaryRect":         @"Filled %1$lu × %2$lu rectangle (%3$lu bytes) with the pattern.",
 
             // About / help dialog
-            @"about.body":                       @"Native macOS port of the Notepad++ HEX-Editor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.",
+            @"about.body":                       @"Native macOS port of the Notepad++ HexEditor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.",
             // Embedded fallback when no .strings file is loaded — distinct from
             // any shipped tag so the cascade XCTest can detect this state.
             @"about.localeTag":                  @"Strings: (embedded)",
@@ -356,7 +355,7 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"table.header.ascii":               @"ASCII",
 
             // Options dialog
-            @"options.title":                    @"HEX-Editor Options",
+            @"options.title":                    @"HexEditor Options",
             @"options.message":                  @"Plugin-wide preferences. Reset restores the defaults shown below; click Save to apply.",
             @"options.button.save":              @"Save",
             @"options.button.reset":             @"Reset to Defaults",
@@ -637,16 +636,14 @@ static size_t selectionAnchorByte = 0;
 // implicit in g_rectSelection's geometry plus activeByteOffset, which always tracks
 // the dragged-to byte so the caret renders at the user's pointer.
 //
-// g_rectOriginIsAddress = drag started in the offset column, in which case the rect
-// snaps to whole rows (full bytesPerRow width). g_rectOriginField is the pane the
-// drag began in (Hex or Ascii) and is later used by the copy/paste matrix in chunk 3
-// to tag the clipboard payload with kind = Bytes / Ascii / Addresses.
+// g_rectOriginField is the pane the drag began in (Hex or Ascii) and is used by the
+// copy/paste matrix to tag the clipboard payload with kind = Bytes / Ascii. The address
+// column is not selectable — clicking there toggles a bookmark instead.
 static hexedit::RectSelection g_rectSelection;
 static bool g_rectActive = false;
 static bool g_isSelectingRect = false;
 static size_t g_rectAnchorOffset = 0;
 static HexCursorField g_rectOriginField = HexCursorField::Hex;
-static bool g_rectOriginIsAddress = false;
 
 static void zoomHexFont(NSInteger delta);
 static void resetHexFontZoom();
@@ -832,11 +829,9 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
     // Rect diagnostic fields. rectActive=1 when a rectangular selection is in place;
     // rectOrigin/rectWidth/rectHeight describe its anchor and size in bytes; rectBpr is
     // the bytes-per-row the rect was anchored to (lets a test detect stale rect after
-    // the user changes columns). rectOriginPane is "Hex" / "Ascii" / "Address" so chunk 3
-    // tests can confirm the source-pane tag will travel through to the clipboard.
-    NSString *rectOriginPane = g_rectOriginIsAddress
-        ? @"Address"
-        : (g_rectOriginField == HexCursorField::Ascii ? @"Ascii" : @"Hex");
+    // the user changes columns). rectOriginPane is "Hex" / "Ascii" so tests can confirm
+    // the source-pane tag will travel through to the clipboard.
+    NSString *rectOriginPane = (g_rectOriginField == HexCursorField::Ascii) ? @"Ascii" : @"Hex";
     return [NSString stringWithFormat:
             @"offset=%zu;selStart=%zu;selEnd=%zu;hasSelection=%d;statusH=%.1f;statusFontH=%.1f"
             @";sciSelStart=%lld;sciSelEnd=%lld;sciCaret=%lld;preferredLanguages=%@;userPrefs=%@"
@@ -1640,21 +1635,8 @@ static HexTableDataSource *hexTableDataSource = nil;
         NSString *identifier = tableColumn.identifier;
 
         if ([identifier isEqualToString:@"offset"]) {
-            // Address column: bare click toggles a bookmark; rect-modifier+click starts
-            // a row-granular rectangular selection (full row width).
-            if (isRectModifier && previewTotalLength > 0) {
-                clearAllByteSelections();
-                const size_t bpr = static_cast<size_t>(currentBytesPerRow());
-                const size_t rowStartOffset = static_cast<size_t>(row) * bpr;
-                g_rectAnchorOffset = rowStartOffset;
-                g_rectOriginIsAddress = true;
-                g_rectOriginField = HexCursorField::Hex;
-                g_isSelectingRect = true;
-                updateRectSelectionToOffset(rowStartOffset + bpr - 1);
-                [self.window makeFirstResponder:self];
-                [self reloadDataPreservingScrollOrigin:scrollOrigin];
-                return;
-            }
+            // Address column: not selectable. Click (with or without modifiers) toggles
+            // a bookmark on the row.
             toggleBookmarkRow(static_cast<size_t>(row));
             [self setNeedsDisplayInRect:[self rectOfRow:row]];
             return;
@@ -1668,7 +1650,6 @@ static HexTableDataSource *hexTableDataSource = nil;
                 // Byte-pane or ASCII-pane rect drag — cell granular.
                 clearAllByteSelections();
                 g_rectAnchorOffset = byteOffset;
-                g_rectOriginIsAddress = false;
                 g_rectOriginField = field;
                 g_isSelectingRect = true;
                 updateRectSelectionToOffset(byteOffset);
@@ -1698,17 +1679,6 @@ static HexTableDataSource *hexTableDataSource = nil;
     if (g_isSelectingRect) {
         NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
         const NSInteger row = [self rowAtPoint:point];
-
-        if (g_rectOriginIsAddress) {
-            // Row-only: track which row the pointer is over and rebuild the rect to
-            // span anchor's row..pointer's row, full row width.
-            if (row >= 0) {
-                const size_t bpr = static_cast<size_t>(currentBytesPerRow());
-                const size_t rowStartOffset = static_cast<size_t>(row) * bpr;
-                updateRectSelectionToOffset(rowStartOffset + bpr - 1);
-            }
-            return;
-        }
 
         size_t byteOffset = 0;
         NSInteger nibble = 0;
@@ -1829,7 +1799,6 @@ static HexTableDataSource *hexTableDataSource = nil;
             // Bootstrap a 1×1 rect at the caret on first extension.
             clearByteSelection();
             g_rectAnchorOffset = activeByteOffset;
-            g_rectOriginIsAddress = false;
             g_rectOriginField = activeCursorField;
             updateRectSelectionToOffset(activeByteOffset);
         }
@@ -2394,7 +2363,6 @@ static void clearRectSelection()
     g_rectSelection = hexedit::RectSelection{};
     g_isSelectingRect = false;
     g_rectAnchorOffset = 0;
-    g_rectOriginIsAddress = false;
     g_rectOriginField = HexCursorField::Hex;
 }
 
@@ -2404,33 +2372,21 @@ static void clearAllByteSelections()
     clearRectSelection();
 }
 
-// Build/update the rectangle from the stored anchor + a new endpoint. For an
-// address-pane drag, both anchor and end are snapped to row boundaries so the rect
-// always spans the full bytesPerRow width.
+// Build/update the rectangle from the stored anchor + a new endpoint.
 static void updateRectSelectionToOffset(size_t endOffset)
 {
     const size_t bpr = static_cast<size_t>(currentBytesPerRow());
     if (bpr == 0) {
         return;
     }
-    size_t anchor = g_rectAnchorOffset;
-    size_t end = endOffset;
-
-    if (g_rectOriginIsAddress) {
-        const size_t anchorRowStart = (anchor / bpr) * bpr;
-        const size_t endRowStart = (end / bpr) * bpr;
-        anchor = anchorRowStart;
-        end = endRowStart + (bpr - 1);
-    }
-
-    g_rectSelection = hexedit::makeRectSelection(anchor, end, bpr, previewTotalLength);
+    g_rectSelection = hexedit::makeRectSelection(g_rectAnchorOffset, endOffset, bpr, previewTotalLength);
     g_rectActive = g_rectSelection.active();
     if (g_rectActive) {
         // Track the active cursor at the dragged-to corner so the caret indicator
         // stays under the user's pointer / arrow keys.
-        activeByteOffset = std::min(end, previewTotalLength > 0 ? previewTotalLength - 1 : 0);
+        activeByteOffset = std::min(endOffset, previewTotalLength > 0 ? previewTotalLength - 1 : 0);
         activeHexNibble = 0;
-        activeCursorField = g_rectOriginIsAddress ? HexCursorField::Hex : g_rectOriginField;
+        activeCursorField = g_rectOriginField;
         clampActiveCursor();
     }
     if (hexTableView) {
@@ -2701,52 +2657,25 @@ static BOOL rectPayloadDecode(NSData *data,
 
 // Copy the active rectangular selection to the system pasteboard. Always emits the
 // custom UTI (so paste-back into this plugin gets the exact shape) plus a public-text
-// fallback for external apps. Source-pane chooses the kind tag and the text shape:
-// Address-pane drag → row of address strings; ASCII-pane drag → ASCII per row;
-// otherwise hex per row.
+// fallback (space-separated hex bytes per row) for external apps. The source-pane tag
+// distinguishes Bytes vs. Ascii so paste-back can preserve which pane drove the copy,
+// but the text representation is identical (hex bytes always — ASCII characters can
+// include unprintable bytes that would render as dots and lose the original data).
 static bool copyRectToPasteboard()
 {
     if (!hasRectSelection()) {
         return false;
     }
-    HexRectClipboardKind kind = HexRectClipboardKind::Bytes;
-    if (g_rectOriginIsAddress) {
-        kind = HexRectClipboardKind::Addresses;
-    } else if (g_rectOriginField == HexCursorField::Ascii) {
-        kind = HexRectClipboardKind::Ascii;
-    }
+    const HexRectClipboardKind kind = (g_rectOriginField == HexCursorField::Ascii)
+        ? HexRectClipboardKind::Ascii
+        : HexRectClipboardKind::Bytes;
 
     std::vector<std::uint8_t> payloadBytes;
-    if (kind != HexRectClipboardKind::Addresses) {
-        hexedit::extractRectBytes(previewBytes.data(), previewBytes.size(),
-                                   g_rectSelection, payloadBytes);
-    }
-    // Build the public-text fallback per kind so external apps see something useful.
-    std::string text;
-    if (kind == HexRectClipboardKind::Addresses) {
-        // Address-column drag: one address string per selected row.
-        const int addrWidth = std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH);
-        const std::size_t firstRow = g_rectSelection.originOffset / g_rectSelection.bytesPerRow;
-        for (std::size_t r = 0; r < g_rectSelection.height; ++r) {
-            if (r > 0) text.push_back('\n');
-            char buf[64];
-            std::snprintf(buf, sizeof(buf), "%0*zx", addrWidth,
-                          (firstRow + r) * g_rectSelection.bytesPerRow);
-            text += buf;
-        }
-    } else if (kind == HexRectClipboardKind::Ascii) {
-        text = hexedit::formatRectClipboardAscii(previewBytes.data(), g_rectSelection,
-                                                  previewBytes.size());
-    } else {
-        // Same documentation-friendly format as linear copy from the HEX pane:
-        // xxd-style addresses + bytes + ASCII gloss, scoped to the rect's columns.
-        // Custom UTI still carries the binary shape for shape-perfect round-trip
-        // back into the plugin; this text fallback is what other apps see.
-        text = hexedit::formatRectHexDump(previewBytes.data(), previewBytes.size(),
-                                           g_rectSelection,
-                                           std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH,
-                                                      HEX_MAX_ADDRESS_WIDTH));
-    }
+    hexedit::extractRectBytes(previewBytes.data(), previewBytes.size(),
+                               g_rectSelection, payloadBytes);
+    const std::string text = hexedit::formatRectClipboardHex(previewBytes.data(),
+                                                              g_rectSelection,
+                                                              previewBytes.size());
 
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
     [pasteboard clearContents];
@@ -2783,32 +2712,14 @@ static bool copyHexSelectionToPasteboard()
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
     [pasteboard clearContents];
 
-    if (activeCursorField == HexCursorField::Ascii) {
-        NSString *string = [[NSString alloc] initWithBytes:src length:byteCount encoding:NSUTF8StringEncoding];
-        if (string == nil) {
-            string = [[NSString alloc] initWithBytes:src length:byteCount encoding:NSWindowsCP1252StringEncoding];
-        }
-        if (string != nil) {
-            [pasteboard setString:string forType:NSPasteboardTypeString];
-        }
-    } else {
-        // Linear copy from the HEX byte pane: emit the documentation-friendly
-        // xxd-style format with addresses + ASCII gloss, mirroring what's on
-        // screen. The user's mental model is "Copy = text representation, Copy
-        // Binary Content = raw bytes" — this is the text path. Round-trip
-        // back into the plugin works because stripHexDumpAddressAndAscii in
-        // the inbound parser strips both columns natively.
-        std::string hexText = hexedit::formatHexDumpText(
-            previewBytes.data(),
-            previewBytes.size(),
-            offset,
-            offset + byteCount,
-            std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH),
-            currentBytesPerRow());
-        NSString *string = [NSString stringWithUTF8String:hexText.c_str()];
-        if (string != nil) {
-            [pasteboard setString:string forType:NSPasteboardTypeString];
-        }
+    // Always emit space-separated hex bytes as the public-text representation,
+    // regardless of which pane is active. ASCII text would lose information for any
+    // non-printable bytes (which become dots in the on-screen ASCII column), and the
+    // user has explicit "Copy Binary Content" if they want the raw bytes.
+    const std::string hexText = hexedit::formatHexClipboardText(src, byteCount);
+    NSString *string = [NSString stringWithUTF8String:hexText.c_str()];
+    if (string != nil) {
+        [pasteboard setString:string forType:NSPasteboardTypeString];
     }
 
     NSData *bytes = [NSData dataWithBytes:src length:byteCount];
@@ -3013,11 +2924,6 @@ static bool tryRectPasteFromPasteboard()
         height = static_cast<std::uint32_t>(parsedH);
         dataPtr = textParsedBytes.data();
         dataLength = static_cast<std::uint32_t>(textParsedBytes.size());
-    }
-
-    if (kind == HexRectClipboardKind::Addresses) {
-        presentHexValidationError(L(@"paste.rect.errorAddressSource"));
-        return true;
     }
 
     if (!hasRectSelection()) {

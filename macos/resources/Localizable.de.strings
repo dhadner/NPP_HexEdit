@@ -1,4 +1,4 @@
-/* Notepad++ HEX-Editor — Deutsch (de)
+/* Notepad++ HexEditor — Deutsch (de)
  *
  * Übersetzung des kanonischen Localizable.en.strings. Technische Begriffe
  * (Hex, ASCII, Cmd+F, 0x-Präfix) bleiben unverändert, weil sie auch im
@@ -8,7 +8,7 @@
  * übersetzen, in der CMakeLists.txt registrieren.
  */
 
-/* Plugin-Menü (Plugins > HEX-Editor > …) */
+/* Plugin-Menü (Plugins > HexEditor > …) */
 "menu.plugin.viewInHex"            = "In HEX anzeigen";
 "menu.plugin.compareHex"           = "HEX vergleichen";
 "menu.plugin.clearCompareResult"   = "Vergleichsergebnis löschen";
@@ -54,9 +54,9 @@
 "button.cancel"                    = "Abbrechen";
 
 /* App-/Dialog-Bezeichner */
-"app.title"                        = "HEX-Editor";
-"app.titleMac"                     = "HEX-Editor für macOS";
-"app.titleCompare"                 = "HEX-Editor Vergleich";
+"app.title"                        = "HexEditor";
+"app.titleMac"                     = "HexEditor für macOS";
+"app.titleCompare"                 = "HexEditor Vergleich";
 
 /* Adressbreite-Dialog */
 "addressWidth.title"               = "Adressbreite";
@@ -150,7 +150,7 @@
 "status.showingTruncated"          = "Zeige %1$zu von %2$zu Bytes. Vorschau ist aus Performance-Gründen gekürzt.";
 
 /* Über / Hilfe-Dialog */
-"about.body"                       = "Native macOS-Portierung des HEX-Editor-Plugins für Notepad++. Bietet eine eingebettete Hex-Tabelle mit direkter Byte-Bearbeitung, Auswahl, Lesezeichen, Suchen/Ersetzen, Vergleich und Ansichtswechsel.";
+"about.body"                       = "Native macOS-Portierung des HexEditor-Plugins für Notepad++. Bietet eine eingebettete Hex-Tabelle mit direkter Byte-Bearbeitung, Auswahl, Lesezeichen, Suchen/Ersetzen, Vergleich und Ansichtswechsel.";
 /* Diagnose-Zeile im Über-Dialog — zeigt die aktuell geladene .strings-Datei. */
 "about.localeTag"                  = "Strings: de";
 
@@ -166,7 +166,6 @@
 "status.rectangle"                 = "Rechteck: %1$lu × %2$lu (%3$lu Bytes)";
 
 /* Fehlerdialoge beim rechteckigen Einfügen (strikte Formprüfung, siehe DEVELOPER.md) */
-"paste.rect.errorAddressSource"      = "Adress-Auswahlen können nicht als Bytes eingefügt werden. Kopieren Sie ein Hex- oder ASCII-Rechteck und versuchen Sie es erneut.";
 "paste.rect.errorNeedsRectDestination" = "Das Ziel muss eine rechteckige Auswahl von %1$lu × %2$lu Bytes sein. Wahltaste+Ziehen (oder Umschalt+Wahltaste+Ziehen, je nach Einstellungen) erzeugt eine.";
 "paste.rect.errorShapeMismatch"      = "Das Ziel hat die falsche Größe — muss %1$lu Bytes breit und %2$lu Bytes hoch sein.";
 
@@ -174,8 +173,8 @@
 "patternReplace.messageRect"         = "Aktuelles %1$lu × %2$lu Rechteck mit einem sich wiederholenden Hex-Muster füllen.\nDas Muster beginnt am ersten Byte jeder Zeile neu.\n\nMuster: nur Hex-Bytes (z. B. 0xFF oder DE AD).";
 "patternReplace.summaryRect"         = "%1$lu × %2$lu Rechteck (%3$lu Bytes) mit dem Muster gefüllt.";
 
-/* Einstellungsdialog (Plugins > HEX-Editor > Einstellungen...) */
-"options.title"                    = "HEX-Editor-Einstellungen";
+/* Einstellungsdialog (Plugins > HexEditor > Einstellungen...) */
+"options.title"                    = "HexEditor-Einstellungen";
 "options.message"                  = "Plugin-weite Einstellungen. „Standardwerte zurücksetzen“ stellt die unten angezeigten Vorgaben wieder her; klicken Sie auf „Speichern“, um die Änderung zu übernehmen.";
 "options.button.save"              = "Speichern";
 "options.button.reset"             = "Standardwerte zurücksetzen";

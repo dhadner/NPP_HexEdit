@@ -36,7 +36,7 @@ void *resolve(void *handle, const char *symbol)
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: %s <path-to-HEX-Editor.dylib>\n", argv[0]);
+        std::fprintf(stderr, "usage: %s <path-to-HexEditor.dylib>\n", argv[0]);
         return 2;
     }
 
@@ -80,8 +80,8 @@ int main(int argc, char **argv)
     const char *name = getName();
     hexExpect(name != nullptr, "getName() returned NULL");
     if (name) {
-        hexExpect(std::strcmp(name, "HEX-Editor") == 0,
-                  std::string("getName() returned \"") + name + "\", expected \"HEX-Editor\"");
+        hexExpect(std::strcmp(name, "HexEditor") == 0,
+                  std::string("getName() returned \"") + name + "\", expected \"HexEditor\"");
     }
 
     int nbF = -1;
@@ -113,7 +113,7 @@ int main(int argc, char **argv)
     dlclose(handle);
 
     if (g_failures == 0) {
-        std::printf("PASS: HEX-Editor.dylib smoke test (%d assertions)\n", g_assertions);
+        std::printf("PASS: HexEditor.dylib smoke test (%d assertions)\n", g_assertions);
         return 0;
     }
     std::fprintf(stderr, "FAIL: %d/%d assertions failed\n", g_failures, g_assertions);

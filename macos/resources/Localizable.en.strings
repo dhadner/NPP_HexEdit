@@ -1,4 +1,4 @@
-/* Notepad++ HEX-Editor — English (en)
+/* Notepad++ HexEditor — English (en)
  *
  * Canonical translation source. The plugin reads this file at runtime; if it is
  * missing, the embedded English defaults in HexEditor.mm carry the UI.
@@ -8,7 +8,7 @@
  * translate the values, and install via the macos/CMakeLists.txt rules.
  */
 
-/* Plugin menu (Plugins > HEX-Editor > …) */
+/* Plugin menu (Plugins > HexEditor > …) */
 "menu.plugin.viewInHex"            = "View in HEX";
 "menu.plugin.compareHex"           = "Compare HEX";
 "menu.plugin.clearCompareResult"   = "Clear Compare Result";
@@ -54,9 +54,9 @@
 "button.cancel"                    = "Cancel";
 
 /* App / dialog identity */
-"app.title"                        = "HEX-Editor";
-"app.titleMac"                     = "HEX-Editor for macOS";
-"app.titleCompare"                 = "HEX-Editor Compare";
+"app.title"                        = "HexEditor";
+"app.titleMac"                     = "HexEditor for macOS";
+"app.titleCompare"                 = "HexEditor Compare";
 
 /* Address Width dialog */
 "addressWidth.title"               = "Address Width";
@@ -151,7 +151,6 @@
 "status.rectangle"                 = "Rectangle: %1$lu × %2$lu (%3$lu bytes)";
 
 /* Rectangular paste error dialogs (strict shape-match, see DEVELOPER.md) */
-"paste.rect.errorAddressSource"      = "Address selections cannot be pasted as bytes. Copy a hex or ASCII rectangle and try again.";
 "paste.rect.errorNeedsRectDestination" = "Destination must be a rectangular selection of %1$lu × %2$lu bytes. Option-drag (or Shift+Option-drag, per Options) to create one.";
 "paste.rect.errorShapeMismatch"      = "Destination is the wrong size — must be %1$lu bytes wide and %2$lu bytes high.";
 
@@ -160,7 +159,7 @@
 "patternReplace.summaryRect"         = "Filled %1$lu × %2$lu rectangle (%3$lu bytes) with the pattern.";
 
 /* About / help dialog */
-"about.body"                       = "Native macOS port of the Notepad++ HEX-Editor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.";
+"about.body"                       = "Native macOS port of the Notepad++ HexEditor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.";
 /* Diagnostic line in the About dialog — names the .strings file currently in
    use, so users (and the cascade XCTest) can see at a glance whether their
    translation loaded. Each shipped .strings file declares its own tag. */
@@ -174,8 +173,8 @@
 "table.header.offset"              = "Offset";
 "table.header.ascii"               = "ASCII";
 
-/* Options dialog (Plugins > HEX-Editor > Options...) */
-"options.title"                    = "HEX-Editor Options";
+/* Options dialog (Plugins > HexEditor > Options...) */
+"options.title"                    = "HexEditor Options";
 "options.message"                  = "Plugin-wide preferences. Reset restores the defaults shown below; click Save to apply.";
 "options.button.save"              = "Save";
 "options.button.reset"             = "Reset to Defaults";

@@ -105,17 +105,17 @@ set_target_properties(HexEditor PROPERTIES
     SUFFIX ".dylib"
     # OUTPUT_NAME is the on-disk file name; the CMake target name (HexEditor)
     # stays unchanged to keep cross-references stable. The shipped artifact is
-    # HEX-Editor.dylib because that's the directory + binary name the upstream
+    # HexEditor.dylib because that's the directory + binary name the upstream
     # Notepad++ plugin registry expects (must match the directory name under
     # ~/.notepad++/plugins/, see PLUGIN_INSTALL_DIR below).
-    OUTPUT_NAME "HEX-Editor"
+    OUTPUT_NAME "HexEditor"
 )
 
-set(PLUGIN_INSTALL_DIR "$ENV{HOME}/.notepad++/plugins/HEX-Editor")
+set(PLUGIN_INSTALL_DIR "$ENV{HOME}/.notepad++/plugins/HexEditor")
 install(TARGETS HexEditor DESTINATION "${PLUGIN_INSTALL_DIR}")
 
 # Localizable.<lang>.strings — the plugin reads these at runtime from the install
-# directory next to HEX-Editor.dylib. Embedded English defaults in HexEditor.mm
+# directory next to HexEditor.dylib. Embedded English defaults in HexEditor.mm
 # carry the UI when these files are missing, but shipping them is required for
 # any non-English language to render.
 set(HEX_LOCALIZATION_FILES
@@ -141,19 +141,19 @@ add_custom_command(TARGET HexEditor POST_BUILD
         ${HEX_LOCALIZATION_FILES}
         ${HEX_ICON_FILES}
         "$<TARGET_FILE_DIR:HexEditor>"
-    COMMENT "Copying Localizable.*.strings + toolbar icons next to HEX-Editor.dylib"
+    COMMENT "Copying Localizable.*.strings + toolbar icons next to HexEditor.dylib"
     VERBATIM
 )
 
 # Distribution zip: package the dylib + .strings + icons in a flat layout under a
-# top-level "HEX-Editor/" directory inside the archive, so unzipping into
-# ~/.notepad++/plugins/ produces the expected ~/.notepad++/plugins/HEX-Editor/
+# top-level "HexEditor/" directory inside the archive, so unzipping into
+# ~/.notepad++/plugins/ produces the expected ~/.notepad++/plugins/HexEditor/
 # layout. Built as a POST_BUILD step on the dylib target so every build produces
 # the artifact ready for upload to a GitHub Release; the .zip itself is gitignored.
-# Naming convention: nppHEX-EditorPlugin-x.y.z.zip per upstream NPP plugin
+# Naming convention: nppHexEditorPlugin-x.y.z.zip per upstream NPP plugin
 # distribution conventions.
-set(HEX_DIST_STAGING "${CMAKE_BINARY_DIR}/dist-staging/HEX-Editor")
-set(HEX_DIST_ZIP "${CMAKE_BINARY_DIR}/nppHEX-EditorPlugin-${PROJECT_VERSION}.zip")
+set(HEX_DIST_STAGING "${CMAKE_BINARY_DIR}/dist-staging/HexEditor")
+set(HEX_DIST_ZIP "${CMAKE_BINARY_DIR}/nppHexEditorPlugin-${PROJECT_VERSION}.zip")
 add_custom_command(TARGET HexEditor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E rm -rf "${HEX_DIST_STAGING}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${HEX_DIST_STAGING}"
@@ -164,8 +164,8 @@ add_custom_command(TARGET HexEditor POST_BUILD
         "${HEX_DIST_STAGING}"
     COMMAND ${CMAKE_COMMAND} -E rm -f "${HEX_DIST_ZIP}"
     COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_BINARY_DIR}/dist-staging"
-        ${CMAKE_COMMAND} -E tar c "${HEX_DIST_ZIP}" --format=zip "HEX-Editor"
-    COMMENT "Packaging nppHEX-EditorPlugin-${PROJECT_VERSION}.zip"
+        ${CMAKE_COMMAND} -E tar c "${HEX_DIST_ZIP}" --format=zip "HexEditor"
+    COMMENT "Packaging nppHexEditorPlugin-${PROJECT_VERSION}.zip"
     VERBATIM
 )
 

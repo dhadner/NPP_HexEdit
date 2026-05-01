@@ -54,7 +54,7 @@ The macOS port should use Scintilla as the source of truth for document bytes an
    Currently asserts:
 
    - All five exports resolve via `dlsym`: `setInfo`, `getName`, `getFuncsArray`, `beNotified`, `messageProc`.
-   - `getName()` returns `"HEX-Editor"`.
+   - `getName()` returns `"HexEditor"`.
    - `getFuncsArray(&n)` returns a non-NULL pointer with `n == 8`.
    - Each `funcItem[i]._itemName` matches the expected eight menu titles.
    - Each `funcItem[i]._pFunc` is non-NULL.
@@ -97,8 +97,8 @@ ctest --test-dir macos/build-universal -L xctest --output-on-failure
 Current XCTest coverage:
 
 - `testHostApplicationLaunches` — launches Notepad++ macOS via `XCUIApplication(url:)` and waits for foreground.
-- `testHexEditorPluginMenuIsPresent` — asserts the `HEX-Editor` submenu under `Plugins`.
-- `testViewInHexToggle` — toggles `Plugins > HEX-Editor > View in HEX` on and off, asserting the hex table appears and disappears (queried by accessibility identifier `hex-editor.table`).
+- `testHexEditorPluginMenuIsPresent` — asserts the `HexEditor` submenu under `Plugins`.
+- `testViewInHexToggle` — toggles `Plugins > HexEditor > View in HEX` on and off, asserting the hex table appears and disappears (queried by accessibility identifier `hex-editor.table`).
 - `testStatusLabelReportsByteCount` — seeds the buffer with a known string and asserts the status label reports the exact byte count.
 - `testEditMenuActionsRouteToHexOverlay` — with the hex overlay focused, asserts that `Cut`, `Copy`, `Paste`, `Delete`, and `Select All` in the host `Edit` menu are all *enabled*, proving the plugin's responder chain integration.
 - `testEditMenuCopyFromHexView` — Edit > Select All followed by Edit > Copy from a seeded "Hex" buffer round-trips through the system pasteboard and asserts the pasteboard string equals the lowercase space-separated hex form `"48 65 78"` (Windows-faithful Copy semantics).

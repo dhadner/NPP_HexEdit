@@ -100,43 +100,6 @@ std::string formatRectClipboardHex(const std::uint8_t *bytes,
                                    const RectSelection &rect,
                                    std::size_t totalLength);
 
-// Documentation-friendly xxd-style rendering of a linear byte range. Each output
-// row carries:
-//   * the row's file offset (zero-padded to addressWidth hex chars) + ":"
-//   * up to bytesPerRow space-separated 2-char hex bytes, with a 2-space gap
-//     between bytes (bytesPerRow/2 - 1) and (bytesPerRow/2) — the visual midpoint
-//   * a 2-space gap, then a printable-ASCII gloss (non-printable bytes → '.')
-// Bytes outside [startOffset, endOffset) on a partial-row selection are rendered
-// as blanks so multi-row output stays column-aligned. This is the format pasted
-// into Markdown / READMEs / crash reports / GitHub issues / etc., and round-trips
-// back into the plugin via stripHexDumpAddressAndAscii in the inbound parser.
-//
-// Caller chooses bytesPerRow (typically the live hex view's currentBytesPerRow())
-// and addressWidth (typically the live g_addressWidth pref). Lowercase hex is
-// emitted to match the on-screen rendering.
-std::string formatHexDumpText(const std::uint8_t *bytes,
-                              std::size_t totalLength,
-                              std::size_t startOffset,
-                              std::size_t endOffset,
-                              int addressWidth,
-                              int bytesPerRow);
-
-// Same xxd-style output, scoped to a rectangular selection. Each rect row
-// becomes one output line containing the row's address, the rect's `width`
-// hex bytes, and the corresponding ASCII gloss. Bytes past EOF on the trailing
-// row are blanked (matches formatHexDumpText's column-aligned partial behavior).
-std::string formatRectHexDump(const std::uint8_t *bytes,
-                              std::size_t totalLength,
-                              const RectSelection &rect,
-                              int addressWidth);
-
-// ASCII-text rendering of a rectangle: each row's bytes shown as printable ASCII
-// (32..126); non-printable bytes become '.'. Rows joined by '\n'. Symmetric in shape
-// with formatRectClipboardHex but emitted when the rect's source pane is ASCII.
-std::string formatRectClipboardAscii(const std::uint8_t *bytes,
-                                     const RectSelection &rect,
-                                     std::size_t totalLength);
-
 // Parse a `\n`-separated text clipboard back into a rectangular byte buffer. Each
 // non-empty line is treated as one row; the parser accepts either hex byte tokens
 // (e.g. "DE AD BE EF" or "DEADBEEF") or, if every line fails as hex, the raw bytes
@@ -193,7 +156,8 @@ extern const std::size_t kRectPayloadHeaderSize;
 enum class RectClipboardKind : std::uint8_t {
     Bytes = 0,
     Ascii = 1,
-    Addresses = 2,
+    // (kind=2 was Addresses, retired in v1.1.x — the address column is no
+    // longer selectable so address-source clipboards no longer exist.)
 };
 
 struct RectPayload {

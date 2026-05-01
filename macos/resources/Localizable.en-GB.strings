@@ -1,4 +1,4 @@
-/* Notepad++ HEX-Editor — British English (en-GB)
+/* Notepad++ HexEditor — British English (en-GB)
  *
  * Regional override file. Contains ONLY keys whose value differs from
  * Localizable.en.strings — the cascade in HexEditor.mm walks en-GB first, then

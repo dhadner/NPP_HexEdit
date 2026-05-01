@@ -14,7 +14,7 @@
 #   - Locates the NPP_HexEdit checkout via the shared folder mount
 #   - Builds the plugin to a VM-LOCAL build directory (~/build-NPP_HexEdit)
 #     so the shared filesystem doesn't slow each compile
-#   - Installs the plugin to ~/.notepad++/plugins/HEX-Editor/ in the guest
+#   - Installs the plugin to ~/.notepad++/plugins/HexEditor/ in the guest
 #   - Runs the unit + smoke tiers as a sanity check
 #
 # Usage:
@@ -109,10 +109,10 @@ cmake -S "$NPP_HEXEDIT/macos" -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
     -DNPP_MACOS_DIR="$NPP_MACOS"
 
-log "Building HEX-Editor.dylib..."
+log "Building HexEditor.dylib..."
 cmake --build "$BUILD_DIR"
 
-log "Installing plugin to ~/.notepad++/plugins/HEX-Editor/..."
+log "Installing plugin to ~/.notepad++/plugins/HexEditor/..."
 cmake --install "$BUILD_DIR"
 
 # Sanity tests — these don't need the host app and finish in <1s.

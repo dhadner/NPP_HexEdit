@@ -41,7 +41,7 @@ ctest --test-dir ../build-universal -L xctest --output-on-failure
 ## Current coverage
 
 - `testHostApplicationLaunches` — launches Notepad++ macOS via `XCUIApplication(url:)` and verifies it foregrounds.
-- `testHexEditorPluginMenuIsPresent` — clicks the `Plugins` menu and verifies `HEX-Editor` is present.
+- `testHexEditorPluginMenuIsPresent` — clicks the `Plugins` menu and verifies `HexEditor` is present.
 - `testViewInHexToggle` — toggles the hex overlay on/off and asserts the table appears/disappears.
 - `testStatusLabelReportsByteCount` — seeds buffer and asserts the status label reports the exact byte count.
 - `testEditMenuActionsRouteToHexOverlay` — `Cut`/`Copy`/`Paste`/`Delete`/`Select All` in the host Edit menu are all enabled when the hex overlay has focus.

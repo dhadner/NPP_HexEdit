@@ -1,6 +1,6 @@
 # Developer guide
 
-How to build, test, and contribute to the macOS port of the Notepad++ HEX-Editor
+How to build, test, and contribute to the macOS port of the Notepad++ HexEditor
 plugin. If you only want to *use* the plugin, see [README.md](README.md) instead.
 
 ## Quick start
@@ -25,7 +25,7 @@ ctest --test-dir macos/build-universal -L "unit|smoke" --output-on-failure
 ```
 
 If the unit + smoke tiers pass and the host launches with the plugin enabled
-(Plugins → HEX-Editor menu present), you have a working dev loop.
+(Plugins → HexEditor menu present), you have a working dev loop.
 
 ## Prerequisites
 
@@ -123,7 +123,7 @@ NPP_MACOS_APP=/Applications/Notepad++.app macos/ui-tests-xcode/run-tests.sh
 
 The risk: if the installed binary was built against a different version of
 the NPP plugin API than your headers, the plugin can fail to load at runtime
-(symptom: HEX-Editor doesn't appear under the host's Plugins menu). When the
+(symptom: HexEditor doesn't appear under the host's Plugins menu). When the
 host's plugin API is stable, this isn't an issue. If you see the plugin not
 load, build the host from source and try again — that eliminates version
 drift as a variable.
@@ -138,7 +138,7 @@ Either way, the plugin itself rebuilds in seconds every time you change a
 cmake -S macos -B macos/build-universal -DCMAKE_BUILD_TYPE=Release
 cmake --build macos/build-universal
 
-# Install to ~/.notepad++/plugins/HEX-Editor/ (also copies the .strings files + toolbar icons).
+# Install to ~/.notepad++/plugins/HexEditor/ (also copies the .strings files + toolbar icons).
 cmake --install macos/build-universal
 ```
 
@@ -174,7 +174,7 @@ A "does the plugin even load?" test. It dynamically loads the built `.dylib`
 file and checks that:
 
 - the five functions Notepad++ expects to find are all there
-- `getName()` returns `"HEX-Editor"`
+- `getName()` returns `"HexEditor"`
 - the right number of menu items are registered, with the expected English titles
 
 The test forces the plugin to use English so the title assertions don't depend
@@ -453,7 +453,7 @@ The plugin is two files plus a header: an Objective-C++ adapter
   → write it in `HexEditor.mm`. If it produces state worth checking from a
   test, expose it through the diagnostic accessibility element
   (`hex-editor.cursor.diagnostic`) so the test suite can read it.
-- **A new top-level menu entry under Plugins → HEX-Editor** → register it in
+- **A new top-level menu entry under Plugins → HexEditor** → register it in
   the plugin's `setInfo` function (which sets the menu count and the title
   of each entry), then update `HexEditorPluginSmokeTests` so it asserts the
   new count and title.
@@ -481,22 +481,24 @@ Three layers, mirrored across `HexCore` and `HexEditor.mm`:
   map to the same bytes on screen.
 - **Interaction** in `HexEditor.mm` — `mouseDown:` / `mouseDragged:` /
   `mouseUp:` branch on a modifier match against `currentRectModifierFlags()`
-  (Option or Shift+Option, per Options dialog). Address-column drags snap
-  to whole-row width. `keyDown:` matches Shift+modifier+arrow before the
-  plain-arrow switch and bootstraps a 1×1 rect at the caret on first use.
-  Plain arrows / typing / `clearAllByteSelections()` collapse the rect.
+  (Option or Shift+Option, per Options dialog). Drags only originate in
+  the hex byte or ASCII pane; clicks on the address column toggle a
+  bookmark on the row regardless of modifier. `keyDown:` matches
+  Shift+modifier+arrow before the plain-arrow switch and bootstraps a 1×1
+  rect at the caret on first use. Plain arrows / typing /
+  `clearAllByteSelections()` collapse the rect.
 - **Clipboard** — every rect copy emits two pasteboard items: a
-  public-text fallback (hex per row, ASCII per row, or address strings
-  joined by `\n` depending on the source pane) for cross-app use, plus a
-  custom UTI `org.notepad-plus-plus.HexEditor.rectangular` that carries
-  a 20-byte header (`HXR1` magic, version, kind, width, height,
-  dataLength) followed by the raw bytes. Paste reads the custom UTI
-  first (preserving shape and source-pane kind), falling back to
+  public-text fallback (space-separated hex bytes per row, joined by
+  `\n`) for cross-app use, plus a custom UTI
+  `org.notepad-plus-plus.HexEditor.rectangular` that carries a 20-byte
+  header (`HXR1` magic, version, kind, width, height, dataLength)
+  followed by the raw bytes. Paste reads the custom UTI first
+  (preserving shape and source-pane kind), falling back to
   `parseRectClipboardText` on the public-text payload when no custom UTI
-  is present. Source-pane `kind = Addresses` is rejected at paste time as
-  "cannot paste as bytes"; `kind = Bytes` and `kind = Ascii` are
-  interchangeable since both carry the same byte data with different
-  display interpretations. Strict shape-match — `dest.width × dest.height`
+  is present. `kind = Bytes` and `kind = Ascii` are interchangeable
+  since both carry the same byte data with different display
+  interpretations — the address column is not selectable, so address-source
+  clipboards do not exist. Strict shape-match — `dest.width × dest.height`
   must equal payload `width × height` — is enforced before any byte is
   written.
 

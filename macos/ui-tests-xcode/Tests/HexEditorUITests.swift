@@ -34,8 +34,8 @@ private struct HexCursorState {
     let rectWidth: Int?
     let rectHeight: Int?
     let rectBpr: Int?
-    /// Source pane the rectangular drag originated in: "Hex", "Ascii", or "Address".
-    /// Used by chunk 3 paste-matrix tests to confirm the source-pane tag survives.
+    /// Source pane the rectangular drag originated in: "Hex" or "Ascii". Used by
+    /// paste-matrix tests to confirm the source-pane tag survives the round-trip.
     let rectOriginPane: String?
 
     /// Compact dump of all fields for failure messages.
@@ -183,8 +183,8 @@ final class HexEditorUITests: XCTestCase {
         XCTAssertTrue(pluginsMenu.waitForExistence(timeout: 5), "The Plugins menu is not visible.")
         pluginsMenu.click()
 
-        let hexEditorItem = app.menuBars.menuItems["HEX-Editor"]
-        XCTAssertTrue(hexEditorItem.waitForExistence(timeout: 5), "The HEX-Editor plugin menu is not visible under Plugins. Install the plugin first with cmake --install macos/build-universal.")
+        let hexEditorItem = app.menuBars.menuItems["HexEditor"]
+        XCTAssertTrue(hexEditorItem.waitForExistence(timeout: 5), "The HexEditor plugin menu is not visible under Plugins. Install the plugin first with cmake --install macos/build-universal.")
     }
 
     func testOptionsDialogOpensAndCancelsCleanly() throws {
@@ -303,22 +303,8 @@ func testStatusLabelReportsByteCount() throws {
 
         let copied = pasteboard.string(forType: .string)
         XCTAssertNotEqual(copied, sentinel, "Copy from the Edit menu should have replaced the sentinel.")
-        XCTAssertNotNil(copied, "Pasteboard should contain a string after Copy.")
-        // As of v1.1.x, Copy from the HEX pane emits the documentation-friendly
-        // xxd-style format that mirrors what's on screen: address, hex bytes (with
-        // mid-row gap when applicable), and ASCII gloss. Round-trip back into the
-        // plugin still works because the inbound parser strips both columns.
-        // "Hex" = 0x48 0x65 0x78. Validate the structural shape via substrings
-        // (a literal exact-string assert is brittle to spacing tweaks).
-        let copyText = copied ?? ""
-        XCTAssertTrue(copyText.hasPrefix("00000000: "),
-                      "Copy text should start with the row address. Got: \(copyText)")
-        XCTAssertTrue(copyText.contains("48 65 78"),
-                      "Copy text should contain the three hex bytes 'Hex'. Got: \(copyText)")
-        XCTAssertTrue(copyText.contains("Hex"),
-                      "Copy text should contain the ASCII gloss 'Hex'. Got: \(copyText)")
-        XCTAssertTrue(copyText.hasSuffix("\n"),
-                      "Copy text should end with a newline. Got: \(copyText)")
+        // "Hex" = 0x48 0x65 0x78 — the bare hex byte string is what Copy emits.
+        XCTAssertEqual(copied, "48 65 78", "Copy from the Edit menu should put the bare hex bytes for 'Hex' on the pasteboard.")
     }
 
     func testHexByteAppendUndoRedo() throws {
@@ -1802,97 +1788,6 @@ func testContextMenuCommands() throws {
     // are the in-suite end-to-end check that the clipboard plumbing applies
     // the preprocessor on the real Edit > Paste path.
 
-    func testCopyOutbound_SelectAllProducesXxdStyleTextForDocumentation() throws {
-        // The motivating use case: "Cmd-A → Copy → paste into a crash report,
-        // README, or text doc" should yield the hex-dump representation that
-        // mirrors what's on screen — addresses, hex bytes, and ASCII gloss —
-        // not the bare raw-hex string that v1.0.0 emitted (useless as docs).
-        // Copy Binary Content remains the explicit binary path; Copy is now
-        // the text path, matching the user's mental model.
-
-        let app = try launchNotepad()
-        defer { app.terminate() }
-
-        // 32 bytes of distinct content so addresses on row 0 and row 1 are
-        // both meaningful and the ASCII gloss is recognisable.
-        try createBufferWithText(app: app, text: "ABCDEFGHIJKLMNOPabcdefghijklmnop")
-        try invokeHexEditorMenu(app: app, item: "View in HEX")
-        Thread.sleep(forTimeInterval: 1.0)
-
-        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
-        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
-        try positionHexCursorAtZero(app: app, hexTable: hexTable)
-
-        // Edit > Select All — selects all 32 bytes linearly.
-        invokeEditMenuItem(app: app, item: "Select All")
-
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString("__sentinel__", forType: .string)
-
-        invokeEditMenuItem(app: app, item: "Copy")
-
-        let copied = pasteboard.string(forType: .string) ?? ""
-        XCTAssertNotEqual(copied, "__sentinel__",
-                          "Copy must replace the pasteboard sentinel.")
-
-        // Two rows expected: row 0 starts at address 00000000 with bytes A..P,
-        // row 1 at address 00000010 with bytes a..p. Each row has the
-        // ASCII gloss to the right.
-        XCTAssertTrue(copied.contains("00000000: 41 42 43 44 45 46 47 48"),
-                      "Row 0 should start with address + first 8 bytes of 'ABCDEFGHIJKLMNOP'. Got: \(copied)")
-        XCTAssertTrue(copied.contains("49 4A 4B 4C 4D 4E 4F 50"),
-                      "Row 0 should continue with bytes 8..15. Got: \(copied)")
-        XCTAssertTrue(copied.contains("ABCDEFGHIJKLMNOP"),
-                      "Row 0 should end with ASCII gloss 'ABCDEFGHIJKLMNOP'. Got: \(copied)")
-        XCTAssertTrue(copied.contains("00000010: 61 62 63 64 65 66 67 68"),
-                      "Row 1 should start with address 00000010 + lowercase bytes. Got: \(copied)")
-        XCTAssertTrue(copied.contains("abcdefghijklmnop"),
-                      "Row 1 should end with ASCII gloss 'abcdefghijklmnop'. Got: \(copied)")
-    }
-
-    func testCopyOutbound_RectExportsAsHexDumpTextWithAddresses() throws {
-        // Rectangular Copy from the HEX pane should likewise produce a
-        // documentation-friendly multi-line hex-dump scoped to the rect's
-        // columns — each output row with the row's actual file offset, the
-        // selected bytes, and an ASCII gloss for those bytes.
-
-        let app = try launchNotepad()
-        defer { app.terminate() }
-
-        try createBufferWithText(app: app, text: "ABCDEFGHIJKLMNOPabcdefghijklmnop")
-        try invokeHexEditorMenu(app: app, item: "View in HEX")
-        Thread.sleep(forTimeInterval: 1.0)
-
-        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
-        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
-
-        // Position at offset 4 and build a 4×2 rect spanning bytes 4..7 and 20..23.
-        try positionHexCursorAt(app: app, hexTable: hexTable, offset: 4)
-        extendRectViaKeyboard(app: app, addCols: 3, addRows: 1)
-
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString("__sentinel__", forType: .string)
-
-        invokeEditMenuItem(app: app, item: "Copy")
-
-        let copied = pasteboard.string(forType: .string) ?? ""
-        XCTAssertNotEqual(copied, "__sentinel__")
-
-        // Expected rows (rect at offset 4, width 4, height 2):
-        //   00000004: 45 46 47 48  EFGH
-        //   00000014: 65 66 67 68  efgh
-        XCTAssertTrue(copied.contains("00000004: 45 46 47 48"),
-                      "Rect row 0 should start at address 00000004 with bytes 'EFGH'. Got: \(copied)")
-        XCTAssertTrue(copied.contains("EFGH"),
-                      "Rect row 0 should end with ASCII gloss 'EFGH'. Got: \(copied)")
-        XCTAssertTrue(copied.contains("00000014: 65 66 67 68"),
-                      "Rect row 1 should start at address 00000014 with lowercase bytes. Got: \(copied)")
-        XCTAssertTrue(copied.contains("efgh"),
-                      "Rect row 1 should end with ASCII gloss 'efgh'. Got: \(copied)")
-    }
-
     func testCrossAppPaste_LldbMemoryDumpLineSurvivesAddressAndAsciiStripping() throws {
         let app = try launchNotepad()
         defer { app.terminate() }
@@ -2312,13 +2207,13 @@ func testContextMenuCommands() throws {
         XCTAssertTrue(pluginsMenu.waitForExistence(timeout: 30))
         pluginsMenu.click()
 
-        let hexEditorItem = app.menuBars.menuItems["HEX-Editor"]
+        let hexEditorItem = app.menuBars.menuItems["HexEditor"]
         XCTAssertTrue(hexEditorItem.waitForExistence(timeout: 30),
-                      "HEX-Editor submenu didn't appear within 30 s — host may still be loading a large file.")
+                      "HexEditor submenu didn't appear within 30 s — host may still be loading a large file.")
         hexEditorItem.hover()
 
         let leafItem = app.menuBars.menuItems[leaf]
-        XCTAssertTrue(leafItem.waitForExistence(timeout: 30), "Plugins > HEX-Editor > \(leaf) is not visible.")
+        XCTAssertTrue(leafItem.waitForExistence(timeout: 30), "Plugins > HexEditor > \(leaf) is not visible.")
         leafItem.click()
     }
 

@@ -4,11 +4,11 @@ A hex editor plugin for Notepad++.
 
 This repo holds two versions of the same plugin:
 
-- **The original Windows version** (`HexEditor/`) — Jens Lorenz's HEX-Editor
+- **The original Windows version** (`HexEditor/`) — Jens Lorenz's HexEditor
   v0.9.x, copied without changes from
   [SourceForge](https://sourceforge.net/projects/npp-plugins/files/Hex%20Editor/).
 - **A macOS port** (`macos/`) — a fresh rewrite that runs as a plugin file
-  (`HEX-Editor.dylib`) inside [Notepad++ macOS](https://github.com/notepad-plus-plus-macos).
+  (`HexEditor.dylib`) inside [Notepad++ macOS](https://github.com/notepad-plus-plus-macos).
   ".dylib" is just the macOS file extension for a dynamically loaded library;
   Notepad++ loads it on launch.
 
@@ -18,7 +18,7 @@ This repo holds two versions of the same plugin:
 | --- | --- |
 | Editing | Direct byte overwrite + append in hex and ASCII panes; bit-precise editing in binary notation |
 | Linear clipboard | Copy / Cut / Paste with Windows-faithful semantics — Copy emits hex string text, Copy Binary emits raw bytes |
-| Rectangular (block) selection | Option-drag (or Shift+Option, configurable in Options) draws a 2D rectangle in hex bytes / ASCII / address columns. Shift+Option+arrows extend it. Cut / Copy / Paste / Delete work on the rectangle as a unit; Pattern Replace fills it row-by-row with the pattern restarting at each row's first byte |
+| Rectangular (block) selection | Option-drag (or Shift+Option, configurable in Options) draws a 2D rectangle in the hex bytes or ASCII columns. Shift+Option+arrows extend it. Cut / Copy / Paste / Delete work on the rectangle as a unit; Pattern Replace fills it row-by-row with the pattern restarting at each row's first byte |
 | Strict-shape paste | Rectangular paste only lands when the destination is also a rect of the exact same width × height; mismatch shows a clarifying dialog. Carries a custom pasteboard type so a copy-then-paste round-trip preserves shape and source-pane kind |
 | View modes | 8/16/32/64-bit grouping, hex/binary notation, big/little-endian display order, configurable address width and columns |
 | Search | Find, Find and Replace, Find Next/Previous (Cmd+F / Cmd+G / Cmd+Shift+G); auto-detects ASCII vs hex byte patterns |
@@ -26,7 +26,7 @@ This repo holds two versions of the same plugin:
 | Compare | Compare HEX against any file — differing bytes highlighted in red; one click clears the result |
 | Pattern | Insert Columns (inject a hex pattern into every row) and Pattern Replace (fill the selection with a repeating pattern; works on linear and rectangular selections) |
 | Zoom | Cmd+Scroll or two-finger trackpad pinch resizes the hex font (matches Scintilla's behavior in the host's text views) |
-| Options | Plugin-wide preferences dialog (Plugins → HEX-Editor → Options...). Today: rectangular-selection modifier (Option vs Shift+Option). Designed to grow without churning the main menu |
+| Options | Plugin-wide preferences dialog (Plugins → HexEditor → Options...). Today: rectangular-selection modifier (Option vs Shift+Option). Designed to grow without churning the main menu |
 | Persistence | View mode, address width, columns, find options, and the rect-modifier choice persist via `NSUserDefaults` (`org.notepad-plus-plus.HexEditor`) |
 | Localization | English (en, en-GB, en-US) and German (de) shipped; add a new language by translating `Localizable.<lang>.strings`. Multi-parameter strings use numbered placeholders so translators can reorder freely |
 | Appearance | Semantic `NSColor` values throughout — dark mode and accent-colour preferences inherit from the host |
@@ -46,10 +46,10 @@ cmake --install macos/build-universal                                 # copy the
 The install step copies the plugin and its language files to:
 
 ```text
-~/.notepad++/plugins/HEX-Editor/
+~/.notepad++/plugins/HexEditor/
 ```
 
-Restart Notepad++ macOS. You'll see a new **Plugins → HEX-Editor** submenu with seven entries:
+Restart Notepad++ macOS. You'll see a new **Plugins → HexEditor** submenu with seven entries:
 View in HEX, Compare HEX, Clear Compare Result, Insert Columns, Pattern Replace, Options, and Help.
 
 The build expects to find a checkout of `notepad-plus-plus-macos` next to this

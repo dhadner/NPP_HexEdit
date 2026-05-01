@@ -1,6 +1,6 @@
 # Changelog
 
-This file lists what's changed in the macOS port of the HEX-Editor plugin. The
+This file lists what's changed in the macOS port of the HexEditor plugin. The
 original Windows version, kept untouched in [HexEditor/](HexEditor/), has its
 own history in [HexEditor/change.log](HexEditor/change.log).
 
@@ -14,22 +14,20 @@ numbered positional syntax so translators can reorder freely.
 
 ### What's new
 
-- **Rectangular drag** — Option-drag inside the hex byte pane or ASCII pane draws a 2D rectangle (cell-granular). Option-drag in the address column drags whole rows (full bytes-per-row width). The modifier is configurable in the new Options dialog (Option, matching Scintilla / Windows; or Shift+Option, matching VS Code).
+- **Rectangular drag** — Option-drag inside the hex byte pane or ASCII pane draws a 2D rectangle (cell-granular). The address column is not selectable (clicks toggle a bookmark, with or without modifiers). The modifier is configurable in the new Options dialog (Option, matching Scintilla / Windows; or Shift+Option, matching VS Code).
 - **Keyboard extension** — Shift+Option+arrow keys grow / shrink the rectangle from the dragged-to corner; the first such press while no rect is active bootstraps a 1×1 rect at the caret. Plain arrow / Home / End / typing any character collapses the rect (typing replaces it with normal byte editing at the cursor).
-- **Cut / Copy / Paste / Delete on a rectangle** — Copy emits both a public-text fallback (hex per row, or ASCII per row, or address strings, joined by `\n` depending on the source pane) and a custom pasteboard type `org.notepad-plus-plus.HexEditor.rectangular` carrying a `kind` tag (Bytes / Ascii / Addresses) plus the rectangle's shape. Round-tripping through the plugin's clipboard preserves geometry. Delete is zero-fill (file size unchanged, offsets preserved).
-- **Strict-shape paste** — Pasting a rectangular payload requires the destination to be a rectangle of the exact same width × height. Mismatches show a clarifying dialog naming the required dimensions. Address-source clipboards are rejected with "cannot paste as bytes" since they're meta about the data, not the data itself. External text-only clipboards (no custom UTI) are parsed as `\n`-separated rows per the same rules; single-line text falls through to the existing linear paste path so cross-app copy/paste behaves as before.
+- **Cut / Copy / Paste / Delete on a rectangle** — Copy emits a public-text fallback (space-separated hex bytes per row, joined by `\n`) and a custom pasteboard type `org.notepad-plus-plus.HexEditor.rectangular` carrying a `kind` tag (Bytes / Ascii) plus the rectangle's shape. Round-tripping through the plugin's clipboard preserves geometry. Delete is zero-fill (file size unchanged, offsets preserved).
+- **Strict-shape paste** — Pasting a rectangular payload requires the destination to be a rectangle of the exact same width × height. Mismatches show a clarifying dialog naming the required dimensions. External text-only clipboards (no custom UTI) are parsed as `\n`-separated rows per the same rules; single-line text falls through to the existing linear paste path so cross-app copy/paste behaves as before.
 - **Pattern Replace on a rectangle** fills row-by-row with the pattern restarting at each row's first byte — matches the Windows `eSel::HEX_SEL_BLOCK` semantics. Dialog wording forks: the rect path explains the per-row restart so the user knows it won't run continuously across rows.
-- **Options dialog** (Plugins → HEX-Editor → Options...) — the menu entry removed in 0457695 returns, now backing real settings rather than a stub. Today's only entry is the rectangular-selection modifier; the layout is built so additional preferences can be appended without restructuring or churning the plugin menu.
+- **Options dialog** (Plugins → HexEditor → Options...) — the menu entry removed in 0457695 returns, now backing real settings rather than a stub. Today's only entry is the rectangular-selection modifier; the layout is built so additional preferences can be appended without restructuring or churning the plugin menu.
 - **Numbered localized parameters** — every `.strings` key with two or more format placeholders now uses numbered positional syntax (`%1$d`, `%2$@`, ...) so translators can swap parameter order. The dynamic-width address formatting in `goto.message` was refactored at the call site to pre-format the hex strings, leaving translators with simple `%1$@` / `%2$@` slots they don't need printf knowledge to translate.
-- **Renamed plugin binary + install dir to `HEX-Editor`**. Was `HexEditor.dylib` under `~/.notepad++/plugins/HexEditor/`; now `HEX-Editor.dylib` under `~/.notepad++/plugins/HEX-Editor/` to match the upstream Notepad++ plugin-registry convention (which uses the directory name as the plugin identifier and expects it to match the binary name). Existing v1.0.0 installs at the old path are not auto-migrated — uninstall the old directory or move it manually.
 - **Toolbar icons shipped** (`toolbar.png` light + `toolbar_dark.png` dark) inside the plugin directory next to the dylib + `.strings` files, ready for the host's eventual toolbar-registration API hookup.
-- **Build now produces a distribution zip** (`nppHEX-EditorPlugin-1.1.0.zip`) on every successful build, in the build directory's root. Contains the dylib + 4 `.strings` files + 2 toolbar icons in a flat `HEX-Editor/` top-level directory so unzipping into `~/.notepad++/plugins/` produces the right install layout. The zip is the artifact to upload to a GitHub Release; not checked into the repo.
+- **Build now produces a distribution zip** (`nppHexEditorPlugin-1.1.0.zip`) on every successful build, in the build directory's root. Contains the dylib + 4 `.strings` files + 2 toolbar icons in a flat `HexEditor/` top-level directory so unzipping into `~/.notepad++/plugins/` produces the right install layout. The zip is the artifact to upload to a GitHub Release; not checked into the repo.
 - **Cross-app paste from debugger / hex-tool output** — the linear and rectangular paste paths now strip the address column and trailing ASCII gloss from clipboard text emitted by lldb (`memory read`), gdb (`x/16xb`), xxd, x64dbg, IDA (`segment:offset`), C-string escape sequences (`\x48\x65...`), and C array literals (`{0x48, 0x65, ...}`). Pre-fix the linear parser silently parsed the address bytes as part of the data — anyone who tried `Cmd+V` from `lldb` got `0x10 0x00 0x00 ...` prepended to their buffer without an error. Now the data lands cleanly.
-- **Copy emits xxd-style hex dump text** (linear + rectangular). The user mental model is "Copy Binary Content = raw bytes, regular Copy = text representation of what you see" — and the on-screen text representation is the address + hex bytes + ASCII gloss. So `Cmd+A` → `Cmd+C` → paste into a Markdown / README / crash report / GitHub issue gets you the hex dump as text that round-trips back into the plugin via the inbound parser. v1.0.0 emitted the bare `48 65 6c 6c 6f` hex string which was useless as documentation; for that legacy use case (`Python bytes.fromhex`, `xxd -r -p`, etc.), use `Copy Binary Content` and have the receiving tool work directly with the bytes, or paste the hex dump into a tool that strips addresses (which now includes us). Rect copy follows the same shape — multi-line hex dump scoped to the rect's columns. Custom-UTI paste-back into the plugin still uses the binary payload for shape-perfect round-trip; only the public-text fallback changed.
 
 ### v1.1.0 test additions
 
-- **HexCore** added 4 new suites: `extractRectBytes`, `formatRectClipboardHex`, `formatRectClipboardAscii`, and `parseRectClipboardText` (which exercises the external-text inbound parser — `\n`-separated hex with mixed separators, raw-ASCII fallback when any line fails as hex, CRLF tolerance, shape-mismatch rejection, empty/blank rejection). 30 suites total, all green.
+- **HexCore** added 3 new suites: `extractRectBytes`, `formatRectClipboardHex`, and `parseRectClipboardText` (which exercises the external-text inbound parser — `\n`-separated hex with mixed separators, raw-ASCII fallback when any line fails as hex, CRLF tolerance, shape-mismatch rejection, empty/blank rejection). 34 suites total, all green.
 - **Smoke** updated for the 7-item menu (View in HEX, Compare HEX, Clear Compare Result, Insert Columns, Pattern Replace, Options, Help).
 - **UI** — diagnostic AX value extended with rect fields (`rectActive`, `rectOrigin`, `rectWidth`, `rectHeight`, `rectBpr`, `rectOriginPane`) so future tests can verify rect state structurally rather than via fragile drag mechanics. The Swift `HexCursorState` parser was updated in lock-step. New test: Options dialog opens and cancels cleanly.
 
@@ -224,7 +222,7 @@ Currently covers `hexDigitValue`, `isVisibleEditableOffset`, cursor movement (`c
 ctest --test-dir macos/build-universal -L smoke --output-on-failure
 ```
 
-Asserts that `setInfo`, `getName`, `getFuncsArray`, `beNotified`, and `messageProc` resolve via `dlsym`; that `getName()` returns `"HEX-Editor"`; that `getFuncsArray` reports 8 menu entries with the expected titles and non-NULL callbacks. `setInfo` is called with a zeroed `NppData` first because the plugin populates `funcItem[]` inside that handler.
+Asserts that `setInfo`, `getName`, `getFuncsArray`, `beNotified`, and `messageProc` resolve via `dlsym`; that `getName()` returns `"HexEditor"`; that `getFuncsArray` reports 8 menu entries with the expected titles and non-NULL callbacks. `setInfo` is called with a zeroed `NppData` first because the plugin populates `funcItem[]` inside that handler.
 
 **Tier 3 — XCTest UI tests** ([macos/ui-tests-xcode/](macos/ui-tests-xcode/))
 
@@ -241,7 +239,7 @@ Set `NPP_MACOS_APP=/path/to/Notepad++.app` to override the default host app path
 Test cases in [HexEditorUITests.swift](macos/ui-tests-xcode/Tests/HexEditorUITests.swift):
 
 - `testHostApplicationLaunches` — `XCUIApplication(url:)` launches and foregrounds Notepad++ macOS
-- `testHexEditorPluginMenuIsPresent` — the `HEX-Editor` submenu appears under `Plugins`
+- `testHexEditorPluginMenuIsPresent` — the `HexEditor` submenu appears under `Plugins`
 - `testViewInHexToggle` — toggles the hex overlay on and off, asserting the table appears and disappears
 - `testStatusLabelReportsByteCount` — seeded buffer's byte count is reported in the status label
 - `testEditMenuActionsRouteToHexOverlay` — Cut/Copy/Paste/Delete/Select All in the host Edit menu are all enabled when the hex overlay has focus (responder chain integration)
