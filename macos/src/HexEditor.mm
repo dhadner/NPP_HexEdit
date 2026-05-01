@@ -16,7 +16,7 @@
 #include <vector>
 
 static const char *PLUGIN_NAME = "HEX-Editor";
-static const int NB_FUNC = 6;
+static const int NB_FUNC = 7;
 
 // MARK: - Localization
 //
@@ -196,6 +196,7 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"menu.plugin.clearCompareResult":   @"Clear Compare Result",
             @"menu.plugin.insertColumns":        @"Insert Columns...",
             @"menu.plugin.patternReplace":       @"Pattern Replace...",
+            @"menu.plugin.options":              @"Options...",
             @"menu.plugin.help":                 @"Help...",
 
             // Right-click context menu on the hex view
@@ -241,8 +242,8 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
 
             // Address Width dialog
             @"addressWidth.title":               @"Address Width",
-            @"addressWidth.message":             @"Number of digits in the offset column (%d–%d).",
-            @"addressWidth.invalidRange":        @"Only values between %d and %d possible.",
+            @"addressWidth.message":             @"Number of digits in the offset column (%1$d–%2$d).",
+            @"addressWidth.invalidRange":        @"Only values between %1$d and %2$d possible.",
 
             // Columns dialog
             @"columns.title":                    @"Columns",
@@ -251,7 +252,7 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
 
             // Go to Offset dialog
             @"goto.title":                       @"Go to Offset",
-            @"goto.message":                     @"Enter a byte offset.\n  • Decimal: 1234\n  • Hex: 0x4A2 (or 0X4A2)\n  • Relative: +0x10 jumps forward, -100 jumps back\n\nCurrent: 0x%0*zx    End: 0x%0*zx",
+            @"goto.message":                     @"Enter a byte offset.\n  • Decimal: 1234\n  • Hex: 0x4A2 (or 0X4A2)\n  • Relative: +0x10 jumps forward, -100 jumps back\n\nCurrent: 0x%1$@    End: 0x%2$@",
             @"goto.button":                      @"Go",
             @"goto.placeholder":                 @"e.g. 0x1F or +16",
             @"goto.errorParse":                  @"Could not parse the offset. Use a decimal value, a 0x-prefixed hex value, or a + / - prefix for relative jumps.",
@@ -284,7 +285,7 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"compare.openHexFirstCompare":      @"Open the hex view (View in HEX) before using Compare HEX.",
             @"compare.openHexFirstRun":          @"Open the hex view (View in HEX) before running Compare.",
             @"compare.errorNoFile":              @"No comparison file selected.",
-            @"compare.errorReadFile":            @"Could not read %@: %@",
+            @"compare.errorReadFile":            @"Could not read %1$@: %2$@",
             @"compare.errorReadUnknown":         @"unknown error",
             @"compare.errorFailed":              @"Compare failed.",
             @"compare.openPanelTitle":           @"Compare HEX with…",
@@ -297,7 +298,7 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             // Insert Columns
             @"insertColumns.openHexFirst":       @"Open the hex view (View in HEX) before using Insert Columns.",
             @"insertColumns.title":              @"Insert Columns",
-            @"insertColumns.message":            @"Insert a hex pattern into every row at a chosen column position. Each row grows by (count × %d) bytes; the column count grows by `count`.\n\nPattern: hex bytes only (e.g. 0x00 or DE AD).\nCount: 1 to %d at the current %d-bit grouping.\nPosition: 0 to %d (current column count).",
+            @"insertColumns.message":            @"Insert a hex pattern into every row at a chosen column position. Each row grows by (count × %1$d) bytes; the column count grows by `count`.\n\nPattern: hex bytes only (e.g. 0x00 or DE AD).\nCount: 1 to %2$d at the current %3$d-bit grouping.\nPosition: 0 to %4$d (current column count).",
             @"insertColumns.button":             @"Insert",
             @"insertColumns.placeholder.pattern": @"Pattern (hex): 0xFF or DE AD",
             @"insertColumns.placeholder.count":   @"Count (columns to insert)",
@@ -309,8 +310,8 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"insertColumns.errorBufferEmpty":   @"Buffer is empty — nothing to insert into.",
             @"insertColumns.errorRowSize":       @"Invalid current row size.",
             @"insertColumns.errorFailed":        @"Insert failed.",
-            @"insertColumns.summarySingularRows": @"Inserted %d column%@ across 1 row.",
-            @"insertColumns.summaryPluralRows":   @"Inserted %d column%@ across %d rows.",
+            @"insertColumns.summarySingularRows": @"Inserted %1$d column%2$@ across 1 row.",
+            @"insertColumns.summaryPluralRows":   @"Inserted %1$d column%2$@ across %3$d rows.",
 
             // Pattern Replace
             @"patternReplace.openHexFirst":      @"Open the hex view (View in HEX) before using Pattern Replace.",
@@ -328,7 +329,17 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             // Status bar (substring-matched by UI tests, so wording is contractual)
             @"status.empty":                     @"Current document is empty.",
             @"status.showing":                   @"Showing %zu bytes.",
-            @"status.showingTruncated":          @"Showing %zu of %zu bytes. Preview is truncated for responsiveness.",
+            @"status.showingTruncated":          @"Showing %1$zu of %2$zu bytes. Preview is truncated for responsiveness.",
+            @"status.rectangle":                 @"Rectangle: %1$lu × %2$lu (%3$lu bytes)",
+
+            // Rectangular paste error dialogs (strict shape-match)
+            @"paste.rect.errorAddressSource":      @"Address selections cannot be pasted as bytes. Copy a hex or ASCII rectangle and try again.",
+            @"paste.rect.errorNeedsRectDestination": @"Destination must be a rectangular selection of %1$lu × %2$lu bytes. Option-drag (or Shift+Option-drag, per Options) to create one.",
+            @"paste.rect.errorShapeMismatch":      @"Destination is the wrong size — must be %1$lu bytes wide and %2$lu bytes high.",
+
+            // Pattern Replace — rectangular variant
+            @"patternReplace.messageRect":         @"Fill the current %1$lu × %2$lu rectangle with a repeating hex pattern.\nThe pattern restarts at the first byte of each row.\n\nPattern: hex bytes only (e.g. 0xFF or DE AD).",
+            @"patternReplace.summaryRect":         @"Filled %1$lu × %2$lu rectangle (%3$lu bytes) with the pattern.",
 
             // About / help dialog
             @"about.body":                       @"Native macOS port of the Notepad++ HEX-Editor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.",
@@ -343,6 +354,15 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             // Column headers in the hex table
             @"table.header.offset":              @"Offset",
             @"table.header.ascii":               @"ASCII",
+
+            // Options dialog
+            @"options.title":                    @"HEX-Editor Options",
+            @"options.message":                  @"Plugin-wide preferences. Reset restores the defaults shown below; click Save to apply.",
+            @"options.button.save":              @"Save",
+            @"options.button.reset":             @"Reset to Defaults",
+            @"options.rectModifier.label":       @"Modifier key for rectangular (block) selection drag:",
+            @"options.rectModifier.option":      @"Option (matches Scintilla / Windows hex editor)",
+            @"options.rectModifier.shiftOption": @"Shift+Option (matches VS Code)",
         };
     });
     return defaults;
@@ -395,6 +415,15 @@ static NSString *const HEX_PREF_ADDRESS_WIDTH = @"addressWidth";
 static NSString *const HEX_PREF_COLUMNS = @"columns";
 static NSString *const HEX_PREF_FIND_MATCH_CASE = @"findMatchCase";
 static NSString *const HEX_PREF_FIND_WRAP = @"findWrap";
+static NSString *const HEX_PREF_RECT_MODIFIER = @"rectangularSelectionModifier";
+
+// Pref values for HEX_PREF_RECT_MODIFIER. Stored as strings so the on-disk plist is
+// readable / hand-editable. The default (Option) matches Scintilla's Alt-drag convention
+// inherited from the Windows hex editor; some users prefer Shift+Option to match
+// VS Code, hence the option.
+static NSString *const HEX_RECT_MOD_OPTION = @"Option";
+static NSString *const HEX_RECT_MOD_SHIFT_OPTION = @"ShiftOption";
+static NSString *const HEX_RECT_MOD_DEFAULT = @"Option";
 
 static NSString *g_lastFindText = @"";
 static NSString *g_lastReplaceText = @"";
@@ -412,6 +441,7 @@ static hexedit::CellNotation g_notation = hexedit::CellNotation::Hex;
 static bool g_littleEndian = false;
 static int g_addressWidth = HEX_DEFAULT_ADDRESS_WIDTH;
 static int g_columns = HEX_DEFAULT_COLUMNS;
+static NSString *g_rectModifier = HEX_RECT_MOD_DEFAULT;
 
 static NSUserDefaults *hexPrefs()
 {
@@ -449,6 +479,33 @@ static bool hexPrefBool(NSString *key, bool fallback)
 static void hexPrefSetBool(NSString *key, bool value)
 {
     [hexPrefs() setBool:value forKey:key];
+}
+
+static NSString *hexPrefString(NSString *key, NSString *fallback)
+{
+    NSString *value = [hexPrefs() stringForKey:key];
+    return value ?: fallback;
+}
+
+static void hexPrefSetString(NSString *key, NSString *value)
+{
+    [hexPrefs() setObject:value forKey:key];
+}
+
+// Translates the stored rect-modifier string into the NSEventModifierFlags mask the
+// mouse handler compares against. Unknown stored values fall back to the default
+// (Option) — robust against future renames or hand-edited plists.
+static NSEventModifierFlags rectModifierFlagsFor(NSString *modifier)
+{
+    if ([modifier isEqualToString:HEX_RECT_MOD_SHIFT_OPTION]) {
+        return NSEventModifierFlagShift | NSEventModifierFlagOption;
+    }
+    return NSEventModifierFlagOption;
+}
+
+static NSEventModifierFlags currentRectModifierFlags()
+{
+    return rectModifierFlagsFor(g_rectModifier);
 }
 
 static int currentBytesPerRow()
@@ -508,6 +565,10 @@ static void loadHexPrefs()
     g_columns = std::clamp(columns, 1, columnsLimit);
     g_findMatchCase = hexPrefBool(HEX_PREF_FIND_MATCH_CASE, true);
     g_findWrap = hexPrefBool(HEX_PREF_FIND_WRAP, true);
+    NSString *rectMod = hexPrefString(HEX_PREF_RECT_MODIFIER, HEX_RECT_MOD_DEFAULT);
+    g_rectModifier = [rectMod isEqualToString:HEX_RECT_MOD_SHIFT_OPTION]
+        ? HEX_RECT_MOD_SHIFT_OPTION
+        : HEX_RECT_MOD_OPTION;
 }
 
 static void saveHexPrefs()
@@ -517,6 +578,7 @@ static void saveHexPrefs()
     hexPrefSetBool(HEX_PREF_LITTLE_ENDIAN, g_littleEndian);
     hexPrefSetInt(HEX_PREF_ADDRESS_WIDTH, g_addressWidth);
     hexPrefSetInt(HEX_PREF_COLUMNS, g_columns);
+    hexPrefSetString(HEX_PREF_RECT_MODIFIER, g_rectModifier);
 }
 
 static FuncItem funcItem[NB_FUNC];
@@ -564,6 +626,27 @@ static intptr_t lastScintillaSelEnd = -1;
 static intptr_t lastScintillaCaret = -1;
 static bool isSelectingBytes = false;
 static size_t selectionAnchorByte = 0;
+
+// Rectangular (block) selection state. Mutually exclusive with the linear
+// `selectedByteStart`/`selectedByteEnd` pair: when g_rectActive is true, the linear
+// selection is empty. The rect's geometry is anchored to the bytesPerRow at creation
+// time — changing the row width via the Columns / View-in dialogs clears the rect.
+//
+// g_rectAnchorOffset is one corner (the byte the user mouseDowned on, or where they
+// were positioned when they first pressed Shift+modifier+arrow). The other corner is
+// implicit in g_rectSelection's geometry plus activeByteOffset, which always tracks
+// the dragged-to byte so the caret renders at the user's pointer.
+//
+// g_rectOriginIsAddress = drag started in the offset column, in which case the rect
+// snaps to whole rows (full bytesPerRow width). g_rectOriginField is the pane the
+// drag began in (Hex or Ascii) and is later used by the copy/paste matrix in chunk 3
+// to tag the clipboard payload with kind = Bytes / Ascii / Addresses.
+static hexedit::RectSelection g_rectSelection;
+static bool g_rectActive = false;
+static bool g_isSelectingRect = false;
+static size_t g_rectAnchorOffset = 0;
+static HexCursorField g_rectOriginField = HexCursorField::Hex;
+static bool g_rectOriginIsAddress = false;
 
 static void zoomHexFont(NSInteger delta);
 static void resetHexFontZoom();
@@ -613,6 +696,39 @@ static bool pasteBytesFromPasteboard();
 static bool pasteBinaryFromPasteboard();
 static bool cutHexSelection();
 static bool cutHexSelectionBinary();
+static bool applyRectBytesPaste(const hexedit::RectSelection &dest,
+                                const std::uint8_t *bytes,
+                                std::size_t byteCount);
+
+// Rectangular (block) clipboard kind — written into the custom-UTI payload header
+// so the paste path can apply the user's rules (Addresses-source rejected; Bytes /
+// Ascii sources interchangeable across hex / ascii panes; strict shape match against
+// the destination rect).
+enum class HexRectClipboardKind : std::uint8_t {
+    Bytes = 0,
+    Ascii = 1,
+    Addresses = 2,
+};
+
+// Custom pasteboard type that carries shape + kind alongside the byte data. When
+// the paste path finds this UTI it uses the structured payload directly; when only
+// public-text is on the clipboard (e.g. copied from another app), it falls back to
+// hexedit::parseRectClipboardText per the user's Q2.b decision.
+static NSString *const kHexRectPasteboardType = @"org.notepad-plus-plus.HexEditor.rectangular";
+
+// Wire-format constants for the custom-UTI payload. The header is 16 bytes:
+//   [0..3]   magic = "HXR1" (literal ASCII bytes 0x48 0x58 0x52 0x31)
+//   [4]      version (1)
+//   [5]      kind (HexRectClipboardKind)
+//   [6..7]   reserved (zero)
+//   [8..11]  width (little-endian uint32, bytes per row)
+//   [12..15] height (little-endian uint32, rows)
+//   [16..19] dataLength (little-endian uint32)
+//   [20..]   raw bytes (length = dataLength; 0 for kind=Addresses since address
+//            text is only useful externally and lives in the public-text payload).
+static const char kHexRectPayloadMagic[4] = {'H', 'X', 'R', '1'};
+static const std::uint8_t kHexRectPayloadVersion = 1;
+static const std::size_t kHexRectPayloadHeaderSize = 20;
 static bool deleteHexSelection();
 static void selectAllHexBytes();
 static bool handleHexDigit(unichar character);
@@ -629,8 +745,13 @@ static NSInteger cellColumnIndex(NSString *identifier);
 static BOOL isVisibleEditableOffset(size_t offset);
 static BOOL hasByteSelection();
 static BOOL isSelectedByte(size_t offset);
+static BOOL hasRectSelection();
+static BOOL hasAnyByteSelection();
 static size_t currentHighlightRow();
 static void clearByteSelection();
+static void clearRectSelection();
+static void clearAllByteSelections();
+static void updateRectSelectionToOffset(size_t endOffset);
 static void captureScintillaSelection();
 static BOOL isBookmarkedRow(size_t row);
 static void toggleBookmarkRow(size_t row);
@@ -725,9 +846,18 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
     NSString *nsPrefsJoined = [nsPrefs componentsJoinedByString:@"|"];
     NSArray<NSString *> *userPrefs = hexUserPreferredLanguages();
     NSString *userPrefsJoined = [userPrefs componentsJoinedByString:@"|"];
+    // Rect diagnostic fields. rectActive=1 when a rectangular selection is in place;
+    // rectOrigin/rectWidth/rectHeight describe its anchor and size in bytes; rectBpr is
+    // the bytes-per-row the rect was anchored to (lets a test detect stale rect after
+    // the user changes columns). rectOriginPane is "Hex" / "Ascii" / "Address" so chunk 3
+    // tests can confirm the source-pane tag will travel through to the clipboard.
+    NSString *rectOriginPane = g_rectOriginIsAddress
+        ? @"Address"
+        : (g_rectOriginField == HexCursorField::Ascii ? @"Ascii" : @"Hex");
     return [NSString stringWithFormat:
             @"offset=%zu;selStart=%zu;selEnd=%zu;hasSelection=%d;statusH=%.1f;statusFontH=%.1f"
-            @";sciSelStart=%lld;sciSelEnd=%lld;sciCaret=%lld;preferredLanguages=%@;userPrefs=%@",
+            @";sciSelStart=%lld;sciSelEnd=%lld;sciCaret=%lld;preferredLanguages=%@;userPrefs=%@"
+            @";rectActive=%d;rectOrigin=%zu;rectWidth=%zu;rectHeight=%zu;rectBpr=%zu;rectOriginPane=%@",
             activeByteOffset, selectedByteStart, selectedByteEnd,
             (selectedByteEnd > selectedByteStart) ? 1 : 0,
             statusFrameHeight, statusFontLineHeight,
@@ -735,7 +865,13 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
             (long long)lastScintillaSelEnd,
             (long long)lastScintillaCaret,
             nsPrefsJoined,
-            userPrefsJoined];
+            userPrefsJoined,
+            g_rectActive ? 1 : 0,
+            g_rectSelection.originOffset,
+            g_rectSelection.width,
+            g_rectSelection.height,
+            g_rectSelection.bytesPerRow,
+            rectOriginPane];
 }
 @end
 
@@ -989,7 +1125,32 @@ static HexTableDataSource *hexTableDataSource = nil;
         const size_t bpr = static_cast<size_t>(currentBytesPerRow());
         const size_t rowStart = static_cast<size_t>(rowIndex) * bpr;
         const size_t rowEnd = rowStart + bpr;
-        if (!hasByteSelection() || selectedByteEnd <= rowStart || selectedByteStart >= rowEnd) {
+
+        // Compute the byte range to highlight in this row. Linear and rectangular
+        // selections are mutually exclusive (the selection helpers enforce that), so
+        // we only enter one branch here. Both branches end in the same per-row
+        // highlight code below — only the [firstByteInRow, lastByteInRow] range differs.
+        size_t firstByteInRow = 0;
+        size_t lastByteInRow = 0;
+        bool drawHighlight = false;
+        if (hasRectSelection()) {
+            const size_t rectFirstRow = g_rectSelection.originOffset / bpr;
+            const size_t rectLastRow = rectFirstRow + g_rectSelection.height - 1;
+            const size_t rectCol0 = g_rectSelection.originOffset % bpr;
+            const size_t rectColN = rectCol0 + g_rectSelection.width - 1;
+            if (static_cast<size_t>(rowIndex) >= rectFirstRow && static_cast<size_t>(rowIndex) <= rectLastRow) {
+                firstByteInRow = rectCol0;
+                lastByteInRow = std::min(rectColN, bpr - 1);
+                drawHighlight = true;
+            }
+        } else if (hasByteSelection() && selectedByteEnd > rowStart && selectedByteStart < rowEnd) {
+            const size_t selectedRowStart = std::max(selectedByteStart, rowStart);
+            const size_t selectedRowEnd = std::min(selectedByteEnd, rowEnd);
+            firstByteInRow = selectedRowStart % bpr;
+            lastByteInRow = (selectedRowEnd - 1) % bpr;
+            drawHighlight = true;
+        }
+        if (!drawHighlight) {
             continue;
         }
 
@@ -999,10 +1160,6 @@ static HexTableDataSource *hexTableDataSource = nil;
         const hexedit::ViewMode mode = currentViewMode();
         const int bpc = std::max(mode.bytesPerCell, 1);
         const int digitsPerByte = (mode.notation == hexedit::CellNotation::Binary) ? 8 : 2;
-        const size_t selectedRowStart = std::max(selectedByteStart, rowStart);
-        const size_t selectedRowEnd = std::min(selectedByteEnd, rowEnd);
-        const size_t firstByteInRow = selectedRowStart % bpr;
-        const size_t lastByteInRow = (selectedRowEnd - 1) % bpr;
         const size_t firstCell = firstByteInRow / static_cast<size_t>(bpc);
         const size_t lastCell = lastByteInRow / static_cast<size_t>(bpc);
 
@@ -1103,7 +1260,12 @@ static HexTableDataSource *hexTableDataSource = nil;
     size_t byteOffset = 0;
     NSInteger nibble = 0;
     HexCursorField field = activeCursorField;
-    if ([self byteOffsetAtPoint:point offset:&byteOffset nibble:&nibble field:&field] && !hasByteSelection()) {
+    // Only reposition the caret on right-click when nothing is selected. With a
+    // linear OR rectangular selection active, a right-click that moved the caret
+    // would let the user lose track of which bytes Cut/Copy/Delete will operate
+    // on — the menu fires on the still-active selection, not on the right-click
+    // point.
+    if ([self byteOffsetAtPoint:point offset:&byteOffset nibble:&nibble field:&field] && !hasAnyByteSelection()) {
         if (field == HexCursorField::Hex) {
             setActiveHexCursor(byteOffset, nibble);
         } else {
@@ -1246,6 +1408,9 @@ static HexTableDataSource *hexTableDataSource = nil;
     if (action == @selector(cut:) || action == @selector(copy:) || action == @selector(delete:) ||
         action == @selector(hexCut:) || action == @selector(hexCopy:) || action == @selector(hexDelete:) ||
         action == @selector(hexCutBinary:) || action == @selector(hexCopyBinary:)) {
+        if (hasRectSelection()) {
+            return YES;
+        }
         size_t offset = 0;
         size_t byteCount = 0;
         selectedOrCurrentRange(&offset, &byteCount);
@@ -1255,6 +1420,7 @@ static HexTableDataSource *hexTableDataSource = nil;
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
         return [pasteboard dataForType:NSPasteboardTypeString] != nil ||
             [pasteboard dataForType:@"public.data"] != nil ||
+            [pasteboard dataForType:kHexRectPasteboardType] != nil ||
             [pasteboard stringForType:NSPasteboardTypeString] != nil;
     }
     if (action == @selector(selectAll:)) {
@@ -1464,6 +1630,18 @@ static HexTableDataSource *hexTableDataSource = nil;
     [self setNeedsDisplay:YES];
 }
 
+// Modifier-mask comparison helper. The user may choose between Option and Shift+Option
+// for the rectangular drag modifier; we ignore Caps Lock and any other irrelevant flags
+// that macOS sometimes pipes through, so the comparison is always against the relevant
+// command/option/shift/control set.
+- (BOOL)hexEvent:(NSEvent *)event matchesRectModifier:(NSEventModifierFlags)rectFlags
+{
+    const NSEventModifierFlags relevant = event.modifierFlags &
+        (NSEventModifierFlagShift | NSEventModifierFlagControl |
+         NSEventModifierFlagOption | NSEventModifierFlagCommand);
+    return relevant == rectFlags;
+}
+
 - (void)mouseDown:(NSEvent *)event
 {
     NSPoint scrollOrigin = [self currentScrollOrigin];
@@ -1471,11 +1649,29 @@ static HexTableDataSource *hexTableDataSource = nil;
     const NSInteger row = [self rowAtPoint:point];
     const NSInteger column = [self columnAtPoint:point];
 
+    const NSEventModifierFlags rectFlags = currentRectModifierFlags();
+    const BOOL isRectModifier = [self hexEvent:event matchesRectModifier:rectFlags];
+
     if (row >= 0 && column >= 0) {
         NSTableColumn *tableColumn = self.tableColumns[column];
         NSString *identifier = tableColumn.identifier;
 
         if ([identifier isEqualToString:@"offset"]) {
+            // Address column: bare click toggles a bookmark; rect-modifier+click starts
+            // a row-granular rectangular selection (full row width).
+            if (isRectModifier && previewTotalLength > 0) {
+                clearAllByteSelections();
+                const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+                const size_t rowStartOffset = static_cast<size_t>(row) * bpr;
+                g_rectAnchorOffset = rowStartOffset;
+                g_rectOriginIsAddress = true;
+                g_rectOriginField = HexCursorField::Hex;
+                g_isSelectingRect = true;
+                updateRectSelectionToOffset(rowStartOffset + bpr - 1);
+                [self.window makeFirstResponder:self];
+                [self reloadDataPreservingScrollOrigin:scrollOrigin];
+                return;
+            }
             toggleBookmarkRow(static_cast<size_t>(row));
             [self setNeedsDisplayInRect:[self rectOfRow:row]];
             return;
@@ -1485,7 +1681,19 @@ static HexTableDataSource *hexTableDataSource = nil;
         NSInteger nibble = 0;
         HexCursorField field = HexCursorField::Hex;
         if ([self byteOffsetAtPoint:point offset:&byteOffset nibble:&nibble field:&field]) {
-            clearByteSelection();
+            if (isRectModifier) {
+                // Byte-pane or ASCII-pane rect drag — cell granular.
+                clearAllByteSelections();
+                g_rectAnchorOffset = byteOffset;
+                g_rectOriginIsAddress = false;
+                g_rectOriginField = field;
+                g_isSelectingRect = true;
+                updateRectSelectionToOffset(byteOffset);
+                [self.window makeFirstResponder:self];
+                [self reloadDataPreservingScrollOrigin:scrollOrigin];
+                return;
+            }
+            clearAllByteSelections();
             selectionAnchorByte = byteOffset;
             isSelectingBytes = true;
             if (field == HexCursorField::Hex) {
@@ -1504,6 +1712,37 @@ static HexTableDataSource *hexTableDataSource = nil;
 
 - (void)mouseDragged:(NSEvent *)event
 {
+    if (g_isSelectingRect) {
+        NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
+        const NSInteger row = [self rowAtPoint:point];
+
+        if (g_rectOriginIsAddress) {
+            // Row-only: track which row the pointer is over and rebuild the rect to
+            // span anchor's row..pointer's row, full row width.
+            if (row >= 0) {
+                const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+                const size_t rowStartOffset = static_cast<size_t>(row) * bpr;
+                updateRectSelectionToOffset(rowStartOffset + bpr - 1);
+            }
+            return;
+        }
+
+        size_t byteOffset = 0;
+        NSInteger nibble = 0;
+        HexCursorField field = g_rectOriginField;
+        if ([self byteOffsetAtPoint:point offset:&byteOffset nibble:&nibble field:&field]) {
+            updateRectSelectionToOffset(byteOffset);
+        } else if (row >= 0) {
+            // Pointer is past the right edge of the byte / ASCII panes — clamp to the
+            // row's last byte so the rect extends across the full visible row width.
+            const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+            const size_t rowEnd = static_cast<size_t>(row) * bpr + (bpr - 1);
+            updateRectSelectionToOffset(std::min(rowEnd,
+                previewTotalLength > 0 ? previewTotalLength - 1 : static_cast<size_t>(0)));
+        }
+        return;
+    }
+
     if (!isSelectingBytes) {
         [super mouseDragged:event];
         return;
@@ -1521,6 +1760,7 @@ static HexTableDataSource *hexTableDataSource = nil;
 - (void)mouseUp:(NSEvent *)event
 {
     isSelectingBytes = false;
+    g_isSelectingRect = false;
     [super mouseUp:event];
 }
 
@@ -1586,42 +1826,100 @@ static HexTableDataSource *hexTableDataSource = nil;
         return;
     }
 
+    // Shift+<rect-modifier>+arrow grows or shrinks a rectangular selection. If no rect
+    // is active, this starts one anchored at the current caret. The "current" corner —
+    // tracked by activeByteOffset — moves by one byte (Left/Right) or one row (Up/Down)
+    // and the rect is rebuilt around the unchanged anchor. Right at the end of a row
+    // and Left at the start of a row are clamped so column-edge arrow presses don't
+    // accidentally jump rows and corrupt the rectangle's geometry.
+    const NSEventModifierFlags rectFlags = currentRectModifierFlags();
+    const NSEventModifierFlags rectExtendFlags = rectFlags | NSEventModifierFlagShift;
+    const NSEventModifierFlags relevantMods = modifiers &
+        (NSEventModifierFlagShift | NSEventModifierFlagControl |
+         NSEventModifierFlagOption | NSEventModifierFlagCommand);
+    const bool isRectExtend = (relevantMods == rectExtendFlags) &&
+        (character == NSLeftArrowFunctionKey || character == NSRightArrowFunctionKey ||
+         character == NSUpArrowFunctionKey || character == NSDownArrowFunctionKey);
+    if (isRectExtend && previewTotalLength > 0) {
+        const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+        if (!hasRectSelection()) {
+            // Bootstrap a 1×1 rect at the caret on first extension.
+            clearByteSelection();
+            g_rectAnchorOffset = activeByteOffset;
+            g_rectOriginIsAddress = false;
+            g_rectOriginField = activeCursorField;
+            updateRectSelectionToOffset(activeByteOffset);
+        }
+        const size_t rowStart = (activeByteOffset / bpr) * bpr;
+        const size_t rowEnd = std::min(rowStart + bpr, previewTotalLength);
+        size_t target = activeByteOffset;
+        switch (character) {
+        case NSLeftArrowFunctionKey:
+            if (target > rowStart) target -= 1;
+            break;
+        case NSRightArrowFunctionKey:
+            if (target + 1 < rowEnd) target += 1;
+            break;
+        case NSUpArrowFunctionKey:
+            if (target >= bpr) target -= bpr;
+            break;
+        case NSDownArrowFunctionKey:
+            if (target + bpr < previewTotalLength) target += bpr;
+            else if (previewTotalLength > 0) target = previewTotalLength - 1;
+            break;
+        }
+        updateRectSelectionToOffset(target);
+        [self reloadDataPreservingScrollOrigin:scrollOrigin];
+        return;
+    }
+
     switch (character) {
     case NSBackspaceCharacter:
     case NSLeftArrowFunctionKey:
-        clearByteSelection();
+        clearAllByteSelections();
         writeBackCursor(hexedit::navigateLeft(currentCursor(), currentDocumentView(),
                                                currentViewMode(), currentBytesPerRow()));
         [self reloadDataPreservingScrollOrigin:scrollOrigin];
         return;
     case NSRightArrowFunctionKey:
-        clearByteSelection();
+        clearAllByteSelections();
         writeBackCursor(hexedit::navigateRight(currentCursor(), currentDocumentView(),
                                                 currentViewMode(), currentBytesPerRow()));
         [self reloadDataPreservingScrollOrigin:scrollOrigin];
         return;
     case NSUpArrowFunctionKey:
-        clearByteSelection();
+        clearAllByteSelections();
         moveActiveCursor(-16);
         [self reloadDataPreservingScrollOrigin:scrollOrigin];
         return;
     case NSDownArrowFunctionKey:
-        clearByteSelection();
+        clearAllByteSelections();
         moveActiveCursor(16);
         [self reloadDataPreservingScrollOrigin:scrollOrigin];
         return;
     case NSHomeFunctionKey:
-        clearByteSelection();
+        clearAllByteSelections();
         writeBackCursor(hexedit::cursorToLineStart(currentCursor()));
         [self reloadDataPreservingScrollOrigin:scrollOrigin];
         return;
     case NSEndFunctionKey:
-        clearByteSelection();
+        clearAllByteSelections();
         writeBackCursor(hexedit::cursorToLineEnd(currentCursor(), currentDocumentView()));
         [self reloadDataPreservingScrollOrigin:scrollOrigin];
         return;
     default:
         break;
+    }
+
+    // A typed character with an active rect: clear the rect (visual signal that we're
+    // switching back to keyboard editing) and apply the edit at the cursor as usual.
+    // Rectangular replacement of the rect's bytes is intentionally limited to Delete
+    // (zero-fill, chunk 4) and Pattern Replace — typing a single byte across a 2D rect
+    // has no obvious meaning, so the safest UX is to dismiss and let the type land at
+    // the caret.
+    if (hasRectSelection()) {
+        clearRectSelection();
+        [self setNeedsDisplay:YES];
     }
 
     const bool selectionWasActive = hasByteSelection();
@@ -2074,9 +2372,26 @@ static BOOL isSelectedByte(size_t offset)
     return hasByteSelection() && offset >= selectedByteStart && offset < selectedByteEnd;
 }
 
+static BOOL hasRectSelection()
+{
+    return g_rectActive ? YES : NO;
+}
+
+// Linear OR rectangular — the broad question editors care about ("is anything selected?").
+static BOOL hasAnyByteSelection()
+{
+    return hasByteSelection() || hasRectSelection();
+}
+
 static size_t currentHighlightRow()
 {
     const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+    if (hasRectSelection()) {
+        // For a rectangle, highlight the row containing the cursor (which tracks the
+        // dragged-to / arrow-extended corner) so the focus indicator follows the user's
+        // hand rather than always sitting at the rect's geometric end.
+        return activeByteOffset / bpr;
+    }
     if (hasByteSelection()) {
         return (selectedByteEnd - 1) / bpr;
     }
@@ -2088,6 +2403,56 @@ static void clearByteSelection()
 {
     selectedByteStart = 0;
     selectedByteEnd = 0;
+}
+
+static void clearRectSelection()
+{
+    g_rectActive = false;
+    g_rectSelection = hexedit::RectSelection{};
+    g_isSelectingRect = false;
+    g_rectAnchorOffset = 0;
+    g_rectOriginIsAddress = false;
+    g_rectOriginField = HexCursorField::Hex;
+}
+
+static void clearAllByteSelections()
+{
+    clearByteSelection();
+    clearRectSelection();
+}
+
+// Build/update the rectangle from the stored anchor + a new endpoint. For an
+// address-pane drag, both anchor and end are snapped to row boundaries so the rect
+// always spans the full bytesPerRow width.
+static void updateRectSelectionToOffset(size_t endOffset)
+{
+    const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+    if (bpr == 0) {
+        return;
+    }
+    size_t anchor = g_rectAnchorOffset;
+    size_t end = endOffset;
+
+    if (g_rectOriginIsAddress) {
+        const size_t anchorRowStart = (anchor / bpr) * bpr;
+        const size_t endRowStart = (end / bpr) * bpr;
+        anchor = anchorRowStart;
+        end = endRowStart + (bpr - 1);
+    }
+
+    g_rectSelection = hexedit::makeRectSelection(anchor, end, bpr, previewTotalLength);
+    g_rectActive = g_rectSelection.active();
+    if (g_rectActive) {
+        // Track the active cursor at the dragged-to corner so the caret indicator
+        // stays under the user's pointer / arrow keys.
+        activeByteOffset = std::min(end, previewTotalLength > 0 ? previewTotalLength - 1 : 0);
+        activeHexNibble = 0;
+        activeCursorField = g_rectOriginIsAddress ? HexCursorField::Hex : g_rectOriginField;
+        clampActiveCursor();
+    }
+    if (hexTableView) {
+        [hexTableView setNeedsDisplay:YES];
+    }
 }
 
 static void captureScintillaSelection()
@@ -2310,8 +2675,167 @@ static void selectedOrCurrentRange(size_t *offset, size_t *byteCount)
     *byteCount = range.byteCount;
 }
 
+// Encode a rectangular payload (kind + shape + bytes) into the wire format described
+// next to kHexRectPayloadMagic. Returns nil if width/height/data are inconsistent
+// (which would be a programming error — callers always pass extractRectBytes output).
+static NSData *rectPayloadEncode(HexRectClipboardKind kind,
+                                 std::uint32_t width,
+                                 std::uint32_t height,
+                                 const std::uint8_t *data,
+                                 std::uint32_t dataLength)
+{
+    NSMutableData *payload = [NSMutableData dataWithCapacity:kHexRectPayloadHeaderSize + dataLength];
+    [payload appendBytes:kHexRectPayloadMagic length:sizeof(kHexRectPayloadMagic)];
+    const std::uint8_t version = kHexRectPayloadVersion;
+    [payload appendBytes:&version length:1];
+    const std::uint8_t kindByte = static_cast<std::uint8_t>(kind);
+    [payload appendBytes:&kindByte length:1];
+    const std::uint8_t reserved[2] = {0, 0};
+    [payload appendBytes:reserved length:2];
+    // Little-endian shape + length so the layout is identical on x86_64 and arm64.
+    const std::uint8_t widthBytes[4] = {
+        static_cast<std::uint8_t>(width & 0xFF),
+        static_cast<std::uint8_t>((width >> 8) & 0xFF),
+        static_cast<std::uint8_t>((width >> 16) & 0xFF),
+        static_cast<std::uint8_t>((width >> 24) & 0xFF),
+    };
+    const std::uint8_t heightBytes[4] = {
+        static_cast<std::uint8_t>(height & 0xFF),
+        static_cast<std::uint8_t>((height >> 8) & 0xFF),
+        static_cast<std::uint8_t>((height >> 16) & 0xFF),
+        static_cast<std::uint8_t>((height >> 24) & 0xFF),
+    };
+    const std::uint8_t lengthBytes[4] = {
+        static_cast<std::uint8_t>(dataLength & 0xFF),
+        static_cast<std::uint8_t>((dataLength >> 8) & 0xFF),
+        static_cast<std::uint8_t>((dataLength >> 16) & 0xFF),
+        static_cast<std::uint8_t>((dataLength >> 24) & 0xFF),
+    };
+    [payload appendBytes:widthBytes length:4];
+    [payload appendBytes:heightBytes length:4];
+    [payload appendBytes:lengthBytes length:4];
+    if (data != nullptr && dataLength > 0) {
+        [payload appendBytes:data length:dataLength];
+    }
+    return payload;
+}
+
+// Decode a payload previously written by rectPayloadEncode. Returns NO on bad
+// magic, version mismatch, truncated header, or data-length larger than the
+// actual NSData. Out parameters are written only on success.
+static BOOL rectPayloadDecode(NSData *data,
+                              HexRectClipboardKind *outKind,
+                              std::uint32_t *outWidth,
+                              std::uint32_t *outHeight,
+                              const std::uint8_t **outDataPtr,
+                              std::uint32_t *outDataLength)
+{
+    if (data == nil || data.length < kHexRectPayloadHeaderSize) {
+        return NO;
+    }
+    const std::uint8_t *bytes = static_cast<const std::uint8_t *>(data.bytes);
+    if (std::memcmp(bytes, kHexRectPayloadMagic, sizeof(kHexRectPayloadMagic)) != 0) {
+        return NO;
+    }
+    if (bytes[4] != kHexRectPayloadVersion) {
+        return NO;
+    }
+    const std::uint8_t kindByte = bytes[5];
+    if (kindByte > static_cast<std::uint8_t>(HexRectClipboardKind::Addresses)) {
+        return NO;
+    }
+    const std::uint32_t width =
+        static_cast<std::uint32_t>(bytes[8]) |
+        (static_cast<std::uint32_t>(bytes[9]) << 8) |
+        (static_cast<std::uint32_t>(bytes[10]) << 16) |
+        (static_cast<std::uint32_t>(bytes[11]) << 24);
+    const std::uint32_t height =
+        static_cast<std::uint32_t>(bytes[12]) |
+        (static_cast<std::uint32_t>(bytes[13]) << 8) |
+        (static_cast<std::uint32_t>(bytes[14]) << 16) |
+        (static_cast<std::uint32_t>(bytes[15]) << 24);
+    const std::uint32_t dataLength =
+        static_cast<std::uint32_t>(bytes[16]) |
+        (static_cast<std::uint32_t>(bytes[17]) << 8) |
+        (static_cast<std::uint32_t>(bytes[18]) << 16) |
+        (static_cast<std::uint32_t>(bytes[19]) << 24);
+    if (kHexRectPayloadHeaderSize + dataLength > data.length) {
+        return NO;
+    }
+    if (outKind) *outKind = static_cast<HexRectClipboardKind>(kindByte);
+    if (outWidth) *outWidth = width;
+    if (outHeight) *outHeight = height;
+    if (outDataPtr) *outDataPtr = (dataLength > 0) ? (bytes + kHexRectPayloadHeaderSize) : nullptr;
+    if (outDataLength) *outDataLength = dataLength;
+    return YES;
+}
+
+// Copy the active rectangular selection to the system pasteboard. Always emits the
+// custom UTI (so paste-back into this plugin gets the exact shape) plus a public-text
+// fallback for external apps. Source-pane chooses the kind tag and the text shape:
+// Address-pane drag → row of address strings; ASCII-pane drag → ASCII per row;
+// otherwise hex per row.
+static bool copyRectToPasteboard()
+{
+    if (!hasRectSelection()) {
+        return false;
+    }
+    HexRectClipboardKind kind = HexRectClipboardKind::Bytes;
+    if (g_rectOriginIsAddress) {
+        kind = HexRectClipboardKind::Addresses;
+    } else if (g_rectOriginField == HexCursorField::Ascii) {
+        kind = HexRectClipboardKind::Ascii;
+    }
+
+    std::vector<std::uint8_t> payloadBytes;
+    if (kind != HexRectClipboardKind::Addresses) {
+        hexedit::extractRectBytes(previewBytes.data(), previewBytes.size(),
+                                   g_rectSelection, payloadBytes);
+    }
+    // Build the public-text fallback per kind so external apps see something useful.
+    std::string text;
+    if (kind == HexRectClipboardKind::Addresses) {
+        // Address-column drag: one address string per selected row.
+        const int addrWidth = std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH);
+        const std::size_t firstRow = g_rectSelection.originOffset / g_rectSelection.bytesPerRow;
+        for (std::size_t r = 0; r < g_rectSelection.height; ++r) {
+            if (r > 0) text.push_back('\n');
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%0*zx", addrWidth,
+                          (firstRow + r) * g_rectSelection.bytesPerRow);
+            text += buf;
+        }
+    } else if (kind == HexRectClipboardKind::Ascii) {
+        text = hexedit::formatRectClipboardAscii(previewBytes.data(), g_rectSelection,
+                                                  previewBytes.size());
+    } else {
+        text = hexedit::formatRectClipboardHex(previewBytes.data(), g_rectSelection,
+                                                previewBytes.size());
+    }
+
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    [pasteboard clearContents];
+    NSString *textNS = [NSString stringWithUTF8String:text.c_str()];
+    if (textNS != nil) {
+        [pasteboard setString:textNS forType:NSPasteboardTypeString];
+    }
+    NSData *encoded = rectPayloadEncode(kind,
+                                         static_cast<std::uint32_t>(g_rectSelection.width),
+                                         static_cast<std::uint32_t>(g_rectSelection.height),
+                                         payloadBytes.empty() ? nullptr : payloadBytes.data(),
+                                         static_cast<std::uint32_t>(payloadBytes.size()));
+    if (encoded != nil) {
+        [pasteboard setData:encoded forType:kHexRectPasteboardType];
+    }
+    return true;
+}
+
 static bool copyHexSelectionToPasteboard()
 {
+    if (hasRectSelection()) {
+        return copyRectToPasteboard();
+    }
+
     size_t offset = 0;
     size_t byteCount = 0;
     selectedOrCurrentRange(&offset, &byteCount);
@@ -2347,6 +2871,23 @@ static bool copyHexSelectionToPasteboard()
 
 static bool copyHexSelectionAsBinary()
 {
+    if (hasRectSelection()) {
+        // Binary copy of a rect: same payload as text copy (custom UTI preserves
+        // shape) plus the contiguous raw bytes on `public.data` for external apps.
+        // Source-pane tag stays whatever the rect's drag origin was.
+        if (!copyRectToPasteboard()) {
+            return false;
+        }
+        std::vector<std::uint8_t> rectBytes;
+        if (hexedit::extractRectBytes(previewBytes.data(), previewBytes.size(),
+                                       g_rectSelection, rectBytes) && !rectBytes.empty()) {
+            NSData *raw = [NSData dataWithBytes:rectBytes.data() length:rectBytes.size()];
+            NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+            [pasteboard setData:raw forType:@"public.data"];
+        }
+        return true;
+    }
+
     size_t offset = 0;
     size_t byteCount = 0;
     selectedOrCurrentRange(&offset, &byteCount);
@@ -2363,8 +2904,31 @@ static bool copyHexSelectionAsBinary()
     return true;
 }
 
+// Zero-fill the bytes inside the active rectangle. Preserves file size (offsets do
+// not shift) — that's the user's spec from the chunk-3 plan: "Block delete semantics
+// — zero-fill (preserve offsets)". Leaves the rect itself selected so a second
+// Delete (or Cut) is a no-op rather than a footgun.
+static bool deleteRectSelection()
+{
+    if (!hasRectSelection()) {
+        return false;
+    }
+    std::vector<std::uint8_t> zeros(g_rectSelection.totalBytes(), 0);
+    if (!applyRectBytesPaste(g_rectSelection, zeros.data(), zeros.size())) {
+        return false;
+    }
+    if (hexTableView) {
+        [hexTableView setNeedsDisplay:YES];
+    }
+    return true;
+}
+
 static bool deleteHexSelection()
 {
+    if (hasRectSelection()) {
+        return deleteRectSelection();
+    }
+
     hexedit::ByteEditOperation op;
     if (!hexedit::planDeleteEdit(currentDocumentView(), currentCursor(), currentSelection(), op)) {
         return false;
@@ -2420,8 +2984,135 @@ static bool applyBytesPaste(const std::uint8_t *bytes, size_t byteCount)
     return true;
 }
 
+// Apply a paste-time rectangle: write `bytes` (length width*height) into the rows
+// of `dest` row-by-row, replacing existing bytes. Out-of-range tail rows are clipped
+// to file end (we do not auto-extend the file). Caller has already verified shape
+// matches, so this never partially writes — either every row succeeds or none.
+static bool applyRectBytesPaste(const hexedit::RectSelection &dest,
+                                const std::uint8_t *bytes,
+                                std::size_t byteCount)
+{
+    if (!dest.active() || bytes == nullptr || byteCount != dest.totalBytes()) {
+        return false;
+    }
+    // Build one combined edit op from the per-row writes by emitting a single
+    // contiguous transaction whose extent is the rect's bounding-box bytes within
+    // each row. Easier: apply each row separately. This may produce N undo records
+    // but matches how Insert Columns / Pattern Replace already work.
+    suppressModificationRefresh = true;
+    bool ok = true;
+    for (std::size_t r = 0; r < dest.height; ++r) {
+        const std::size_t rowStartOffset = dest.originOffset + r * dest.bytesPerRow;
+        if (rowStartOffset >= previewTotalLength) {
+            // Remaining rows are entirely past EOF; we don't extend the file, so stop.
+            break;
+        }
+        const std::size_t available = previewTotalLength - rowStartOffset;
+        const std::size_t take = std::min(dest.width, available);
+        if (!replaceEditorBytes(rowStartOffset, bytes + r * dest.width, take, take)) {
+            ok = false;
+            break;
+        }
+    }
+    suppressModificationRefresh = false;
+    if (hexTableView) {
+        [hexTableView reloadData];
+        [hexTableView setNeedsDisplay:YES];
+    }
+    return ok;
+}
+
+// Strict-shape rectangular paste path. Returns true when the paste landed (success
+// OR a user-facing error dialog was presented), false to fall through to the linear
+// paste path. The matrix:
+//   - Source kind = Addresses → reject.
+//   - Destination is not a rect → reject (must be rect).
+//   - Destination is rect but shape mismatches → reject (must be exactly w×h).
+//   - Destination is rect and shape matches → write bytes.
+// If no custom-UTI payload is present but the public-text payload parses as a rect
+// per Q2.b, treat it as a kind=Bytes payload and apply the same rules.
+static bool tryRectPasteFromPasteboard()
+{
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+
+    HexRectClipboardKind kind = HexRectClipboardKind::Bytes;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    const std::uint8_t *dataPtr = nullptr;
+    std::uint32_t dataLength = 0;
+    std::vector<std::uint8_t> textParsedBytes;
+
+    NSData *encoded = [pasteboard dataForType:kHexRectPasteboardType];
+    BOOL haveStructured = rectPayloadDecode(encoded, &kind, &width, &height, &dataPtr, &dataLength);
+
+    if (!haveStructured) {
+        // Q2.b — try parsing public-text as a `\n`-separated rect.
+        NSString *text = [pasteboard stringForType:NSPasteboardTypeString];
+        if (text == nil || text.length == 0) {
+            return false;
+        }
+        std::size_t parsedW = 0;
+        std::size_t parsedH = 0;
+        if (!hexedit::parseRectClipboardText(std::string([text UTF8String]),
+                                              textParsedBytes, parsedW, parsedH)) {
+            return false;
+        }
+        if (textParsedBytes.empty() || parsedH < 2) {
+            // Single-line text isn't a rectangle — defer to the linear paste path.
+            return false;
+        }
+        kind = HexRectClipboardKind::Bytes;
+        width = static_cast<std::uint32_t>(parsedW);
+        height = static_cast<std::uint32_t>(parsedH);
+        dataPtr = textParsedBytes.data();
+        dataLength = static_cast<std::uint32_t>(textParsedBytes.size());
+    }
+
+    if (kind == HexRectClipboardKind::Addresses) {
+        presentHexValidationError(L(@"paste.rect.errorAddressSource"));
+        return true;
+    }
+
+    if (!hasRectSelection()) {
+        // Destination is a caret or linear selection — strict matrix rejects this
+        // for any rect-typed payload. Tell the user what shape they need.
+        presentHexValidationError([NSString stringWithFormat:L(@"paste.rect.errorNeedsRectDestination"),
+            (unsigned long)width, (unsigned long)height]);
+        return true;
+    }
+
+    if (g_rectSelection.width != width || g_rectSelection.height != height) {
+        presentHexValidationError([NSString stringWithFormat:L(@"paste.rect.errorShapeMismatch"),
+            (unsigned long)width, (unsigned long)height]);
+        return true;
+    }
+
+    if (dataPtr == nullptr || dataLength != width * height) {
+        // Malformed payload (shouldn't happen for our own writes; could happen if
+        // another plugin or version of us writes an invalid blob). Refuse rather
+        // than guess.
+        presentHexValidationError([NSString stringWithFormat:L(@"paste.rect.errorShapeMismatch"),
+            (unsigned long)width, (unsigned long)height]);
+        return true;
+    }
+
+    if (applyRectBytesPaste(g_rectSelection, dataPtr, dataLength)) {
+        // Keep the rect selected after paste so the user can repeat or visually
+        // confirm. (Symmetric with how Pattern Replace clears its selection — see
+        // chunk 4 — but for paste, leaving the selection feels less surprising.)
+        if (hexTableView) {
+            [hexTableView setNeedsDisplay:YES];
+        }
+    }
+    return true;
+}
+
 static bool pasteBytesFromPasteboard()
 {
+    if (tryRectPasteFromPasteboard()) {
+        return true;
+    }
+
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
 
     NSData *raw = [pasteboard dataForType:@"public.data"];
@@ -2452,6 +3143,10 @@ static bool pasteBytesFromPasteboard()
 
 static bool pasteBinaryFromPasteboard()
 {
+    if (tryRectPasteFromPasteboard()) {
+        return true;
+    }
+
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
 
     NSData *raw = [pasteboard dataForType:@"public.data"];
@@ -2649,9 +3344,13 @@ static NSString *promptHexGotoExpression(NSString *defaultText, std::size_t curr
     @autoreleasepool {
         NSAlert *alert = [[NSAlert alloc] init];
         alert.messageText = L(@"goto.title");
-        alert.informativeText = [NSString stringWithFormat:L(@"goto.message"),
-            std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH), currentOffset,
-            std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH), totalLength];
+        // Pre-format the two hex address strings here so the localized template only sees
+        // simple %@ slots — translators don't have to know about printf's "%0*zx"
+        // dynamic-width syntax, and they can reorder the two values across languages.
+        const int addrWidth = std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH);
+        NSString *currentHex = [NSString stringWithFormat:@"%0*zx", addrWidth, currentOffset];
+        NSString *endHex = [NSString stringWithFormat:@"%0*zx", addrWidth, totalLength];
+        alert.informativeText = [NSString stringWithFormat:L(@"goto.message"), currentHex, endHex];
         [alert addButtonWithTitle:L(@"goto.button")];
         [alert addButtonWithTitle:L(@"button.cancel")];
 
@@ -2684,7 +3383,11 @@ static void gotoHexOffset(std::size_t offset)
     activeByteOffset = offset;
     activeHexNibble = 0;
     activeCursorField = HexCursorField::Hex;
-    clearByteSelection();
+    // Goto is an unambiguous "jump the cursor here" navigation, so it collapses
+    // both linear and rectangular selections — leaving a rect anchored to the
+    // pre-Goto position would let the next Shift+Option+arrow extension treat
+    // the new cursor as the rect's far corner, producing a wildly wrong shape.
+    clearAllByteSelections();
 
     // Use scrollHexTableToActiveOffset() instead of a one-shot scrollRowToVisible.
     // The latter ran synchronously inside the modal-dismissal callstack, where
@@ -3270,7 +3973,7 @@ static int executePatternReplace(NSString *patternText, NSString **errorMessage)
         if (errorMessage) *errorMessage = L(@"patternReplace.openHexFirst");
         return -1;
     }
-    if (!hasByteSelection() || selectedByteEnd <= selectedByteStart) {
+    if (!hasAnyByteSelection()) {
         if (errorMessage) *errorMessage = L(@"patternReplace.requireSelection");
         return -1;
     }
@@ -3283,6 +3986,33 @@ static int executePatternReplace(NSString *patternText, NSString **errorMessage)
     if (!hexedit::parseHexClipboardText(std::string([patternText UTF8String]), patternBytes) || patternBytes.empty()) {
         if (errorMessage) *errorMessage = L(@"patternReplace.errorParsePattern");
         return -1;
+    }
+
+    if (hasRectSelection()) {
+        // Rectangular fill: each row starts fresh from pattern[0]. Build a row-major
+        // (width × height) buffer whose row r col c = pattern[c % pattern.size()],
+        // then use applyRectBytesPaste — same per-row clipping it already does for
+        // paste so a rect overhanging EOF fills only the in-file rows / columns.
+        std::vector<std::uint8_t> filler(g_rectSelection.totalBytes());
+        for (std::size_t r = 0; r < g_rectSelection.height; ++r) {
+            for (std::size_t c = 0; c < g_rectSelection.width; ++c) {
+                filler[r * g_rectSelection.width + c] = patternBytes[c % patternBytes.size()];
+            }
+        }
+        // Compute the actual number of bytes that will be written (clipped at EOF).
+        std::size_t bytesWritten = 0;
+        for (const auto &range : hexedit::rectToRanges(g_rectSelection, previewTotalLength)) {
+            bytesWritten += range.byteCount;
+        }
+        if (!applyRectBytesPaste(g_rectSelection, filler.data(), filler.size())) {
+            if (errorMessage) *errorMessage = L(@"patternReplace.errorFailed");
+            return -1;
+        }
+        // Leave the rect selected so the user can repeat (matches Paste behaviour).
+        if (hexTableView) {
+            [hexTableView setNeedsDisplay:YES];
+        }
+        return static_cast<int>(bytesWritten);
     }
 
     const std::size_t length = selectedByteEnd - selectedByteStart;
@@ -3313,16 +4043,24 @@ static void presentPatternReplaceDialog()
         showMessage(L(@"app.title"), L(@"patternReplace.openHexFirst"));
         return;
     }
-    if (!hasByteSelection() || selectedByteEnd <= selectedByteStart) {
+    if (!hasAnyByteSelection()) {
         showMessage(L(@"app.title"), L(@"patternReplace.requireSelection"));
         return;
     }
 
     @autoreleasepool {
-        const std::size_t length = selectedByteEnd - selectedByteStart;
         NSAlert *alert = [[NSAlert alloc] init];
         alert.messageText = L(@"patternReplace.title");
-        alert.informativeText = [NSString stringWithFormat:L(@"patternReplace.message"), length];
+        if (hasRectSelection()) {
+            // Rect-specific message — explains the per-row restart so the user knows
+            // the pattern won't run continuously across rows like the linear path.
+            alert.informativeText = [NSString stringWithFormat:L(@"patternReplace.messageRect"),
+                (unsigned long)g_rectSelection.width,
+                (unsigned long)g_rectSelection.height];
+        } else {
+            const std::size_t length = selectedByteEnd - selectedByteStart;
+            alert.informativeText = [NSString stringWithFormat:L(@"patternReplace.message"), length];
+        }
         [alert addButtonWithTitle:L(@"patternReplace.button")];
         [alert addButtonWithTitle:L(@"button.cancel")];
 
@@ -3331,6 +4069,13 @@ static void presentPatternReplaceDialog()
         patternField.accessibilityIdentifier = @"hex-editor.patternreplace.pattern";
         alert.accessoryView = patternField;
         [alert.window setInitialFirstResponder:patternField];
+
+        // Capture rect shape before runModal — executePatternReplace leaves the
+        // selection in place but we still want the summary to mention the original
+        // dimensions even if a future change shifts that.
+        const bool wasRect = hasRectSelection();
+        const std::size_t rectW = g_rectSelection.width;
+        const std::size_t rectH = g_rectSelection.height;
 
         const NSModalResponse response = [alert runModal];
         if (response != NSAlertFirstButtonReturn) {
@@ -3344,9 +4089,17 @@ static void presentPatternReplaceDialog()
             presentHexValidationError(err ?: L(@"patternReplace.errorFailed"));
             return;
         }
-        NSString *summary = (bytesWritten == 1)
-            ? L(@"patternReplace.summarySingular")
-            : [NSString stringWithFormat:L(@"patternReplace.summaryPlural"), bytesWritten];
+        NSString *summary = nil;
+        if (wasRect) {
+            summary = [NSString stringWithFormat:L(@"patternReplace.summaryRect"),
+                (unsigned long)rectW,
+                (unsigned long)rectH,
+                (unsigned long)bytesWritten];
+        } else if (bytesWritten == 1) {
+            summary = L(@"patternReplace.summarySingular");
+        } else {
+            summary = [NSString stringWithFormat:L(@"patternReplace.summaryPlural"), bytesWritten];
+        }
         showMessage(L(@"app.title"), summary);
     }
 }
@@ -3431,6 +4184,8 @@ static void setHexViewBytesPerCell(int bytesPerCell)
         g_littleEndian = false;
     }
     g_columns = defaultColumnsForBytesPerCell(g_bytesPerCell);
+    // Rect geometry is anchored to the row width; that width just changed.
+    clearRectSelection();
     saveHexPrefs();
     applyHexViewMode();
 }
@@ -3477,6 +4232,8 @@ static void setHexColumns(int columns)
         return;
     }
     g_columns = clamped;
+    // Rect geometry is anchored to the row width; that width just changed.
+    clearRectSelection();
     saveHexPrefs();
     applyHexViewMode();
 }
@@ -3640,12 +4397,26 @@ static NSString *makeStatusText()
         return L(@"status.empty");
     }
 
+    NSString *baseText = nil;
     if (previewBytes.size() < previewTotalLength) {
-        return [NSString stringWithFormat:L(@"status.showingTruncated"),
+        baseText = [NSString stringWithFormat:L(@"status.showingTruncated"),
             previewBytes.size(), previewTotalLength];
+    } else {
+        baseText = [NSString stringWithFormat:L(@"status.showing"), previewBytes.size()];
     }
 
-    return [NSString stringWithFormat:L(@"status.showing"), previewBytes.size()];
+    if (hasRectSelection()) {
+        // Rectangle status reads e.g. "Rectangle: 4 × 3 (12 bytes)" — the totalBytes
+        // value is the unclipped product so the user sees the rectangle's nominal size
+        // even when its trailing row runs past EOF.
+        NSString *rectText = [NSString stringWithFormat:L(@"status.rectangle"),
+            (unsigned long)g_rectSelection.width,
+            (unsigned long)g_rectSelection.height,
+            (unsigned long)g_rectSelection.totalBytes()];
+        return [NSString stringWithFormat:@"%@  %@", baseText, rectText];
+    }
+
+    return baseText;
 }
 
 static void refreshHexTable(NSTableView *tableView, NSTextField *statusLabel)
@@ -3772,7 +4543,7 @@ static void hideHexPreview()
 
         previewBytes.clear();
         bookmarkedRows.clear();
-        clearByteSelection();
+        clearAllByteSelections();
         previewTotalLength = 0;
         previewScintillaHandle = 0;
         previewBufferId = 0;
@@ -3815,6 +4586,87 @@ static void insertColumnsPreview()
 static void patternReplacePreview()
 {
     presentPatternReplaceDialog();
+}
+
+// MARK: - Options dialog
+
+// Modal sheet for plugin-wide preferences. Today there is one row (rectangular-selection
+// modifier); the layout leaves room above each row for additional preferences to be
+// appended later without restructuring. Reset only updates the in-dialog state — the
+// user must still click Save for the change to land in NSUserDefaults.
+static void presentOptionsDialog()
+{
+    @autoreleasepool {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = L(@"options.title");
+        alert.informativeText = L(@"options.message");
+        [alert addButtonWithTitle:L(@"options.button.save")];
+        [alert addButtonWithTitle:L(@"options.button.reset")];
+        [alert addButtonWithTitle:L(@"button.cancel")];
+
+        const CGFloat width = 380.0;
+        const CGFloat labelHeight = 18.0;
+        const CGFloat popupHeight = 26.0;
+        const CGFloat sectionGap = 4.0;
+        const CGFloat totalHeight = labelHeight + sectionGap + popupHeight;
+
+        NSView *accessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, totalHeight)];
+
+        CGFloat y = totalHeight - labelHeight;
+        NSTextField *label = [NSTextField labelWithString:L(@"options.rectModifier.label")];
+        label.frame = NSMakeRect(0, y, width, labelHeight);
+        [accessory addSubview:label];
+
+        y -= (popupHeight + sectionGap);
+        NSPopUpButton *modifierPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, y, width, popupHeight)
+                                                                 pullsDown:NO];
+        modifierPopup.accessibilityIdentifier = @"hex-editor.options.rectMod.popup";
+        [modifierPopup addItemWithTitle:L(@"options.rectModifier.option")];
+        modifierPopup.lastItem.representedObject = HEX_RECT_MOD_OPTION;
+        [modifierPopup addItemWithTitle:L(@"options.rectModifier.shiftOption")];
+        modifierPopup.lastItem.representedObject = HEX_RECT_MOD_SHIFT_OPTION;
+        [accessory addSubview:modifierPopup];
+
+        // Block to apply a modifier value to the popup, shared by initial population and Reset.
+        void (^applyModifier)(NSString *) = ^(NSString *modifier) {
+            for (NSMenuItem *item in modifierPopup.itemArray) {
+                if ([(NSString *)item.representedObject isEqualToString:modifier]) {
+                    [modifierPopup selectItem:item];
+                    return;
+                }
+            }
+            [modifierPopup selectItemAtIndex:0];
+        };
+        applyModifier(g_rectModifier);
+
+        alert.accessoryView = accessory;
+        [alert.window setInitialFirstResponder:modifierPopup];
+
+        // Loop on Reset so the user can preview the defaults before committing.
+        // Save / Cancel exit the loop; Reset stays in it.
+        while (true) {
+            const NSModalResponse response = [alert runModal];
+            if (response == NSAlertSecondButtonReturn) {
+                applyModifier(HEX_RECT_MOD_DEFAULT);
+                continue;
+            }
+            if (response != NSAlertFirstButtonReturn) {
+                return;
+            }
+            break;
+        }
+
+        NSString *chosen = (NSString *)modifierPopup.selectedItem.representedObject ?: HEX_RECT_MOD_DEFAULT;
+        if (![chosen isEqualToString:g_rectModifier]) {
+            g_rectModifier = chosen;
+            saveHexPrefs();
+        }
+    }
+}
+
+static void optionsPreview()
+{
+    presentOptionsDialog();
 }
 
 extern "C" NPP_EXPORT void setInfo(NppData data)
@@ -3860,10 +4712,15 @@ extern "C" NPP_EXPORT void setInfo(NppData data)
     funcItem[4]._init2Check = false;
     funcItem[4]._pShKey = nullptr;
 
-    strlcpy(funcItem[5]._itemName, [L(@"menu.plugin.help") UTF8String], NPP_MENU_ITEM_SIZE);
-    funcItem[5]._pFunc = showAbout;
+    strlcpy(funcItem[5]._itemName, [L(@"menu.plugin.options") UTF8String], NPP_MENU_ITEM_SIZE);
+    funcItem[5]._pFunc = optionsPreview;
     funcItem[5]._init2Check = false;
     funcItem[5]._pShKey = nullptr;
+
+    strlcpy(funcItem[6]._itemName, [L(@"menu.plugin.help") UTF8String], NPP_MENU_ITEM_SIZE);
+    funcItem[6]._pFunc = showAbout;
+    funcItem[6]._init2Check = false;
+    funcItem[6]._pShKey = nullptr;
 }
 
 extern "C" NPP_EXPORT const char *getName()

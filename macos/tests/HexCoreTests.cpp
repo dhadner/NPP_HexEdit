@@ -1079,6 +1079,260 @@ void testComputeByteDiffs()
     }
 }
 
+void testMakeRectSelection()
+{
+    g_currentSuite = "makeRectSelection";
+
+    // Anchor and end on same byte → 1×1 rectangle.
+    {
+        const RectSelection r = makeRectSelection(/*anchor*/ 5, /*end*/ 5, /*bpr*/ 16, /*total*/ 256);
+        HEX_EXPECT(r.active());
+        HEX_EXPECT_EQ(r.originOffset, static_cast<std::size_t>(5));
+        HEX_EXPECT_EQ(r.width, static_cast<std::size_t>(1));
+        HEX_EXPECT_EQ(r.height, static_cast<std::size_t>(1));
+        HEX_EXPECT_EQ(r.bytesPerRow, static_cast<std::size_t>(16));
+    }
+
+    // Top-left → bottom-right: anchor=0x12 end=0x35, bpr=16
+    //   anchorRow=1 anchorCol=2, endRow=3 endCol=5 → origin=18, width=4, height=3.
+    {
+        const RectSelection r = makeRectSelection(0x12, 0x35, 16, 256);
+        HEX_EXPECT_EQ(r.originOffset, static_cast<std::size_t>(0x12));
+        HEX_EXPECT_EQ(r.width, static_cast<std::size_t>(4));
+        HEX_EXPECT_EQ(r.height, static_cast<std::size_t>(3));
+        HEX_EXPECT_EQ(r.totalBytes(), static_cast<std::size_t>(12));
+    }
+
+    // Bottom-right → top-left: same rectangle when corners reversed.
+    {
+        const RectSelection r = makeRectSelection(0x35, 0x12, 16, 256);
+        HEX_EXPECT_EQ(r.originOffset, static_cast<std::size_t>(0x12));
+        HEX_EXPECT_EQ(r.width, static_cast<std::size_t>(4));
+        HEX_EXPECT_EQ(r.height, static_cast<std::size_t>(3));
+    }
+
+    // Bottom-left → top-right: still normalises to the same rectangle.
+    //   anchor=0x32 (row 3, col 2), end=0x15 (row 1, col 5) → rows[1..3], cols[2..5]
+    {
+        const RectSelection r = makeRectSelection(0x32, 0x15, 16, 256);
+        HEX_EXPECT_EQ(r.originOffset, static_cast<std::size_t>(0x12));
+        HEX_EXPECT_EQ(r.width, static_cast<std::size_t>(4));
+        HEX_EXPECT_EQ(r.height, static_cast<std::size_t>(3));
+    }
+
+    // Both offsets clamped past EOF → still produce a valid rectangle anchored at end.
+    {
+        const RectSelection r = makeRectSelection(/*anchor*/ 1000, /*end*/ 2000, /*bpr*/ 16, /*total*/ 100);
+        // anchor and end both clamp to 100. row=6 col=4 → 1×1 rect at offset 100 (one past EOF).
+        HEX_EXPECT(r.active());
+        HEX_EXPECT_EQ(r.originOffset, static_cast<std::size_t>(100));
+    }
+
+    // bytesPerRow = 0 → inactive rectangle (defensive).
+    {
+        const RectSelection r = makeRectSelection(0, 10, 0, 100);
+        HEX_EXPECT(!r.active());
+    }
+}
+
+void testRectToRanges()
+{
+    g_currentSuite = "rectToRanges";
+
+    // 4×3 rectangle, fully inside file → 3 equal-width ranges.
+    {
+        const RectSelection rect = makeRectSelection(0x12, 0x35, 16, 256);
+        const auto ranges = rectToRanges(rect, 256);
+        HEX_EXPECT_EQ(ranges.size(), static_cast<std::size_t>(3));
+        HEX_EXPECT_EQ(ranges[0].offset, static_cast<std::size_t>(0x12));
+        HEX_EXPECT_EQ(ranges[0].byteCount, static_cast<std::size_t>(4));
+        HEX_EXPECT_EQ(ranges[1].offset, static_cast<std::size_t>(0x22));
+        HEX_EXPECT_EQ(ranges[1].byteCount, static_cast<std::size_t>(4));
+        HEX_EXPECT_EQ(ranges[2].offset, static_cast<std::size_t>(0x32));
+        HEX_EXPECT_EQ(ranges[2].byteCount, static_cast<std::size_t>(4));
+    }
+
+    // Last row clipped because the rect runs past EOF. Built directly (not via
+    // makeRectSelection, which would clamp the corners and collapse the rectangle).
+    //   3 rows × 4 wide starting at offset 0 with file length 10: row 2 offset=8, take=2.
+    {
+        RectSelection rect;
+        rect.originOffset = 0;
+        rect.width = 4;
+        rect.height = 3;
+        rect.bytesPerRow = 4;
+        const auto ranges = rectToRanges(rect, 10);
+        HEX_EXPECT_EQ(ranges.size(), static_cast<std::size_t>(3));
+        HEX_EXPECT_EQ(ranges[0].byteCount, static_cast<std::size_t>(4));
+        HEX_EXPECT_EQ(ranges[1].byteCount, static_cast<std::size_t>(4));
+        HEX_EXPECT_EQ(ranges[2].offset, static_cast<std::size_t>(8));
+        HEX_EXPECT_EQ(ranges[2].byteCount, static_cast<std::size_t>(2));
+    }
+
+    // First row already past EOF → empty result (extreme case after file truncation).
+    {
+        RectSelection rect;
+        rect.originOffset = 100;
+        rect.width = 4;
+        rect.height = 2;
+        rect.bytesPerRow = 16;
+        const auto ranges = rectToRanges(rect, 50);
+        HEX_EXPECT_EQ(ranges.size(), static_cast<std::size_t>(0));
+    }
+
+    // Inactive rect → empty.
+    {
+        const auto ranges = rectToRanges(RectSelection{}, 100);
+        HEX_EXPECT_EQ(ranges.size(), static_cast<std::size_t>(0));
+    }
+}
+
+void testExtractRectBytes()
+{
+    g_currentSuite = "extractRectBytes";
+
+    // Source: 16 bytes, all distinct values 0x10 .. 0x1F across 1 row of bpr=16.
+    // We build a 4x3 rect at (col 2, row 0) but with bpr=8 so it spans rows 0..2.
+    // Row 0 bytes: 10..17, Row 1: 18..1F, Row 2: 00..00 (out of range).
+    {
+        std::vector<std::uint8_t> src(16);
+        for (std::size_t i = 0; i < 16; ++i) src[i] = static_cast<std::uint8_t>(0x10 + i);
+        RectSelection rect;
+        rect.originOffset = 2;     // row 0 col 2
+        rect.width = 4;
+        rect.height = 3;
+        rect.bytesPerRow = 8;
+        std::vector<std::uint8_t> out;
+        HEX_EXPECT(extractRectBytes(src.data(), src.size(), rect, out));
+        // Row 0 cols 2..5 → 0x12 0x13 0x14 0x15
+        HEX_EXPECT_EQ(out.size(), static_cast<std::size_t>(12));
+        HEX_EXPECT_EQ(out[0], static_cast<std::uint8_t>(0x12));
+        HEX_EXPECT_EQ(out[3], static_cast<std::uint8_t>(0x15));
+        // Row 1 cols 2..5 → 0x1A 0x1B 0x1C 0x1D
+        HEX_EXPECT_EQ(out[4], static_cast<std::uint8_t>(0x1A));
+        HEX_EXPECT_EQ(out[7], static_cast<std::uint8_t>(0x1D));
+        // Row 2 entirely past EOF (offset 16+ ≥ totalLength 16) → zero-filled.
+        HEX_EXPECT_EQ(out[8], static_cast<std::uint8_t>(0));
+        HEX_EXPECT_EQ(out[11], static_cast<std::uint8_t>(0));
+    }
+
+    // Inactive rect → returns false, out untouched.
+    {
+        std::vector<std::uint8_t> out{0xAA, 0xBB};
+        HEX_EXPECT(!extractRectBytes(nullptr, 0, RectSelection{}, out));
+        HEX_EXPECT_EQ(out.size(), static_cast<std::size_t>(2));
+    }
+}
+
+void testFormatRectClipboardHex()
+{
+    g_currentSuite = "formatRectClipboardHex";
+
+    // 2x2 rect of {DE AD, BE EF} → "DE AD\nBE EF"
+    {
+        std::vector<std::uint8_t> src = {0xDE, 0xAD, 0x00, 0x00, 0xBE, 0xEF};
+        RectSelection rect;
+        rect.originOffset = 0;
+        rect.width = 2;
+        rect.height = 2;
+        rect.bytesPerRow = 4;
+        const std::string text = formatRectClipboardHex(src.data(), rect, src.size());
+        HEX_EXPECT(text == "DE AD\nBE EF");
+    }
+
+    // Past-EOF row pads with zeros.
+    {
+        std::vector<std::uint8_t> src = {0xDE, 0xAD};
+        RectSelection rect;
+        rect.originOffset = 0;
+        rect.width = 2;
+        rect.height = 2;
+        rect.bytesPerRow = 2;
+        const std::string text = formatRectClipboardHex(src.data(), rect, src.size());
+        HEX_EXPECT(text == "DE AD\n00 00");
+    }
+}
+
+void testFormatRectClipboardAscii()
+{
+    g_currentSuite = "formatRectClipboardAscii";
+
+    // 4x2 rect of "AB.." per row.
+    {
+        std::vector<std::uint8_t> src = {'A', 'B', 0x01, 0x02, 'C', 'D', 0x7F, 0xFF};
+        RectSelection rect;
+        rect.originOffset = 0;
+        rect.width = 4;
+        rect.height = 2;
+        rect.bytesPerRow = 4;
+        const std::string text = formatRectClipboardAscii(src.data(), rect, src.size());
+        // 0x01, 0x02 → '.'  (non-printable)
+        // 0x7F (DEL), 0xFF → '.'
+        HEX_EXPECT(text == "AB..\nCD..");
+    }
+}
+
+void testParseRectClipboardText()
+{
+    g_currentSuite = "parseRectClipboardText";
+
+    // Hex with spaces — 2x2.
+    {
+        std::vector<std::uint8_t> bytes;
+        std::size_t w = 0, h = 0;
+        HEX_EXPECT(parseRectClipboardText("DE AD\nBE EF", bytes, w, h));
+        HEX_EXPECT_EQ(w, static_cast<std::size_t>(2));
+        HEX_EXPECT_EQ(h, static_cast<std::size_t>(2));
+        HEX_EXPECT_EQ(bytes.size(), static_cast<std::size_t>(4));
+        HEX_EXPECT_EQ(bytes[0], static_cast<std::uint8_t>(0xDE));
+        HEX_EXPECT_EQ(bytes[3], static_cast<std::uint8_t>(0xEF));
+    }
+
+    // No-separator hex — 4x1 from "DEADBEEF".
+    {
+        std::vector<std::uint8_t> bytes;
+        std::size_t w = 0, h = 0;
+        HEX_EXPECT(parseRectClipboardText("DEADBEEF", bytes, w, h));
+        HEX_EXPECT_EQ(w, static_cast<std::size_t>(4));
+        HEX_EXPECT_EQ(h, static_cast<std::size_t>(1));
+        HEX_EXPECT_EQ(bytes[2], static_cast<std::uint8_t>(0xBE));
+    }
+
+    // ASCII fallback when any line fails hex parse — width = char count, raw bytes.
+    {
+        std::vector<std::uint8_t> bytes;
+        std::size_t w = 0, h = 0;
+        HEX_EXPECT(parseRectClipboardText("abcd\nefgh", bytes, w, h));
+        HEX_EXPECT_EQ(w, static_cast<std::size_t>(4));
+        HEX_EXPECT_EQ(h, static_cast<std::size_t>(2));
+        HEX_EXPECT_EQ(bytes[0], static_cast<std::uint8_t>('a'));
+        HEX_EXPECT_EQ(bytes[7], static_cast<std::uint8_t>('h'));
+    }
+
+    // Mixed-width rows in hex mode → reject (shape mismatch).
+    {
+        std::vector<std::uint8_t> bytes;
+        std::size_t w = 0, h = 0;
+        HEX_EXPECT(!parseRectClipboardText("DE AD\nBE", bytes, w, h));
+    }
+
+    // CRLF tolerated.
+    {
+        std::vector<std::uint8_t> bytes;
+        std::size_t w = 0, h = 0;
+        HEX_EXPECT(parseRectClipboardText("DE AD\r\nBE EF\r\n", bytes, w, h));
+        HEX_EXPECT_EQ(h, static_cast<std::size_t>(2));
+    }
+
+    // Empty / blank input → reject.
+    {
+        std::vector<std::uint8_t> bytes;
+        std::size_t w = 0, h = 0;
+        HEX_EXPECT(!parseRectClipboardText("", bytes, w, h));
+        HEX_EXPECT(!parseRectClipboardText("\n\n", bytes, w, h));
+    }
+}
+
 }
 
 int main()
@@ -1107,9 +1361,15 @@ int main()
     testPlanBitEdit();
     testNavigateInDisplayOrder();
     testComputeByteDiffs();
+    testMakeRectSelection();
+    testRectToRanges();
+    testExtractRectBytes();
+    testFormatRectClipboardHex();
+    testFormatRectClipboardAscii();
+    testParseRectClipboardText();
 
     if (g_failures == 0) {
-        std::printf("PASS: %d assertions across 24 suites\n", g_assertions);
+        std::printf("PASS: %d assertions across 30 suites\n", g_assertions);
         return 0;
     }
     std::printf("FAIL: %d/%d assertions failed\n", g_failures, g_assertions);

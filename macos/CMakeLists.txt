@@ -4,7 +4,7 @@ if(NOT DEFINED CMAKE_OSX_ARCHITECTURES)
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS architectures" FORCE)
 endif()
 
-project(HexEditorMac LANGUAGES CXX OBJCXX)
+project(HexEditorMac VERSION 1.1.0 LANGUAGES CXX OBJCXX)
 
 include(CTest)
 

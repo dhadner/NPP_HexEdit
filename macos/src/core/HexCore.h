@@ -51,6 +51,74 @@ struct ByteRange {
     std::size_t byteCount = 0;
 };
 
+// A rectangular block of bytes inside a fixed-row-width hex view. The block spans
+// `width` bytes across `height` consecutive rows starting at `originOffset`, where
+// originOffset is the top-left byte (rowStart * bytesPerRow + colStart). Rectangular
+// selections are always anchored to a row width — if the viewport's bytes-per-row
+// changes after the rectangle is created, the selection must be cleared by the caller
+// because the geometry no longer maps to the same bytes on screen.
+struct RectSelection {
+    std::size_t originOffset = 0;
+    std::size_t width = 0;
+    std::size_t height = 0;
+    std::size_t bytesPerRow = 0;
+
+    bool active() const { return width > 0 && height > 0 && bytesPerRow > 0; }
+    std::size_t totalBytes() const { return width * height; }
+};
+
+// Build a rectangular selection from two corner byte offsets. Either order works
+// (anchor can be top-left, top-right, bottom-left, or bottom-right). Both offsets
+// are clamped to [0, totalLength] before computing the rectangle. Returns an inactive
+// rectangle (width=0 or height=0) when bytesPerRow is 0 or both offsets land on the
+// same byte.
+RectSelection makeRectSelection(std::size_t anchorOffset,
+                                std::size_t endOffset,
+                                std::size_t bytesPerRow,
+                                std::size_t totalLength);
+
+// Decompose the rectangle into one ByteRange per row, clipped to totalLength so the
+// last row may yield a shorter range when the rectangle extends past EOF. Returns an
+// empty vector for an inactive rectangle.
+std::vector<ByteRange> rectToRanges(const RectSelection &rect, std::size_t totalLength);
+
+// Extract a rectangle's bytes into a contiguous (width × height) buffer. Bytes that
+// fall past EOF are zero-filled so the returned buffer always has rect.totalBytes()
+// elements — this keeps the clipboard payload's shape stable even for rectangles
+// that overhang the end of the file. Returns false (and leaves out untouched) for
+// an inactive rectangle.
+bool extractRectBytes(const std::uint8_t *bytes,
+                      std::size_t totalLength,
+                      const RectSelection &rect,
+                      std::vector<std::uint8_t> &out);
+
+// Hex-text rendering of a rectangle: each row's bytes formatted as space-separated
+// 2-digit uppercase hex pairs, rows joined by '\n'. Used for the public-text fallback
+// on the pasteboard so external apps see something usable, and for the parse-text
+// paste path (Q2.b) on incoming clipboards from external apps.
+std::string formatRectClipboardHex(const std::uint8_t *bytes,
+                                   const RectSelection &rect,
+                                   std::size_t totalLength);
+
+// ASCII-text rendering of a rectangle: each row's bytes shown as printable ASCII
+// (32..126); non-printable bytes become '.'. Rows joined by '\n'. Symmetric in shape
+// with formatRectClipboardHex but emitted when the rect's source pane is ASCII.
+std::string formatRectClipboardAscii(const std::uint8_t *bytes,
+                                     const RectSelection &rect,
+                                     std::size_t totalLength);
+
+// Parse a `\n`-separated text clipboard back into a rectangular byte buffer. Each
+// non-empty line is treated as one row; the parser accepts either hex byte tokens
+// (e.g. "DE AD BE EF" or "DEADBEEF") or, if every line fails as hex, the raw bytes
+// of each line (UTF-8 encoded). All rows must have the same width — mismatched rows
+// fail the parse. On success, outBytes contains width*height bytes in row-major
+// order; outWidth and outHeight describe the shape. Returns false (and leaves the
+// out parameters untouched) on empty / shape-mismatched / unparseable input.
+bool parseRectClipboardText(const std::string &text,
+                            std::vector<std::uint8_t> &outBytes,
+                            std::size_t &outWidth,
+                            std::size_t &outHeight);
+
 struct ByteEditOperation {
     std::size_t offset = 0;
     std::size_t replacedByteCount = 0;

@@ -27,12 +27,26 @@ private struct HexCursorState {
     let sciSelStart: Int?
     let sciSelEnd: Int?
     let sciCaret: Int?
+    /// Rectangular (block) selection state. nil when the diagnostic was emitted by an
+    /// older build that didn't carry these fields; rectActive=false otherwise.
+    let rectActive: Bool?
+    let rectOrigin: Int?
+    let rectWidth: Int?
+    let rectHeight: Int?
+    let rectBpr: Int?
+    /// Source pane the rectangular drag originated in: "Hex", "Ascii", or "Address".
+    /// Used by chunk 3 paste-matrix tests to confirm the source-pane tag survives.
+    let rectOriginPane: String?
 
     /// Compact dump of all fields for failure messages.
     var debugDescription: String {
         var s = "offset=\(offset);selStart=\(selStart);selEnd=\(selEnd);hasSelection=\(hasSelection)"
         if let a = sciSelStart, let b = sciSelEnd, let c = sciCaret {
             s += ";sciSelStart=\(a);sciSelEnd=\(b);sciCaret=\(c)"
+        }
+        if let r = rectActive, r,
+           let o = rectOrigin, let w = rectWidth, let h = rectHeight, let p = rectOriginPane {
+            s += ";rect=\(o)+\(w)x\(h)@\(p)"
         }
         return s
     }
@@ -59,7 +73,13 @@ private struct HexCursorState {
             statusFontLineHeight: fields["statusFontH"].flatMap({ Double($0) }),
             sciSelStart: fields["sciSelStart"].flatMap({ Int($0) }),
             sciSelEnd: fields["sciSelEnd"].flatMap({ Int($0) }),
-            sciCaret: fields["sciCaret"].flatMap({ Int($0) })
+            sciCaret: fields["sciCaret"].flatMap({ Int($0) }),
+            rectActive: fields["rectActive"].flatMap({ Int($0) }).map { $0 != 0 },
+            rectOrigin: fields["rectOrigin"].flatMap({ Int($0) }),
+            rectWidth: fields["rectWidth"].flatMap({ Int($0) }),
+            rectHeight: fields["rectHeight"].flatMap({ Int($0) }),
+            rectBpr: fields["rectBpr"].flatMap({ Int($0) }),
+            rectOriginPane: fields["rectOriginPane"]
         )
     }
 }
@@ -165,6 +185,25 @@ final class HexEditorUITests: XCTestCase {
 
         let hexEditorItem = app.menuBars.menuItems["HEX-Editor"]
         XCTAssertTrue(hexEditorItem.waitForExistence(timeout: 5), "The HEX-Editor plugin menu is not visible under Plugins. Install the plugin first with cmake --install macos/build-universal.")
+    }
+
+    func testOptionsDialogOpensAndCancelsCleanly() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try invokeHexEditorMenu(app: app, item: "Options...")
+
+        let dialog = app.dialogs.firstMatch
+        XCTAssertTrue(dialog.waitForExistence(timeout: 5),
+                      "Options... should open a modal dialog.")
+
+        let modifierPopup = app.popUpButtons["hex-editor.options.rectMod.popup"]
+        XCTAssertTrue(modifierPopup.waitForExistence(timeout: 3),
+                      "Options dialog should expose the rectangular-modifier popup.")
+
+        dialog.buttons["Cancel"].click()
+        XCTAssertTrue(dialog.waitForNonExistence(timeout: 5),
+                      "Options dialog should dismiss after Cancel.")
     }
 
     func testViewInHexToggle() throws {
@@ -1373,6 +1412,322 @@ func testContextMenuCommands() throws {
         try assertAboutDialog(app: app, helpItem: "Help...",
                               expectedTag: "Strings: (embedded)",
                               expectedBodyContains: "Native macOS port")
+    }
+
+    // MARK: - Rectangular (block) selection — v1.1.0
+
+    /// Bootstraps a 1×1 rect at the caret then extends to (1+addCols)×(1+addRows)
+    /// via Shift+Option+arrow. Caller must have positioned the cursor at the rect's
+    /// intended top-left corner and have the hex view focused before calling.
+    /// The first Shift+Option+Right press creates the 1×1 anchor + advances one
+    /// column = 2×1 rect, so for a final width W you need (W-1) Right presses.
+    private func extendRectViaKeyboard(app: XCUIApplication, addCols: Int, addRows: Int) {
+        for _ in 0..<addCols {
+            app.typeKey(.rightArrow, modifierFlags: [.shift, .option])
+        }
+        for _ in 0..<addRows {
+            app.typeKey(.downArrow, modifierFlags: [.shift, .option])
+        }
+        Thread.sleep(forTimeInterval: 0.2)
+    }
+
+    /// Translates a byte-offset-within-row into the AX index of the cell that holds
+    /// it under `row.staticTexts.element(boundBy:)`. The hex table inserts an empty
+    /// "midspacer" column between bytes 7 and 8 (for the default 16-byte row) to
+    /// draw the visual half-row gap; that empty cell counts as one static text in
+    /// AX traversal, so any byte at or past the midpoint shifts by +1. The offset
+    /// column also occupies index 0, so add 1 unconditionally.
+    /// See [HexEditor.mm: addHexCellColumns](../../macos/src/HexEditor.mm) for the
+    /// canonical column layout: `offset, cell00..cell0(M-1), midspacer, cell0M..cell0F, spacer, ascii`.
+    private func cellIndex(forByte byte: Int, cellsPerRow: Int = 16) -> Int {
+        let midpoint = cellsPerRow / 2
+        let offsetSlot = 1
+        return byte < midpoint ? offsetSlot + byte : offsetSlot + byte + 1
+    }
+
+    /// Clicks an Edit-menu item (Cut / Copy / Paste / etc.). Existing tests use this
+    /// route rather than the Cmd+letter shortcuts because XCUI key delivery to the
+    /// hex view is reliable for Cmd+key only when the host's menu binding does the
+    /// work — synthesizing a raw Cmd+C event into the hex view often hits NSTableView's
+    /// default `copy:` (which copies row indices, not the rect data) instead of
+    /// dispatching through the responder chain to `hexCopy:`.
+    private func invokeEditMenuItem(app: XCUIApplication, item: String) {
+        let editMenu = app.menuBars.menuBarItems["Edit"]
+        XCTAssertTrue(editMenu.waitForExistence(timeout: 5))
+        editMenu.click()
+        let menuItem = app.menuBars.menuItems[item]
+        XCTAssertTrue(menuItem.waitForExistence(timeout: 5),
+                      "Edit > \(item) should be visible.")
+        XCTAssertTrue(menuItem.isEnabled, "Edit > \(item) should be enabled.")
+        menuItem.click()
+        Thread.sleep(forTimeInterval: 0.3)
+    }
+
+    func testRectKeyboardCreatesAndExtendsRectangle() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 32 bytes = two full 16-byte rows, so a 4×2 rect fits comfortably.
+        try createBufferWithText(app: app, text: "ABCDEFGHIJKLMNOPabcdefghijklmnop")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        try positionHexCursorAtZero(app: app, hexTable: hexTable)
+
+        // No rect yet.
+        let preState = HexCursorState.read(from: app)
+        XCTAssertNotNil(preState, "Diagnostic AX must report cursor state.")
+        XCTAssertEqual(preState?.rectActive, false, "No rect should be active before extension.")
+
+        // First Shift+Option+Right bootstraps a 1×1 rect at offset 0, then advances
+        // the far corner one column → 2×1 rect.
+        app.typeKey(.rightArrow, modifierFlags: [.shift, .option])
+        Thread.sleep(forTimeInterval: 0.2)
+        let after1 = HexCursorState.read(from: app)
+        XCTAssertEqual(after1?.rectActive, true, "After one Shift+Option+Right, a rect should be active.")
+        XCTAssertEqual(after1?.rectOrigin, 0)
+        XCTAssertEqual(after1?.rectWidth, 2, "Width should be 2 after one extension press.")
+        XCTAssertEqual(after1?.rectHeight, 1)
+        XCTAssertEqual(after1?.rectOriginPane, "Hex")
+
+        // Two more Right + one Down → 4 wide, 2 tall.
+        app.typeKey(.rightArrow, modifierFlags: [.shift, .option])
+        app.typeKey(.rightArrow, modifierFlags: [.shift, .option])
+        app.typeKey(.downArrow, modifierFlags: [.shift, .option])
+        Thread.sleep(forTimeInterval: 0.2)
+        let after4x2 = HexCursorState.read(from: app)
+        XCTAssertEqual(after4x2?.rectWidth, 4)
+        XCTAssertEqual(after4x2?.rectHeight, 2)
+
+        // Plain Left arrow (no modifiers) collapses the rect — clearAllByteSelections
+        // fires on the linear-arrow path.
+        app.typeKey(.leftArrow, modifierFlags: [])
+        Thread.sleep(forTimeInterval: 0.2)
+        let afterCollapse = HexCursorState.read(from: app)
+        XCTAssertEqual(afterCollapse?.rectActive, false,
+                       "Plain arrow should collapse the rect to a caret. State: \(afterCollapse?.debugDescription ?? "nil")")
+    }
+
+    func testRectCopyPasteRoundTripPreservesBytes() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 32 bytes laid out as two 16-byte rows of distinct content so we can spot
+        // exactly which bytes moved. Row 0 = "ABCDEFGHIJKLMNOP" (0x41..0x50);
+        // row 1 = "abcdefghijklmnop" (0x61..0x70).
+        try createBufferWithText(app: app, text: "ABCDEFGHIJKLMNOPabcdefghijklmnop")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        try positionHexCursorAtZero(app: app, hexTable: hexTable)
+
+        // Build a 4×2 rect at offset 0 covering "ABCD" (bytes 0..3) on row 0 and
+        // "abcd" (bytes 16..19) on row 1.
+        extendRectViaKeyboard(app: app, addCols: 3, addRows: 1)
+        let srcRect = HexCursorState.read(from: app)
+        XCTAssertEqual(srcRect?.rectWidth, 4)
+        XCTAssertEqual(srcRect?.rectHeight, 2)
+
+        invokeEditMenuItem(app: app, item: "Copy")
+
+        // Move the cursor to byte offset 8 via Goto (which now collapses the rect)
+        // and rebuild a same-shape rect at the new origin.
+        try positionHexCursorAt(app: app, hexTable: hexTable, offset: 8)
+        extendRectViaKeyboard(app: app, addCols: 3, addRows: 1)
+        let destRect = HexCursorState.read(from: app)
+        XCTAssertEqual(destRect?.rectWidth, 4)
+        XCTAssertEqual(destRect?.rectHeight, 2)
+        XCTAssertEqual(destRect?.rectOrigin, 8)
+
+        invokeEditMenuItem(app: app, item: "Paste")
+        Thread.sleep(forTimeInterval: 0.3)
+
+        // After paste, row 0 cols 8..11 should be "ABCD" (0x41..0x44) and row 1 cols
+        // 8..11 should be "abcd" (0x61..0x64). Cell indices in staticTexts: 0=offset,
+        // 1..16 = bytes 0..15 of that row.
+        let row0 = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(row0.waitForExistence(timeout: 5))
+        let row1 = hexTable.tableRows.element(boundBy: 1)
+        XCTAssertTrue(row1.waitForExistence(timeout: 5))
+
+        let row0byte8 = row0.staticTexts.element(boundBy: cellIndex(forByte: 8))
+        let row1byte8 = row1.staticTexts.element(boundBy: cellIndex(forByte: 8))
+        wait(for: [
+            expectation(for: NSPredicate(format: "value == %@", "41"), evaluatedWith: row0byte8, handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "61"), evaluatedWith: row1byte8, handler: nil),
+        ], timeout: 5)
+
+        let row0byte11 = row0.staticTexts.element(boundBy: cellIndex(forByte: 11))
+        let row1byte11 = row1.staticTexts.element(boundBy: cellIndex(forByte: 11))
+        wait(for: [
+            expectation(for: NSPredicate(format: "value == %@", "44"), evaluatedWith: row0byte11, handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "64"), evaluatedWith: row1byte11, handler: nil),
+        ], timeout: 5)
+
+        // Bytes outside the rect (col 12 'M' = 0x4D in row 0) must be untouched.
+        let row0byte12 = row0.staticTexts.element(boundBy: cellIndex(forByte: 12))
+        wait(for: [
+            expectation(for: NSPredicate(format: "value == %@", "4d"), evaluatedWith: row0byte12, handler: nil),
+        ], timeout: 5)
+    }
+
+    func testRectDeleteZeroFillsBytes() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "ABCDEFGHIJKLMNOPabcdefghijklmnop")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        try positionHexCursorAtZero(app: app, hexTable: hexTable)
+
+        // 4×2 rect at offset 4 → covers "EFGH" + "efgh".
+        try positionHexCursorAt(app: app, hexTable: hexTable, offset: 4)
+        extendRectViaKeyboard(app: app, addCols: 3, addRows: 1)
+        let rect = HexCursorState.read(from: app)
+        XCTAssertEqual(rect?.rectWidth, 4)
+        XCTAssertEqual(rect?.rectHeight, 2)
+
+        // Edit > Cut deletes the rect (and copies it to the clipboard — same
+        // observable byte-state as Delete, more reliable than the right-click
+        // context menu under XCUI which intermittently hits "open menu during
+        // menu traversal" retry timeouts).
+        invokeEditMenuItem(app: app, item: "Cut")
+
+        // Bytes 4..7 in row 0 should now be 00; row 1 cols 4..7 same.
+        let row0 = hexTable.tableRows.element(boundBy: 0)
+        let row1 = hexTable.tableRows.element(boundBy: 1)
+        wait(for: [
+            expectation(for: NSPredicate(format: "value == %@", "00"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: cellIndex(forByte: 4)), handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "00"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: cellIndex(forByte: 7)), handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "00"),
+                        evaluatedWith: row1.staticTexts.element(boundBy: cellIndex(forByte: 4)), handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "00"),
+                        evaluatedWith: row1.staticTexts.element(boundBy: cellIndex(forByte: 7)), handler: nil),
+        ], timeout: 5)
+        // Outside the rect: byte 3 = 'D' = 0x44, byte 8 = 'I' = 0x49 in row 0.
+        wait(for: [
+            expectation(for: NSPredicate(format: "value == %@", "44"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: cellIndex(forByte: 3)), handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "49"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: cellIndex(forByte: 8)), handler: nil),
+        ], timeout: 5)
+    }
+
+    func testRectPatternReplaceFillsPerRow() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "ABCDEFGHIJKLMNOPabcdefghijklmnop")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        try positionHexCursorAtZero(app: app, hexTable: hexTable)
+
+        // 4×2 rect at offset 0 → covers row 0 cols 0..3 and row 1 cols 0..3.
+        extendRectViaKeyboard(app: app, addCols: 3, addRows: 1)
+
+        try invokeHexEditorMenu(app: app, item: "Pattern Replace...")
+        let patternField = app.textFields["hex-editor.patternreplace.pattern"]
+        XCTAssertTrue(patternField.waitForExistence(timeout: 5))
+        patternField.replaceFieldText(with: "DE AD")
+
+        let replaceButton = app.buttons["Replace"].firstMatch
+        XCTAssertTrue(replaceButton.waitForExistence(timeout: 3))
+        replaceButton.click()
+
+        // Confirmation alert "Filled 4 × 2 rectangle (8 bytes)…". Dismiss with OK.
+        let okButton = app.buttons["OK"].firstMatch
+        XCTAssertTrue(okButton.waitForExistence(timeout: 3))
+        okButton.click()
+
+        // Per-row restart: each row's 4 bytes = DE AD DE AD (pattern restarts at
+        // col 0 of each row, NOT continuous across rows).
+        let row0 = hexTable.tableRows.element(boundBy: 0)
+        let row1 = hexTable.tableRows.element(boundBy: 1)
+        wait(for: [
+            expectation(for: NSPredicate(format: "value == %@", "de"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: 1), handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "ad"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: 2), handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "de"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: 3), handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "ad"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: 4), handler: nil),
+            // Row 1 also starts with DE — proves per-row restart, not continuous fill.
+            expectation(for: NSPredicate(format: "value == %@", "de"),
+                        evaluatedWith: row1.staticTexts.element(boundBy: 1), handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "ad"),
+                        evaluatedWith: row1.staticTexts.element(boundBy: 2), handler: nil),
+        ], timeout: 5)
+    }
+
+    func testRectPasteShapeMismatchShowsDialog() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "ABCDEFGHIJKLMNOPabcdefghijklmnop")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        try positionHexCursorAtZero(app: app, hexTable: hexTable)
+
+        // Source: 4×2 rect at offset 0.
+        extendRectViaKeyboard(app: app, addCols: 3, addRows: 1)
+        invokeEditMenuItem(app: app, item: "Copy")
+
+        // Destination: a 2×2 rect at offset 8 — wrong shape (need 4×2 to match).
+        try positionHexCursorAt(app: app, hexTable: hexTable, offset: 8)
+        extendRectViaKeyboard(app: app, addCols: 1, addRows: 1)
+        let dest = HexCursorState.read(from: app)
+        XCTAssertEqual(dest?.rectWidth, 2)
+        XCTAssertEqual(dest?.rectHeight, 2)
+
+        // Paste should pop up the strict-shape error dialog naming the required
+        // dimensions (4 × 2). The dialog text is the expanded form of
+        // paste.rect.errorShapeMismatch with the required width / height.
+        invokeEditMenuItem(app: app, item: "Paste")
+        let dialog = app.dialogs.firstMatch
+        XCTAssertTrue(dialog.waitForExistence(timeout: 5),
+                      "Strict-shape paste should surface an error dialog for a mismatched destination.")
+        let dialogText = dialog.staticTexts.allElementsBoundByIndex.compactMap { $0.value as? String }.joined(separator: " | ")
+        XCTAssertTrue(dialogText.contains("4 bytes wide") && dialogText.contains("2 bytes high"),
+                      "Dialog should name required width × height. Got: \(dialogText)")
+        dialog.buttons["OK"].click()
+        XCTAssertTrue(dialog.waitForNonExistence(timeout: 5))
+
+        // Bytes at offset 8 should be untouched ('I' = 0x49) since the paste was rejected.
+        let row0 = hexTable.tableRows.element(boundBy: 0)
+        wait(for: [
+            expectation(for: NSPredicate(format: "value == %@", "49"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: cellIndex(forByte: 8)), handler: nil),
+        ], timeout: 5)
+    }
+
+    private func positionHexCursorAt(app: XCUIApplication, hexTable: XCUIElement, offset: Int) throws {
+        hexTable.rightClick()
+        let gotoItem = app.menuItems["Go to Offset…"]
+        XCTAssertTrue(gotoItem.waitForExistence(timeout: 3))
+        gotoItem.click()
+        let gotoInput = app.textFields["hex-editor.goto.input"]
+        XCTAssertTrue(gotoInput.waitForExistence(timeout: 3))
+        gotoInput.replaceFieldText(with: String(offset))
+        let goButton = app.buttons["Go"].firstMatch
+        XCTAssertTrue(goButton.waitForExistence(timeout: 3))
+        goButton.click()
+        XCTAssertTrue(gotoInput.waitForNonExistence(timeout: 5))
     }
 
     private func assertAboutDialog(app: XCUIApplication,

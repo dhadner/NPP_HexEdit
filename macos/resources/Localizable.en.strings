@@ -14,6 +14,7 @@
 "menu.plugin.clearCompareResult"   = "Clear Compare Result";
 "menu.plugin.insertColumns"        = "Insert Columns...";
 "menu.plugin.patternReplace"       = "Pattern Replace...";
+"menu.plugin.options"              = "Options...";
 "menu.plugin.help"                 = "Help...";
 
 /* Right-click context menu on the hex view */
@@ -59,8 +60,8 @@
 
 /* Address Width dialog */
 "addressWidth.title"               = "Address Width";
-"addressWidth.message"             = "Number of digits in the offset column (%d–%d).";
-"addressWidth.invalidRange"        = "Only values between %d and %d possible.";
+"addressWidth.message"             = "Number of digits in the offset column (%1$d–%2$d).";
+"addressWidth.invalidRange"        = "Only values between %1$d and %2$d possible.";
 
 /* Columns dialog */
 "columns.title"                    = "Columns";
@@ -69,7 +70,7 @@
 
 /* Go to Offset dialog */
 "goto.title"                       = "Go to Offset";
-"goto.message"                     = "Enter a byte offset.\n  • Decimal: 1234\n  • Hex: 0x4A2 (or 0X4A2)\n  • Relative: +0x10 jumps forward, -100 jumps back\n\nCurrent: 0x%0*zx    End: 0x%0*zx";
+"goto.message"                     = "Enter a byte offset.\n  • Decimal: 1234\n  • Hex: 0x4A2 (or 0X4A2)\n  • Relative: +0x10 jumps forward, -100 jumps back\n\nCurrent: 0x%1$@    End: 0x%2$@";
 "goto.button"                      = "Go";
 "goto.placeholder"                 = "e.g. 0x1F or +16";
 "goto.errorParse"                  = "Could not parse the offset. Use a decimal value, a 0x-prefixed hex value, or a + / - prefix for relative jumps.";
@@ -102,7 +103,7 @@
 "compare.openHexFirstCompare"      = "Open the hex view (View in HEX) before using Compare HEX.";
 "compare.openHexFirstRun"          = "Open the hex view (View in HEX) before running Compare.";
 "compare.errorNoFile"              = "No comparison file selected.";
-"compare.errorReadFile"            = "Could not read %@: %@";
+"compare.errorReadFile"            = "Could not read %1$@: %2$@";
 "compare.errorReadUnknown"         = "unknown error";
 "compare.errorFailed"              = "Compare failed.";
 "compare.openPanelTitle"           = "Compare HEX with…";
@@ -115,7 +116,7 @@
 /* Insert Columns */
 "insertColumns.openHexFirst"       = "Open the hex view (View in HEX) before using Insert Columns.";
 "insertColumns.title"              = "Insert Columns";
-"insertColumns.message"            = "Insert a hex pattern into every row at a chosen column position. Each row grows by (count × %d) bytes; the column count grows by `count`.\n\nPattern: hex bytes only (e.g. 0x00 or DE AD).\nCount: 1 to %d at the current %d-bit grouping.\nPosition: 0 to %d (current column count).";
+"insertColumns.message"            = "Insert a hex pattern into every row at a chosen column position. Each row grows by (count × %1$d) bytes; the column count grows by `count`.\n\nPattern: hex bytes only (e.g. 0x00 or DE AD).\nCount: 1 to %2$d at the current %3$d-bit grouping.\nPosition: 0 to %4$d (current column count).";
 "insertColumns.button"             = "Insert";
 "insertColumns.placeholder.pattern"  = "Pattern (hex): 0xFF or DE AD";
 "insertColumns.placeholder.count"    = "Count (columns to insert)";
@@ -127,8 +128,8 @@
 "insertColumns.errorBufferEmpty"   = "Buffer is empty — nothing to insert into.";
 "insertColumns.errorRowSize"       = "Invalid current row size.";
 "insertColumns.errorFailed"        = "Insert failed.";
-"insertColumns.summarySingularRows" = "Inserted %d column%@ across 1 row.";
-"insertColumns.summaryPluralRows"   = "Inserted %d column%@ across %d rows.";
+"insertColumns.summarySingularRows" = "Inserted %1$d column%2$@ across 1 row.";
+"insertColumns.summaryPluralRows"   = "Inserted %1$d column%2$@ across %3$d rows.";
 
 /* Pattern Replace */
 "patternReplace.openHexFirst"      = "Open the hex view (View in HEX) before using Pattern Replace.";
@@ -146,7 +147,17 @@
 /* Status bar (substring-matched by UI tests — wording is contractual) */
 "status.empty"                     = "Current document is empty.";
 "status.showing"                   = "Showing %zu bytes.";
-"status.showingTruncated"          = "Showing %zu of %zu bytes. Preview is truncated for responsiveness.";
+"status.showingTruncated"          = "Showing %1$zu of %2$zu bytes. Preview is truncated for responsiveness.";
+"status.rectangle"                 = "Rectangle: %1$lu × %2$lu (%3$lu bytes)";
+
+/* Rectangular paste error dialogs (strict shape-match, see DEVELOPER.md) */
+"paste.rect.errorAddressSource"      = "Address selections cannot be pasted as bytes. Copy a hex or ASCII rectangle and try again.";
+"paste.rect.errorNeedsRectDestination" = "Destination must be a rectangular selection of %1$lu × %2$lu bytes. Option-drag (or Shift+Option-drag, per Options) to create one.";
+"paste.rect.errorShapeMismatch"      = "Destination is the wrong size — must be %1$lu bytes wide and %2$lu bytes high.";
+
+/* Pattern Replace — rectangular variant (per-row pattern restart) */
+"patternReplace.messageRect"         = "Fill the current %1$lu × %2$lu rectangle with a repeating hex pattern.\nThe pattern restarts at the first byte of each row.\n\nPattern: hex bytes only (e.g. 0xFF or DE AD).";
+"patternReplace.summaryRect"         = "Filled %1$lu × %2$lu rectangle (%3$lu bytes) with the pattern.";
 
 /* About / help dialog */
 "about.body"                       = "Native macOS port of the Notepad++ HEX-Editor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.";
@@ -162,3 +173,12 @@
 /* Column headers in the hex table */
 "table.header.offset"              = "Offset";
 "table.header.ascii"               = "ASCII";
+
+/* Options dialog (Plugins > HEX-Editor > Options...) */
+"options.title"                    = "HEX-Editor Options";
+"options.message"                  = "Plugin-wide preferences. Reset restores the defaults shown below; click Save to apply.";
+"options.button.save"              = "Save";
+"options.button.reset"             = "Reset to Defaults";
+"options.rectModifier.label"       = "Modifier key for rectangular (block) selection drag:";
+"options.rectModifier.option"      = "Option (matches Scintilla / Windows hex editor)";
+"options.rectModifier.shiftOption" = "Shift+Option (matches VS Code)";

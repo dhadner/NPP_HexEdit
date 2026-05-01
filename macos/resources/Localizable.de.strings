@@ -14,6 +14,7 @@
 "menu.plugin.clearCompareResult"   = "Vergleichsergebnis löschen";
 "menu.plugin.insertColumns"        = "Spalten einfügen...";
 "menu.plugin.patternReplace"       = "Muster ersetzen...";
+"menu.plugin.options"              = "Einstellungen...";
 "menu.plugin.help"                 = "Hilfe...";
 
 /* Rechtsklick-Kontextmenü auf der Hex-Ansicht */
@@ -59,8 +60,8 @@
 
 /* Adressbreite-Dialog */
 "addressWidth.title"               = "Adressbreite";
-"addressWidth.message"             = "Anzahl der Stellen in der Offset-Spalte (%d–%d).";
-"addressWidth.invalidRange"        = "Nur Werte zwischen %d und %d sind möglich.";
+"addressWidth.message"             = "Anzahl der Stellen in der Offset-Spalte (%1$d–%2$d).";
+"addressWidth.invalidRange"        = "Nur Werte zwischen %1$d und %2$d sind möglich.";
 
 /* Spalten-Dialog */
 "columns.title"                    = "Spalten";
@@ -69,7 +70,7 @@
 
 /* Gehe-zu-Offset-Dialog */
 "goto.title"                       = "Gehe zu Offset";
-"goto.message"                     = "Byte-Offset eingeben.\n  • Dezimal: 1234\n  • Hex: 0x4A2 (oder 0X4A2)\n  • Relativ: +0x10 vorwärts, -100 rückwärts\n\nAktuell: 0x%0*zx    Ende: 0x%0*zx";
+"goto.message"                     = "Byte-Offset eingeben.\n  • Dezimal: 1234\n  • Hex: 0x4A2 (oder 0X4A2)\n  • Relativ: +0x10 vorwärts, -100 rückwärts\n\nAktuell: 0x%1$@    Ende: 0x%2$@";
 "goto.button"                      = "Gehe zu";
 "goto.placeholder"                 = "z. B. 0x1F oder +16";
 "goto.errorParse"                  = "Offset konnte nicht gelesen werden. Verwende einen Dezimalwert, einen Hex-Wert mit 0x-Präfix oder ein +/− -Präfix für relative Sprünge.";
@@ -102,7 +103,7 @@
 "compare.openHexFirstCompare"      = "Öffne die Hex-Ansicht (In HEX anzeigen) vor dem Verwenden von HEX vergleichen.";
 "compare.openHexFirstRun"          = "Öffne die Hex-Ansicht (In HEX anzeigen), bevor du den Vergleich startest.";
 "compare.errorNoFile"              = "Keine Vergleichsdatei ausgewählt.";
-"compare.errorReadFile"            = "Konnte %@ nicht lesen: %@";
+"compare.errorReadFile"            = "Konnte %1$@ nicht lesen: %2$@";
 "compare.errorReadUnknown"         = "unbekannter Fehler";
 "compare.errorFailed"              = "Vergleich fehlgeschlagen.";
 "compare.openPanelTitle"           = "HEX vergleichen mit…";
@@ -115,7 +116,7 @@
 /* Spalten einfügen */
 "insertColumns.openHexFirst"       = "Öffne die Hex-Ansicht (In HEX anzeigen) vor dem Verwenden von Spalten einfügen.";
 "insertColumns.title"              = "Spalten einfügen";
-"insertColumns.message"            = "Hex-Muster in jede Zeile an einer gewählten Spaltenposition einfügen. Jede Zeile wächst um (Anzahl × %d) Bytes; die Spaltenanzahl wächst um `Anzahl`.\n\nMuster: nur Hex-Bytes (z. B. 0x00 oder DE AD).\nAnzahl: 1 bis %d bei der aktuellen %d-Bit-Gruppierung.\nPosition: 0 bis %d (aktuelle Spaltenanzahl).";
+"insertColumns.message"            = "Hex-Muster in jede Zeile an einer gewählten Spaltenposition einfügen. Jede Zeile wächst um (Anzahl × %1$d) Bytes; die Spaltenanzahl wächst um `Anzahl`.\n\nMuster: nur Hex-Bytes (z. B. 0x00 oder DE AD).\nAnzahl: 1 bis %2$d bei der aktuellen %3$d-Bit-Gruppierung.\nPosition: 0 bis %4$d (aktuelle Spaltenanzahl).";
 "insertColumns.button"             = "Einfügen";
 "insertColumns.placeholder.pattern"  = "Muster (Hex): 0xFF oder DE AD";
 "insertColumns.placeholder.count"    = "Anzahl (einzufügende Spalten)";
@@ -127,8 +128,8 @@
 "insertColumns.errorBufferEmpty"   = "Puffer ist leer — nichts zum Einfügen vorhanden.";
 "insertColumns.errorRowSize"       = "Ungültige aktuelle Zeilengröße.";
 "insertColumns.errorFailed"        = "Einfügen fehlgeschlagen.";
-"insertColumns.summarySingularRows" = "%d Spalte%@ in 1 Zeile eingefügt.";
-"insertColumns.summaryPluralRows"   = "%d Spalte%@ in %d Zeilen eingefügt.";
+"insertColumns.summarySingularRows" = "%1$d Spalte%2$@ in 1 Zeile eingefügt.";
+"insertColumns.summaryPluralRows"   = "%1$d Spalte%2$@ in %3$d Zeilen eingefügt.";
 
 /* Muster ersetzen */
 "patternReplace.openHexFirst"      = "Öffne die Hex-Ansicht (In HEX anzeigen) vor dem Verwenden von Muster ersetzen.";
@@ -146,7 +147,7 @@
 /* Statusleiste (UI-Tests prüfen Substrings — Wortlaut ist vertraglich) */
 "status.empty"                     = "Aktuelles Dokument ist leer.";
 "status.showing"                   = "Zeige %zu Bytes.";
-"status.showingTruncated"          = "Zeige %zu von %zu Bytes. Vorschau ist aus Performance-Gründen gekürzt.";
+"status.showingTruncated"          = "Zeige %1$zu von %2$zu Bytes. Vorschau ist aus Performance-Gründen gekürzt.";
 
 /* Über / Hilfe-Dialog */
 "about.body"                       = "Native macOS-Portierung des HEX-Editor-Plugins für Notepad++. Bietet eine eingebettete Hex-Tabelle mit direkter Byte-Bearbeitung, Auswahl, Lesezeichen, Suchen/Ersetzen, Vergleich und Ansichtswechsel.";
@@ -160,3 +161,24 @@
 /* Spaltenüberschriften in der Hex-Tabelle */
 "table.header.offset"              = "Offset";
 "table.header.ascii"               = "ASCII";
+
+/* Statusleisten-Zusatz bei aktiver Rechteck-Auswahl */
+"status.rectangle"                 = "Rechteck: %1$lu × %2$lu (%3$lu Bytes)";
+
+/* Fehlerdialoge beim rechteckigen Einfügen (strikte Formprüfung, siehe DEVELOPER.md) */
+"paste.rect.errorAddressSource"      = "Adress-Auswahlen können nicht als Bytes eingefügt werden. Kopieren Sie ein Hex- oder ASCII-Rechteck und versuchen Sie es erneut.";
+"paste.rect.errorNeedsRectDestination" = "Das Ziel muss eine rechteckige Auswahl von %1$lu × %2$lu Bytes sein. Wahltaste+Ziehen (oder Umschalt+Wahltaste+Ziehen, je nach Einstellungen) erzeugt eine.";
+"paste.rect.errorShapeMismatch"      = "Das Ziel hat die falsche Größe — muss %1$lu Bytes breit und %2$lu Bytes hoch sein.";
+
+/* Muster ersetzen — rechteckige Variante (Muster startet pro Zeile neu) */
+"patternReplace.messageRect"         = "Aktuelles %1$lu × %2$lu Rechteck mit einem sich wiederholenden Hex-Muster füllen.\nDas Muster beginnt am ersten Byte jeder Zeile neu.\n\nMuster: nur Hex-Bytes (z. B. 0xFF oder DE AD).";
+"patternReplace.summaryRect"         = "%1$lu × %2$lu Rechteck (%3$lu Bytes) mit dem Muster gefüllt.";
+
+/* Einstellungsdialog (Plugins > HEX-Editor > Einstellungen...) */
+"options.title"                    = "HEX-Editor-Einstellungen";
+"options.message"                  = "Plugin-weite Einstellungen. „Standardwerte zurücksetzen“ stellt die unten angezeigten Vorgaben wieder her; klicken Sie auf „Speichern“, um die Änderung zu übernehmen.";
+"options.button.save"              = "Speichern";
+"options.button.reset"             = "Standardwerte zurücksetzen";
+"options.rectModifier.label"       = "Modifikatortaste für rechteckige (Block-)Auswahl beim Ziehen:";
+"options.rectModifier.option"      = "Wahltaste (entspricht Scintilla / Windows-Hex-Editor)";
+"options.rectModifier.shiftOption" = "Umschalt+Wahltaste (entspricht VS Code)";

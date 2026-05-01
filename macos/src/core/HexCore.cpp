@@ -858,4 +858,273 @@ std::string formatCell(const std::uint8_t *cellBytes, std::size_t available, con
     return out;
 }
 
+RectSelection makeRectSelection(std::size_t anchorOffset,
+                                std::size_t endOffset,
+                                std::size_t bytesPerRow,
+                                std::size_t totalLength)
+{
+    RectSelection rect;
+    if (bytesPerRow == 0) {
+        return rect;
+    }
+
+    if (anchorOffset > totalLength) anchorOffset = totalLength;
+    if (endOffset > totalLength) endOffset = totalLength;
+
+    const std::size_t anchorRow = anchorOffset / bytesPerRow;
+    const std::size_t anchorCol = anchorOffset % bytesPerRow;
+    const std::size_t endRow = endOffset / bytesPerRow;
+    const std::size_t endCol = endOffset % bytesPerRow;
+
+    const std::size_t rowStart = std::min(anchorRow, endRow);
+    const std::size_t rowEnd = std::max(anchorRow, endRow);
+    const std::size_t colStart = std::min(anchorCol, endCol);
+    const std::size_t colEnd = std::max(anchorCol, endCol);
+
+    rect.bytesPerRow = bytesPerRow;
+    rect.originOffset = rowStart * bytesPerRow + colStart;
+    rect.width = (colEnd - colStart) + 1;
+    rect.height = (rowEnd - rowStart) + 1;
+    return rect;
+}
+
+std::vector<ByteRange> rectToRanges(const RectSelection &rect, std::size_t totalLength)
+{
+    std::vector<ByteRange> ranges;
+    if (!rect.active()) {
+        return ranges;
+    }
+    ranges.reserve(rect.height);
+    for (std::size_t r = 0; r < rect.height; ++r) {
+        const std::size_t rowStartOffset = rect.originOffset + r * rect.bytesPerRow;
+        if (rowStartOffset >= totalLength) {
+            break;
+        }
+        const std::size_t available = totalLength - rowStartOffset;
+        const std::size_t take = std::min(rect.width, available);
+        ranges.push_back(ByteRange{rowStartOffset, take});
+    }
+    return ranges;
+}
+
+bool extractRectBytes(const std::uint8_t *bytes,
+                      std::size_t totalLength,
+                      const RectSelection &rect,
+                      std::vector<std::uint8_t> &out)
+{
+    if (!rect.active()) {
+        return false;
+    }
+    out.assign(rect.totalBytes(), 0);
+    if (bytes == nullptr) {
+        // No source data — out is already zero-filled, which is the right answer
+        // for an empty file plus an active rectangle (degenerate but valid).
+        return true;
+    }
+    for (std::size_t r = 0; r < rect.height; ++r) {
+        const std::size_t rowStartOffset = rect.originOffset + r * rect.bytesPerRow;
+        if (rowStartOffset >= totalLength) {
+            // Remaining rows are entirely past EOF; out's tail is already zero-filled.
+            break;
+        }
+        const std::size_t available = totalLength - rowStartOffset;
+        const std::size_t take = std::min(rect.width, available);
+        std::memcpy(&out[r * rect.width], bytes + rowStartOffset, take);
+        // Bytes [take .. rect.width) of this row are past EOF and stay zero.
+    }
+    return true;
+}
+
+static const char kHexUpper[16] = {
+    '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'
+};
+
+std::string formatRectClipboardHex(const std::uint8_t *bytes,
+                                   const RectSelection &rect,
+                                   std::size_t totalLength)
+{
+    std::string out;
+    if (!rect.active()) {
+        return out;
+    }
+    // Each row: width * 2 hex chars + (width - 1) spaces. Plus '\n' between rows.
+    out.reserve(rect.height * (rect.width * 3 + 1));
+    for (std::size_t r = 0; r < rect.height; ++r) {
+        if (r > 0) {
+            out.push_back('\n');
+        }
+        const std::size_t rowStartOffset = rect.originOffset + r * rect.bytesPerRow;
+        for (std::size_t c = 0; c < rect.width; ++c) {
+            if (c > 0) {
+                out.push_back(' ');
+            }
+            const std::size_t srcOffset = rowStartOffset + c;
+            const std::uint8_t value = (bytes != nullptr && srcOffset < totalLength)
+                ? bytes[srcOffset]
+                : static_cast<std::uint8_t>(0);
+            out.push_back(kHexUpper[(value >> 4) & 0x0F]);
+            out.push_back(kHexUpper[value & 0x0F]);
+        }
+    }
+    return out;
+}
+
+std::string formatRectClipboardAscii(const std::uint8_t *bytes,
+                                     const RectSelection &rect,
+                                     std::size_t totalLength)
+{
+    std::string out;
+    if (!rect.active()) {
+        return out;
+    }
+    out.reserve(rect.height * (rect.width + 1));
+    for (std::size_t r = 0; r < rect.height; ++r) {
+        if (r > 0) {
+            out.push_back('\n');
+        }
+        const std::size_t rowStartOffset = rect.originOffset + r * rect.bytesPerRow;
+        for (std::size_t c = 0; c < rect.width; ++c) {
+            const std::size_t srcOffset = rowStartOffset + c;
+            const std::uint8_t value = (bytes != nullptr && srcOffset < totalLength)
+                ? bytes[srcOffset]
+                : static_cast<std::uint8_t>(0);
+            out.push_back((value >= 32 && value <= 126)
+                          ? static_cast<char>(value)
+                          : '.');
+        }
+    }
+    return out;
+}
+
+namespace {
+
+// Tokenise a single line into hex bytes. Accepts space / comma / colon / semicolon
+// separators, and tolerates an optional "0x" or "0X" prefix on each token. Returns
+// false on any non-hex input. An empty line yields an empty result and returns true
+// — the caller decides whether empty rows are allowed.
+bool tryParseHexLine(const std::string &line, std::vector<std::uint8_t> &out)
+{
+    out.clear();
+    std::string current;
+    auto flushPair = [&](const std::string &tok) -> bool {
+        if (tok.empty()) return true;
+        // Each token must be 1 or 2 hex digits. Two digits = one byte; one digit =
+        // 0x0X (matches the find-pattern parser's tolerance).
+        if (tok.size() != 1 && tok.size() != 2) {
+            return false;
+        }
+        std::uint8_t value = 0;
+        for (char c : tok) {
+            const int digit = hexDigitValue(static_cast<unsigned char>(c));
+            if (digit < 0) return false;
+            value = static_cast<std::uint8_t>((value << 4) | digit);
+        }
+        out.push_back(value);
+        return true;
+    };
+    auto isSep = [](char c) -> bool {
+        return c == ' ' || c == '\t' || c == ',' || c == ';' || c == ':';
+    };
+    for (std::size_t i = 0; i < line.size(); ++i) {
+        const char c = line[i];
+        if (isSep(c)) {
+            if (!flushPair(current)) return false;
+            current.clear();
+            continue;
+        }
+        // Skip "0x" / "0X" prefix at the start of a token.
+        if (current.empty() && c == '0' && i + 1 < line.size() &&
+            (line[i + 1] == 'x' || line[i + 1] == 'X')) {
+            ++i;
+            continue;
+        }
+        current.push_back(c);
+        // If we already have 2 chars and the next char is a hex digit, flush so
+        // that "DEADBEEF" (no separators) splits into DE AD BE EF.
+        if (current.size() == 2) {
+            if (!flushPair(current)) return false;
+            current.clear();
+        }
+    }
+    return flushPair(current);
+}
+
+}  // namespace
+
+bool parseRectClipboardText(const std::string &text,
+                            std::vector<std::uint8_t> &outBytes,
+                            std::size_t &outWidth,
+                            std::size_t &outHeight)
+{
+    if (text.empty()) {
+        return false;
+    }
+    // Split on '\n', trimming trailing '\r' (so CRLF clipboards work).
+    std::vector<std::string> lines;
+    {
+        std::string current;
+        for (char c : text) {
+            if (c == '\n') {
+                if (!current.empty() && current.back() == '\r') current.pop_back();
+                lines.push_back(std::move(current));
+                current.clear();
+            } else {
+                current.push_back(c);
+            }
+        }
+        if (!current.empty() && current.back() == '\r') current.pop_back();
+        if (!current.empty() || lines.empty()) {
+            lines.push_back(std::move(current));
+        }
+    }
+    // Trim trailing empty lines (a final "\n" leaves an empty tail).
+    while (lines.size() > 1 && lines.back().empty()) {
+        lines.pop_back();
+    }
+    if (lines.empty() || (lines.size() == 1 && lines.front().empty())) {
+        return false;
+    }
+
+    // First pass: try to parse every line as hex. If any line fails, fall back to
+    // raw-bytes mode (each line treated as its own byte sequence — the user pasted
+    // plain ASCII, e.g. "abcd\nefgh", probably intending an ASCII rectangle).
+    std::vector<std::vector<std::uint8_t>> rows;
+    rows.reserve(lines.size());
+    bool allHex = true;
+    for (const auto &line : lines) {
+        std::vector<std::uint8_t> rowBytes;
+        if (!tryParseHexLine(line, rowBytes)) {
+            allHex = false;
+            break;
+        }
+        rows.push_back(std::move(rowBytes));
+    }
+    if (!allHex) {
+        rows.clear();
+        for (const auto &line : lines) {
+            rows.emplace_back(line.begin(), line.end());
+        }
+    }
+
+    // All rows must have the same width.
+    const std::size_t width = rows.front().size();
+    if (width == 0) {
+        return false;
+    }
+    for (const auto &row : rows) {
+        if (row.size() != width) {
+            return false;
+        }
+    }
+
+    outBytes.clear();
+    outBytes.reserve(width * rows.size());
+    for (const auto &row : rows) {
+        outBytes.insert(outBytes.end(), row.begin(), row.end());
+    }
+    outWidth = width;
+    outHeight = rows.size();
+    return true;
+}
+
 }
