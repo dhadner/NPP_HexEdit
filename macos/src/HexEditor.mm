@@ -21,13 +21,13 @@ static const int NB_FUNC = 6;
 // MARK: - Localization
 //
 // User-facing strings are looked up by key against `Localizable.<lang>.strings`
-// files installed alongside the dylib. If the user's preferred language file
-// is missing or doesn't contain the key, the embedded English fallback is used,
-// so the plugin always renders something — never a bare key.
+// files installed alongside the dylib. The lookup walks an ordered chain of
+// shipped strings files (built from [NSLocale preferredLanguages]) and finally
+// falls through to an embedded English defaults table, so the plugin always
+// renders something — never a bare key.
 //
-// Language selection: the first hit from [NSLocale preferredLanguages] that
-// has a corresponding strings file. Match is "exact (e.g. de-DE) → language
-// code (e.g. de) → English fallback".
+// See hexActiveStringsChain() for the chain construction rules and worked
+// examples. Tags follow BCP 47 (en, en-GB, de, de-AT, zh-Hans).
 //
 // Adding a new language: copy `Localizable.en.strings` to
 // `Localizable.<lang>.strings`, translate the values, install via CMake.
@@ -62,22 +62,96 @@ static NSDictionary<NSString *, NSString *> *hexLoadStringsForLanguage(NSString 
     return [NSDictionary dictionaryWithContentsOfURL:[NSURL fileURLWithPath:path]];
 }
 
-// Build the ORDERED chain of strings dictionaries L() will consult per key, most
-// specific first. A regional variant file (e.g. Localizable.en-GB.strings) only
-// needs to override the keys whose spelling/wording differs from the generic
-// language file (e.g. Localizable.en.strings) — every key it omits cascades
-// down to en, then to the embedded English defaults.
+// Build the ORDERED chain of strings dictionaries L() will consult per key.
 //
-// Example with `en-GB` preferred:
-//   1. Localizable.en-GB.strings        ← override layer (might contain only
-//                                         "compare.summaryDifferPlural" with
-//                                         "%d bytes differ. (Use Clear …)")
-//   2. Localizable.en.strings           ← canonical English (US-style spellings)
-//   3. embedded English defaults        ← last-resort safety net
+// Rule: iterate the user's preferred languages in order. For each entry, append
+// the regional override (if shipped) and then the base language (if shipped) to
+// the chain. The user's preferredLanguages list is an explicit, ranked fallback
+// declaration set in System Settings → General → Language & Region — we honor
+// that ordering, so a user who prefers ["en-GB", "de"] gets en-GB → en → de →
+// embedded English defaults. The embedded defaults are added by L() itself.
 //
-// Without the chain, a partial en-GB file would orphan every non-overridden key
-// (they'd skip en.strings entirely and land on the embedded defaults), defeating
-// the point of regional variants.
+// De-duplication: each shipped file is added at most once. A regional tag and
+// its base may both appear in preferredLanguages (e.g. ["en-GB", "en"]); we
+// keep the first occurrence and skip later duplicates.
+//
+// Walked-through example with preferredLanguages = ["en-GB", "de"] and shipped
+// files en + de (no en-GB regional override):
+//
+//   1. raw=en-GB → no Localizable.en-GB.strings, but base "en" matches.
+//      chain = [en].
+//   2. raw=de → de.strings matches. chain = [en, de].
+//   3. L() walks en first, then de, then embedded English defaults.
+//
+// Walked-through example with ["fr-CA", "de"] and shipped files en + de:
+//
+//   1. raw=fr-CA → no Localizable.fr-CA.strings, no Localizable.fr.strings.
+//      chain unchanged.
+//   2. raw=de → de.strings matches. chain = [de].
+//   3. L() walks de, then embedded English defaults.
+//
+// Walked-through example with ["en-GB"] and shipped files en + en-GB:
+//
+//   1. raw=en-GB → en-GB.strings matches (regional override). en.strings also
+//      matches as the base. chain = [en-GB, en].
+//   2. L() walks en-GB first, falling through to en for any key the regional
+//      file omits.
+// Reads the user's raw `AppleLanguages` preference, bypassing the bundle-aware
+// filtering that `[NSLocale preferredLanguages]` applies. macOS filters
+// `preferredLanguages` against the host bundle's installed `.lproj` directories
+// — for Notepad++ macOS, that's `en.lproj` only, which silently drops any
+// preference like `de` or `en-GB` and falls back to the system default. Our
+// plugin ships its own `Localizable.<lang>.strings` files independent of the
+// host's lproj directories, so we want the user's full unfiltered preference
+// list. CFPreferencesCopyAppValue with kCFPreferencesCurrentApplication
+// returns exactly that for normal launches.
+//
+// Test override: HEX_EDITOR_LANG_OVERRIDE env var (pipe-separated list of BCP
+// 47 tags) takes precedence when set. The XCUITest cascade tier uses this to
+// drive the cascade reliably — `defaults write` is silently sandbox-redirected
+// when invoked from the XCUI runner, so AppleLanguages overrides written there
+// never reach the real user defaults that NPP Mac reads. The env var path is
+// not subject to sandbox redirection, sandbox-bound CFPreferences quirks, or
+// macOS's bundle-aware preference filtering.
+static NSArray<NSString *> *hexUserPreferredLanguages()
+{
+    NSString *override = NSProcessInfo.processInfo.environment[@"HEX_EDITOR_LANG_OVERRIDE"];
+    if (override.length > 0) {
+        NSMutableArray<NSString *> *result = [NSMutableArray array];
+        for (NSString *raw in [override componentsSeparatedByString:@"|"]) {
+            NSString *trimmed = [raw stringByTrimmingCharactersInSet:
+                                 [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (trimmed.length > 0) {
+                [result addObject:trimmed];
+            }
+        }
+        if (result.count > 0) {
+            return result;
+        }
+    }
+
+    CFTypeRef raw = CFPreferencesCopyAppValue(CFSTR("AppleLanguages"),
+                                              kCFPreferencesCurrentApplication);
+    NSArray<NSString *> *prefs = nil;
+    if (raw != NULL) {
+        if (CFGetTypeID(raw) == CFArrayGetTypeID()) {
+            // Copy into an autoreleased NSArray so we can release the CF ref
+            // immediately. (__bridge_transfer would do this implicitly under
+            // ARC; this codebase is MRR.)
+            prefs = [(NSArray *)raw copy];
+            [prefs autorelease];
+        }
+        CFRelease(raw);
+    }
+    // Fall back to NSLocale if CFPreferences didn't give us an array (unusual:
+    // happens when neither the app nor global domain has AppleLanguages set,
+    // which on a configured macOS install shouldn't occur).
+    if (prefs == nil || prefs.count == 0) {
+        prefs = [NSLocale preferredLanguages];
+    }
+    return prefs ?: @[];
+}
+
 static NSArray<NSDictionary<NSString *, NSString *> *> *hexActiveStringsChain()
 {
     static NSArray<NSDictionary<NSString *, NSString *> *> *cached = nil;
@@ -85,28 +159,21 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *hexActiveStringsChain()
     dispatch_once(&once, ^{
         NSMutableArray *chain = [NSMutableArray array];
         NSMutableSet<NSString *> *seen = [NSMutableSet set];
-        for (NSString *raw in [NSLocale preferredLanguages]) {
-            // For each preferred language we add (in order) the exact tag and its
-            // base language code, so e.g. "en-GB" pulls both en-GB and en into
-            // the chain — en-GB on top, en immediately below.
-            for (NSString *tag in @[ raw, [raw componentsSeparatedByString:@"-"].firstObject ?: @"" ]) {
-                if (tag.length == 0 || [seen containsObject:tag]) {
-                    continue;
-                }
-                [seen addObject:tag];
-                NSDictionary *layer = hexLoadStringsForLanguage(tag);
-                if (layer != nil && layer.count > 0) {
-                    [chain addObject:layer];
-                }
+        void (^appendIfNew)(NSString *) = ^(NSString *tag) {
+            if (tag == nil || tag.length == 0 || [seen containsObject:tag]) {
+                return;
             }
-        }
-        // Final layer: explicit English file. Already covered above when "en"
-        // is in preferredLanguages, but ensure the chain always falls through to
-        // it even on locales like "fr-CA" that never reach English directly.
-        if (![seen containsObject:@"en"]) {
-            NSDictionary *en = hexLoadStringsForLanguage(@"en");
-            if (en != nil && en.count > 0) {
-                [chain addObject:en];
+            NSDictionary *dict = hexLoadStringsForLanguage(tag);
+            if (dict != nil && dict.count > 0) {
+                [chain addObject:dict];
+                [seen addObject:tag];
+            }
+        };
+        for (NSString *raw in hexUserPreferredLanguages()) {
+            appendIfNew(raw);
+            NSString *base = [raw componentsSeparatedByString:@"-"].firstObject;
+            if (base != nil && ![base isEqualToString:raw]) {
+                appendIfNew(base);
             }
         }
         cached = [chain copy];
@@ -265,6 +332,9 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
 
             // About / help dialog
             @"about.body":                       @"Native macOS port of the Notepad++ HEX-Editor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.",
+            // Embedded fallback when no .strings file is loaded — distinct from
+            // any shipped tag so the cascade XCTest can detect this state.
+            @"about.localeTag":                  @"Strings: (embedded)",
 
             // Generic error path used when toggling between Scintilla / hex view
             @"editor.noActiveBuffer":            @"No active editor buffer is available.",
@@ -301,6 +371,11 @@ static NSString *L(NSString *key)
 static NSString *const kHexEditorRootAccessibilityID = @"hex-editor.root";
 static NSString *const kHexEditorTableAccessibilityID = @"hex-editor.table";
 static NSString *const kHexEditorStatusAccessibilityID = @"hex-editor.status";
+// Hidden diagnostic surface that lets the XCTest UI suite read the hex view's
+// caret offset and selection range. NSTableView does not expose these via AX,
+// and writing an accessibilityValue onto the table itself would clash with the
+// default row/cell semantics. The diagnostic element below is purely additive.
+static NSString *const kHexEditorCursorAccessibilityID = @"hex-editor.cursor.diagnostic";
 static const size_t PREVIEW_LIMIT = 1024 * 1024;
 static const CGFloat HEX_TABLE_HEIGHT = 640.0;
 static const CGFloat HEX_STATUS_HEIGHT = 24.0;
@@ -478,6 +553,15 @@ static size_t activeByteOffset = 0;
 static NSInteger activeHexNibble = 0;
 static HexCursorField activeCursorField = HexCursorField::Hex;
 static NSInteger asciiAltNumpadValue = -1;
+
+// Most recent values captureScintillaSelection() observed when reading from
+// Scintilla. Surfaced via the diagnostic AX element so the XCTest UI suite can
+// see *why* a selection-mirroring assertion failed (Scintilla returned no
+// selection? returned -1? the handle was nil?). Sentinel -1 means
+// "captureScintillaSelection has not yet run for the current preview".
+static intptr_t lastScintillaSelStart = -1;
+static intptr_t lastScintillaSelEnd = -1;
+static intptr_t lastScintillaCaret = -1;
 static bool isSelectingBytes = false;
 static size_t selectionAnchorByte = 0;
 
@@ -597,10 +681,74 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
 }
 @end
 
+// Hidden 1×1 view whose AX value reports the current cursor + selection state.
+// Format (semicolon-separated key=value pairs, stable contract for the XCTest
+// suite): "offset=<size_t>;selStart=<size_t>;selEnd=<size_t>;hasSelection=<0|1>"
+// The view is intentionally minuscule and positioned in the corner so it does
+// not affect the visible layout; the AX subsystem still reports it via
+// accessibilityIdentifier lookup.
+@interface HexCursorDiagnosticView : NSView
+@end
+
+@implementation HexCursorDiagnosticView
+- (BOOL)isAccessibilityElement
+{
+    return YES;
+}
+- (NSAccessibilityRole)accessibilityRole
+{
+    return NSAccessibilityStaticTextRole;
+}
+- (id)accessibilityValue
+{
+    // Layout diagnostics — included so the XCTest UI suite can assert that
+    // every text-bearing label is sized for its font. statusH is the status
+    // label's frame height; statusFontH is the line-height the label needs to
+    // render its font without clipping descenders. statusH < statusFontH means
+    // letters like 'y' / 'g' / 'p' would have their bottoms cut off.
+    CGFloat statusFrameHeight = 0.0;
+    CGFloat statusFontLineHeight = 0.0;
+    if (hexStatusLabel != nil) {
+        statusFrameHeight = NSHeight(hexStatusLabel.frame);
+        NSFont *font = hexStatusLabel.font;
+        if (font != nil) {
+            statusFontLineHeight = ceil(font.ascender - font.descender);
+        }
+    }
+    // Locale diagnostics — what NSLocale.preferredLanguages returns inside the
+    // host process. Used to debug the localization cascade XCTest: when the
+    // test sets AppleLanguages via `defaults write`, this surface reveals
+    // whether the override actually reached NSLocale or was filtered to the
+    // system default. Pipe-separated so we can include multi-element arrays
+    // inside the semicolon-separated outer format.
+    NSArray<NSString *> *nsPrefs = [NSLocale preferredLanguages];
+    NSString *nsPrefsJoined = [nsPrefs componentsJoinedByString:@"|"];
+    NSArray<NSString *> *userPrefs = hexUserPreferredLanguages();
+    NSString *userPrefsJoined = [userPrefs componentsJoinedByString:@"|"];
+    return [NSString stringWithFormat:
+            @"offset=%zu;selStart=%zu;selEnd=%zu;hasSelection=%d;statusH=%.1f;statusFontH=%.1f"
+            @";sciSelStart=%lld;sciSelEnd=%lld;sciCaret=%lld;preferredLanguages=%@;userPrefs=%@",
+            activeByteOffset, selectedByteStart, selectedByteEnd,
+            (selectedByteEnd > selectedByteStart) ? 1 : 0,
+            statusFrameHeight, statusFontLineHeight,
+            (long long)lastScintillaSelStart,
+            (long long)lastScintillaSelEnd,
+            (long long)lastScintillaCaret,
+            nsPrefsJoined,
+            userPrefsJoined];
+}
+@end
+
 @interface HexTableScrollView : NSScrollView
 @end
 
-@implementation HexTableScrollView
+@implementation HexTableScrollView {
+    // Cumulative magnification across the current trackpad-pinch gesture.
+    // NSEvent.magnification arrives in small per-event deltas (~0.01-0.05);
+    // we accumulate until a threshold, fire one font-size step, then subtract
+    // the threshold so further magnification continues to scale the font.
+    CGFloat _pinchAccumulator;
+}
 - (NSFocusRingType)focusRingType
 {
     return NSFocusRingTypeNone;
@@ -618,6 +766,33 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
     }
 
     [super scrollWheel:event];
+}
+
+// Trackpad pinch-to-zoom. NSScrollView's built-in magnification (allowsMagnification)
+// scales the documentView, which would distort the hex grid. We translate pinch
+// into discrete font-size steps via zoomHexFont. The threshold + multiplier match
+// Scintilla's implementation (notepad-plus-plus-macos/scintilla/cocoa/ScintillaView.mm,
+// magnifyWithEvent: at ~line 1321) so users get an identical pinch feel in our
+// hex view and in the host's main text editor — that's the whole point: same
+// gesture, same response.
+- (void)magnifyWithEvent:(NSEvent *)event
+{
+    _pinchAccumulator += event.magnification * 10.0;
+    if (std::abs(_pinchAccumulator) >= 1.0) {
+        // Cast truncates toward zero — a 2.5 accumulator fires 2 steps in this
+        // event, the .5 remainder is dropped (matches Scintilla's behavior).
+        zoomHexFont(static_cast<NSInteger>(_pinchAccumulator));
+        _pinchAccumulator = 0.0;
+    }
+}
+
+- (void)beginGestureWithEvent:(NSEvent *)event
+{
+#pragma unused(event)
+    // Scintilla resets the accumulator at gesture-begin rather than gesture-end;
+    // mirror that so a fresh pinch starts from zero regardless of what state the
+    // last gesture left behind.
+    _pinchAccumulator = 0.0;
 }
 @end
 
@@ -1713,8 +1888,48 @@ static void restoreHexTableScrollOriginLater(NSPoint origin)
 
 static void resetHexTableScrollOrigin()
 {
+    // Use scrollRowToVisible: when possible — NSTableView accounts for the
+    // floating column-header bar when computing the target scroll position, so
+    // row 0 lands just below the header (not behind it). Falling back to
+    // scrollToPoint:NSZeroPoint when there are no rows yet is harmless.
+    if (hexTableView != nil && hexTableView.numberOfRows > 0) {
+        [hexTableView scrollRowToVisible:0];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (hexTableView != nil && hexTableView.numberOfRows > 0) {
+                [hexTableView scrollRowToVisible:0];
+            }
+        });
+        return;
+    }
     restoreHexTableScrollOrigin(NSZeroPoint);
     restoreHexTableScrollOriginLater(NSZeroPoint);
+}
+
+// Scroll the hex table so the row containing `activeByteOffset` is on-screen.
+// Used after captureScintillaSelection() to honor the Scintilla caret/selection
+// position. The deferred dispatch handles the case where the table's row count
+// hasn't settled yet (reloadData propagation runs on the main queue).
+static void scrollHexTableToActiveOffset()
+{
+    if (hexTableView == nil || hexTableView.numberOfRows == 0) {
+        resetHexTableScrollOrigin();
+        return;
+    }
+    const auto rowForOffset = ^NSInteger {
+        const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+        if (bpr == 0) {
+            return 0;
+        }
+        const NSInteger raw = static_cast<NSInteger>(activeByteOffset / bpr);
+        const NSInteger maxRow = std::max<NSInteger>(hexTableView.numberOfRows - 1, 0);
+        return std::clamp<NSInteger>(raw, 0, maxRow);
+    };
+    [hexTableView scrollRowToVisible:rowForOffset()];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (hexTableView != nil && hexTableView.numberOfRows > 0) {
+            [hexTableView scrollRowToVisible:rowForOffset()];
+        }
+    });
 }
 
 static void redrawHexTablePreservingScroll(NSPoint origin)
@@ -1877,29 +2092,46 @@ static void clearByteSelection()
 
 static void captureScintillaSelection()
 {
+    // Mirror the host's caret + selection state into the hex view so the transition
+    // preserves where the user was working:
+    //   - Caret only (no selection): hex cursor lands on that byte; no selection.
+    //   - Real selection: hex view shows the same byte range highlighted, and the
+    //     hex cursor lands at the END of the selection (matching the typical caret
+    //     placement after an extend-selection in Scintilla).
+    // The caller is responsible for scrolling the chosen byte into view.
     clearByteSelection();
+    lastScintillaSelStart = -1;
+    lastScintillaSelEnd = -1;
+    lastScintillaCaret = -1;
     if (!previewScintillaHandle) {
         return;
     }
 
     const intptr_t start = sci(previewScintillaHandle, SCI_GETSELECTIONSTART, 0, 0);
     const intptr_t end = sci(previewScintillaHandle, SCI_GETSELECTIONEND, 0, 0);
-    if (start < 0 || end < 0 || start == end) {
+    const intptr_t caret = sci(previewScintillaHandle, SCI_GETCURRENTPOS, 0, 0);
+    lastScintillaSelStart = start;
+    lastScintillaSelEnd = end;
+    lastScintillaCaret = caret;
+    if (start < 0 || end < 0) {
         return;
     }
 
     const size_t lower = static_cast<size_t>(std::min(start, end));
     const size_t upper = static_cast<size_t>(std::max(start, end));
-    selectedByteStart = std::min(lower, previewBytes.size());
-    selectedByteEnd = std::min(upper, previewBytes.size());
-    if (selectedByteEnd <= selectedByteStart) {
-        clearByteSelection();
-        return;
-    }
 
     activeCursorField = HexCursorField::Hex;
-    activeByteOffset = selectedByteEnd;
     activeHexNibble = 0;
+    activeByteOffset = std::min(upper, previewBytes.size());
+
+    if (start != end) {
+        selectedByteStart = std::min(lower, previewBytes.size());
+        selectedByteEnd = std::min(upper, previewBytes.size());
+        if (selectedByteEnd <= selectedByteStart) {
+            clearByteSelection();
+        }
+    }
+
     clampActiveCursor();
 }
 
@@ -2454,10 +2686,12 @@ static void gotoHexOffset(std::size_t offset)
     activeCursorField = HexCursorField::Hex;
     clearByteSelection();
 
-    const NSInteger row = static_cast<NSInteger>(offset / static_cast<size_t>(currentBytesPerRow()));
-    if (row >= 0 && row < hexTableView.numberOfRows) {
-        [hexTableView scrollRowToVisible:row];
-    }
+    // Use scrollHexTableToActiveOffset() instead of a one-shot scrollRowToVisible.
+    // The latter ran synchronously inside the modal-dismissal callstack, where
+    // NSTableView would silently no-op when scrolling far (e.g., 64 rows up from
+    // a deep cursor). Dispatching to the next runloop iteration lets the modal
+    // teardown finish and the scroll lands as expected.
+    scrollHexTableToActiveOffset();
     [hexTableView setNeedsDisplay:YES];
     [hexTableView.window makeFirstResponder:hexTableView];
 }
@@ -3247,6 +3481,29 @@ static void setHexColumns(int columns)
     applyHexViewMode();
 }
 
+// Frame height that fully contains a font's ascender + descender extent, plus
+// generous vertical padding. NSTextField with a frame shorter than the font's
+// natural line-height clips descenders ('y', 'g', 'p') at the bottom — so any
+// label that displays Latin text must be sized via this helper, not by hardcoded
+// point values that work for one font size and silently break at others.
+static CGFloat textFrameHeightForFont(NSFont *font)
+{
+    if (font == nil) {
+        return 16.0;
+    }
+    // descender is negative for most fonts. ascender - descender = full glyph
+    // extent. +6 for top/bottom padding so glyphs don't kiss the frame edge.
+    return ceil(font.ascender - font.descender + 6.0);
+}
+
+// Font used for the row above the column-header bar that reports buffer size.
+// Sized 2 points smaller than the hex grid font so the status row reads as
+// secondary chrome, with a 9pt floor below which Latin glyphs become unreadable.
+static NSFont *statusLabelFontFor(NSFont *gridFont)
+{
+    return [NSFont systemFontOfSize:std::max<CGFloat>(gridFont.pointSize - 2.0, 9.0)];
+}
+
 static void applyHexTableLayout(NSTableView *table, NSTextField *statusLabel)
 {
     if (!table) {
@@ -3282,7 +3539,8 @@ static void applyHexTableLayout(NSTableView *table, NSTextField *statusLabel)
     }
 
     if (statusLabel) {
-        statusLabel.font = [NSFont systemFontOfSize:std::max<CGFloat>([hexTableFont() pointSize] - 1.0, 9.0)];
+        NSFont *labelFont = statusLabelFontFor(hexTableFont());
+        statusLabel.font = labelFont;
 
         NSView *rootView = statusLabel.superview;
         if (rootView) {
@@ -3291,8 +3549,17 @@ static void applyHexTableLayout(NSTableView *table, NSTextField *statusLabel)
             rootFrame.size.width = tableWidth;
             rootView.frame = rootFrame;
 
-            statusLabel.frame = NSMakeRect(8, HEX_TABLE_HEIGHT - 20, tableWidth - 16, 16);
-            table.enclosingScrollView.frame = NSMakeRect(0, 0, tableWidth, HEX_TABLE_HEIGHT - HEX_STATUS_HEIGHT);
+            // Status row height tracks the font's full ascender+descender extent,
+            // plus a 4 pt margin above the row, so descender glyphs never clip.
+            // The reserved status area is labelHeight + topMargin; the scroll view
+            // gets whatever remains below it.
+            const CGFloat labelHeight = textFrameHeightForFont(labelFont);
+            const CGFloat topMargin = 4.0;
+            const CGFloat statusAreaHeight = labelHeight + topMargin;
+            statusLabel.frame = NSMakeRect(8, HEX_TABLE_HEIGHT - topMargin - labelHeight,
+                                           tableWidth - 16, labelHeight);
+            table.enclosingScrollView.frame = NSMakeRect(0, 0, tableWidth,
+                                                         HEX_TABLE_HEIGHT - statusAreaHeight);
         }
     }
 }
@@ -3305,14 +3572,19 @@ static NSView *createHexTableView(NSTableView **tableView, NSTextField **statusL
     rootView.accessibilityIdentifier = kHexEditorRootAccessibilityID;
 
     NSTextField *label = [NSTextField labelWithString:@""];
-    label.frame = NSMakeRect(8, HEX_TABLE_HEIGHT - 20, tableWidth - 16, 16);
+    NSFont *labelFont = statusLabelFontFor(font);
+    const CGFloat labelHeight = textFrameHeightForFont(labelFont);
+    const CGFloat statusTopMargin = 4.0;
+    const CGFloat statusAreaHeight = labelHeight + statusTopMargin;
+    label.frame = NSMakeRect(8, HEX_TABLE_HEIGHT - statusTopMargin - labelHeight,
+                             tableWidth - 16, labelHeight);
     label.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
-    label.font = [NSFont systemFontOfSize:11.0];
+    label.font = labelFont;
     label.textColor = [NSColor secondaryLabelColor];
     label.accessibilityIdentifier = kHexEditorStatusAccessibilityID;
     [rootView addSubview:label];
 
-    NSScrollView *scrollView = [[HexTableScrollView alloc] initWithFrame:NSMakeRect(0, 0, tableWidth, HEX_TABLE_HEIGHT - HEX_STATUS_HEIGHT)];
+    NSScrollView *scrollView = [[HexTableScrollView alloc] initWithFrame:NSMakeRect(0, 0, tableWidth, HEX_TABLE_HEIGHT - statusAreaHeight)];
     scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     scrollView.hasVerticalScroller = YES;
     scrollView.hasHorizontalScroller = YES;
@@ -3322,7 +3594,7 @@ static NSView *createHexTableView(NSTableView **tableView, NSTextField **statusL
     table.accessibilityIdentifier = kHexEditorTableAccessibilityID;
     table.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     table.usesAlternatingRowBackgroundColors = NO;
-    table.gridStyleMask = NSTableViewSolidVerticalGridLineMask;
+    table.gridStyleMask = NSTableViewGridNone;
     table.rowHeight = 18.0;
     table.intercellSpacing = NSMakeSize(0.0, 1.0);
     table.allowsColumnReordering = NO;
@@ -3344,6 +3616,12 @@ static NSView *createHexTableView(NSTableView **tableView, NSTextField **statusL
 
     scrollView.documentView = table;
     [rootView addSubview:scrollView];
+
+    // Diagnostic AX surface for tests — see kHexEditorCursorAccessibilityID.
+    // 1×1 in the corner so it never affects layout or interactivity.
+    HexCursorDiagnosticView *diag = [[HexCursorDiagnosticView alloc] initWithFrame:NSMakeRect(0, 0, 1, 1)];
+    diag.accessibilityIdentifier = kHexEditorCursorAccessibilityID;
+    [rootView addSubview:diag];
 
     if (statusLabel) {
         *statusLabel = label;
@@ -3450,7 +3728,17 @@ static void showHexPreview()
     [hexRootView removeFromSuperview];
     [hexEditorView addSubview:hexRootView positioned:NSWindowAbove relativeTo:hiddenScintillaView];
     hiddenScintillaView.hidden = YES;
-    resetHexTableScrollOrigin();
+    // Force NSScrollView to retile now that we're in a window. Without this,
+    // the column-header bar can end up overlapping the top of the clip view
+    // (because tile() ran while the scroll view was still parentless), leaving
+    // row 0 partially or fully hidden behind the header. Tiling here positions
+    // the header above the clip view and restores the full scrollable range.
+    [hexTableView.enclosingScrollView tile];
+    // captureScintillaSelection() (above) has already mirrored the host's caret
+    // and selection state into activeByteOffset / selectedByteStart-End. Scroll
+    // the hex table so that position is visible — landing at the cursor row,
+    // which for a real selection is the END of the selection.
+    scrollHexTableToActiveOffset();
     [hexTableView.window makeFirstResponder:hexTableView];
     updateHexMenuCheck(true);
 }
@@ -3496,7 +3784,9 @@ static void hideHexPreview()
 
 static void showAbout()
 {
-    showMessage(L(@"app.titleMac"), L(@"about.body"));
+    NSString *body = [NSString stringWithFormat:@"%@\n\n%@",
+                      L(@"about.body"), L(@"about.localeTag")];
+    showMessage(L(@"app.titleMac"), body);
 }
 
 static void compareHexPreview()

@@ -62,6 +62,8 @@ install(TARGETS HexEditor DESTINATION "${PLUGIN_INSTALL_DIR}")
 # any non-English language to render.
 set(HEX_LOCALIZATION_FILES
     "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.en.strings"
+    "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.en-GB.strings"
+    "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.en-US.strings"
     "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.de.strings"
 )
 install(FILES ${HEX_LOCALIZATION_FILES} DESTINATION "${PLUGIN_INSTALL_DIR}")

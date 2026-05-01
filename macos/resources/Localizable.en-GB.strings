@@ -1,0 +1,15 @@
+/* Notepad++ HEX-Editor — British English (en-GB)
+ *
+ * Regional override file. Contains ONLY keys whose value differs from
+ * Localizable.en.strings — the cascade in HexEditor.mm walks en-GB first, then
+ * falls through to en, then to the embedded English defaults. Any key the
+ * en-GB file omits cascades to en automatically; do NOT mirror en here.
+ *
+ * Today the only divergence is the diagnostic locale tag in the About dialog
+ * (so the cascade XCTest can see "Strings: en-GB" and verify regional layering
+ * works). If a future string ever uses a US-specific spelling (color, behavior,
+ * customize, license), add the British spelling here.
+ */
+
+/* About / help dialog — diagnostic locale tag */
+"about.localeTag"                  = "Strings: en-GB";

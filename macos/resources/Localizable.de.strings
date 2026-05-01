@@ -150,6 +150,8 @@
 
 /* Über / Hilfe-Dialog */
 "about.body"                       = "Native macOS-Portierung des HEX-Editor-Plugins für Notepad++. Bietet eine eingebettete Hex-Tabelle mit direkter Byte-Bearbeitung, Auswahl, Lesezeichen, Suchen/Ersetzen, Vergleich und Ansichtswechsel.";
+/* Diagnose-Zeile im Über-Dialog — zeigt die aktuell geladene .strings-Datei. */
+"about.localeTag"                  = "Strings: de";
 
 /* Allgemeine Fehler beim Wechsel zwischen Scintilla und Hex-Ansicht */
 "editor.noActiveBuffer"            = "Kein aktiver Editor-Puffer verfügbar.";

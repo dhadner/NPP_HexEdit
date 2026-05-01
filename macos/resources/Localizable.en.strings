@@ -150,6 +150,10 @@
 
 /* About / help dialog */
 "about.body"                       = "Native macOS port of the Notepad++ HEX-Editor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.";
+/* Diagnostic line in the About dialog — names the .strings file currently in
+   use, so users (and the cascade XCTest) can see at a glance whether their
+   translation loaded. Each shipped .strings file declares its own tag. */
+"about.localeTag"                  = "Strings: en";
 
 /* Generic error paths used when toggling between Scintilla / hex view */
 "editor.noActiveBuffer"            = "No active editor buffer is available.";
