@@ -3016,10 +3016,15 @@ static bool tryRectPasteFromPasteboard()
         return true;
     }
 
-    if (dataPtr == nullptr || dataLength != width * height) {
-        // Malformed payload (shouldn't happen for our own writes; could happen if
-        // another plugin or version of us writes an invalid blob). Refuse rather
-        // than guess.
+    // Guard the dataLength == width × height check against uint32 overflow:
+    // a crafted payload with width = 0xFFFFFFFE, height = 2 wraps the product
+    // to 0xFFFFFFFC, which a forged dataLength of the same value would slip
+    // past — and the downstream applyRectBytesPaste would then index as
+    // size_t (no overflow) into an attacker-sized region. Promote to uint64
+    // before multiplying so the overflow surfaces here instead.
+    const std::uint64_t expectedDataBytes =
+        static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height);
+    if (dataPtr == nullptr || expectedDataBytes != dataLength) {
         presentHexValidationError([NSString stringWithFormat:L(@"paste.rect.errorShapeMismatch"),
             (unsigned long)width, (unsigned long)height]);
         return true;

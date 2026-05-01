@@ -1716,6 +1716,102 @@ func testContextMenuCommands() throws {
         ], timeout: 5)
     }
 
+    // MARK: - Pasteboard attack regression net (v1.1.1+)
+    //
+    // These tests pipe deliberately malformed custom-UTI payloads through the
+    // system pasteboard, then trigger Edit > Paste in the hex view, and verify
+    // (a) the plugin doesn't crash (XCTest catches any process exit), and (b)
+    // the destination buffer is unchanged. The full attack matrix lives in the
+    // libFuzzer suite under macos/fuzz/; these three are representative
+    // regression-net cases so a future change that breaks decodeRectPayload's
+    // bounds checks fails the regular UI suite, not just the opt-in fuzz pass.
+
+    /// Custom UTI that the plugin's rectangular copy/paste uses. Must match
+    /// kHexRectPasteboardType in [HexEditor.mm](../../macos/src/HexEditor.mm).
+    private static let rectPasteboardType =
+        NSPasteboard.PasteboardType("org.notepad-plus-plus.HexEditor.rectangular")
+
+    /// Run a single pasteboard-attack case: open a known buffer, place
+    /// `payload` on the pasteboard under the rectangular UTI, trigger Edit >
+    /// Paste, then assert the buffer's first row is unchanged. We do NOT
+    /// create a destination rect — a malformed payload should fall through
+    /// the rect path silently (no crash, no dialog, no edit) and be picked
+    /// up only if the public-text fallback exists, which we explicitly clear.
+    private func runMalformedPastePayload(_ payload: Data, label: String) throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "ABCDEFGHIJKLMNOPabcdefghijklmnop")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        try positionHexCursorAtZero(app: app, hexTable: hexTable)
+
+        // Wipe the pasteboard to nothing-but-the-payload, so the public-text
+        // fallback can't accidentally rescue the paste with parseable text.
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setData(payload, forType: Self.rectPasteboardType)
+
+        invokeEditMenuItem(app: app, item: "Paste")
+
+        // Buffer's first row must be intact — byte 0 = 'A' = 0x41,
+        // byte 8 = 'I' = 0x49, byte 15 = 'P' = 0x50.
+        let row0 = hexTable.tableRows.element(boundBy: 0)
+        wait(for: [
+            expectation(for: NSPredicate(format: "value == %@", "41"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: cellIndex(forByte: 0)),
+                        handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "49"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: cellIndex(forByte: 8)),
+                        handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "50"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: cellIndex(forByte: 15)),
+                        handler: nil),
+        ], timeout: 5)
+        // Belt-and-braces: if the malformed payload somehow opened an alert
+        // dialog, dismiss it so the test cleans up rather than leaving a
+        // floating window for the next test.
+        let possibleDialog = app.dialogs.firstMatch
+        if possibleDialog.exists {
+            possibleDialog.buttons["OK"].click()
+        }
+        XCTAssertTrue(true, "Pasteboard attack '\(label)' did not crash the host or modify the buffer.")
+    }
+
+    func testPasteboardAttack_TruncatedHeader() throws {
+        // 5 bytes — well below kRectPayloadHeaderSize (20). decodeRectPayload
+        // must reject before reading any of the multi-byte header fields.
+        let payload = Data([0x48, 0x58, 0x52, 0x31, 0x01])  // "HXR1\x01" — looks like a partial header
+        try runMalformedPastePayload(payload, label: "truncated header (5 bytes)")
+    }
+
+    func testPasteboardAttack_WrongMagic() throws {
+        // 20-byte header with wrong magic — the rest is ignored.
+        var payload = Data(count: 20)
+        payload[0] = 0x58; payload[1] = 0x58; payload[2] = 0x58; payload[3] = 0x31  // "XXX1"
+        payload[4] = 0x01  // version
+        // dataLength stays 0; even if magic check were bypassed, the parse
+        // would stop at the first downstream check.
+        try runMalformedPastePayload(payload, label: "wrong magic (XXX1 instead of HXR1)")
+    }
+
+    func testPasteboardAttack_ForgedDataLength() throws {
+        // Valid magic + version, but dataLength claims 1000 bytes follow when
+        // the actual payload is just the 20-byte header. This is the OOB-read
+        // attack — if the bound check missed, the plugin would read 1000
+        // bytes past the end of the NSData buffer.
+        var payload = Data(count: 20)
+        payload[0] = 0x48; payload[1] = 0x58; payload[2] = 0x52; payload[3] = 0x31  // "HXR1"
+        payload[4] = 0x01  // version
+        payload[5] = 0x00  // kind = Bytes
+        // dataLength = 1000 (LE32 at offset 16..19)
+        payload[16] = 0xE8; payload[17] = 0x03; payload[18] = 0x00; payload[19] = 0x00
+        try runMalformedPastePayload(payload, label: "forged dataLength (1000 with empty body)")
+    }
+
     private func positionHexCursorAt(app: XCUIApplication, hexTable: XCUIElement, offset: Int) throws {
         hexTable.rightClick()
         let gotoItem = app.menuItems["Go to Offset…"]

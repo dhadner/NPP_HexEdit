@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <limits>
 
 namespace hexedit {
 
@@ -894,7 +895,17 @@ std::vector<ByteRange> rectToRanges(const RectSelection &rect, std::size_t total
     if (!rect.active()) {
         return ranges;
     }
-    ranges.reserve(rect.height);
+    // Bound the reserve by what we can actually iterate — the loop below
+    // breaks once rowStartOffset exceeds totalLength, so we never push more
+    // than (totalLength / bytesPerRow + 1) entries regardless of rect.height.
+    // Without this cap, a huge attacker-influenced rect.height triggers an
+    // allocation-size-too-big abort in vector::reserve (caught by ASan in
+    // fuzz_makeRectSelection). The non-attack path is unaffected — under
+    // PREVIEW_LIMIT (1 MB) and HEX_DEFAULT_COLUMNS (16), maxRows is at most
+    // 65 537, well within rect.height's natural range.
+    const std::size_t bpr = std::max(rect.bytesPerRow, static_cast<std::size_t>(1));
+    const std::size_t maxRows = (totalLength / bpr) + 1;
+    ranges.reserve(std::min(rect.height, maxRows));
     for (std::size_t r = 0; r < rect.height; ++r) {
         const std::size_t rowStartOffset = rect.originOffset + r * rect.bytesPerRow;
         if (rowStartOffset >= totalLength) {
@@ -913,6 +924,13 @@ bool extractRectBytes(const std::uint8_t *bytes,
                       std::vector<std::uint8_t> &out)
 {
     if (!rect.active()) {
+        return false;
+    }
+    // Defend against width × height overflowing size_t. In normal plugin use
+    // the rect comes from makeRectSelection on a < 1 MB buffer so this can't
+    // happen, but a malformed custom-UTI payload that survives upstream
+    // checks could otherwise allocate gigabytes. Reject up front.
+    if (rect.width != 0 && rect.height > std::numeric_limits<std::size_t>::max() / rect.width) {
         return false;
     }
     out.assign(rect.totalBytes(), 0);

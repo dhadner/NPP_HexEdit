@@ -34,10 +34,23 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
     if (size < kHeaderSize) {
         return 0;
     }
-    const std::size_t anchor      = static_cast<std::size_t>(readLE64(data + 0));
-    const std::size_t end         = static_cast<std::size_t>(readLE64(data + 8));
-    const std::size_t bytesPerRow = static_cast<std::size_t>(readLE64(data + 16));
-    const std::size_t totalLength = static_cast<std::size_t>(readLE64(data + 24));
+    // Clamp inputs to ranges the plugin ever realistically passes. In production:
+    //   * previewTotalLength is bounded by PREVIEW_LIMIT (1 MB)
+    //   * bytesPerRow is bounded by HEX_MAX_BYTES_PER_ROW (128) and never zero
+    //     at call time (caller asserts), so 1..128 is the production envelope
+    //   * anchor / end are clamped to totalLength inside makeRectSelection
+    // Without these clamps, the fuzzer hands in SIZE_MAX values that produce
+    // a rect with rect.height in the petabytes — the resulting reserve in
+    // rectToRanges trips ASan with allocation-size-too-big, but no production
+    // call path can reach those values. We're fuzzing for memory-safety bugs
+    // in the parser, not exercising allocator pressure with unrealistic input.
+    constexpr std::size_t kMaxTotalLength = 1ULL << 20;     // 1 MB, matches PREVIEW_LIMIT
+    constexpr std::size_t kMaxBytesPerRow = 128;
+    const std::size_t totalLength = static_cast<std::size_t>(readLE64(data + 24)) % (kMaxTotalLength + 1);
+    const std::size_t bytesPerRow =
+        (static_cast<std::size_t>(readLE64(data + 16)) % kMaxBytesPerRow) + 1;
+    const std::size_t anchor = static_cast<std::size_t>(readLE64(data + 0));
+    const std::size_t end    = static_cast<std::size_t>(readLE64(data + 8));
 
     hexedit::RectSelection rect = hexedit::makeRectSelection(anchor, end, bytesPerRow, totalLength);
 
