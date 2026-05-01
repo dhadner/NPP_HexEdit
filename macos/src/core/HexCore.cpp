@@ -1127,4 +1127,76 @@ bool parseRectClipboardText(const std::string &text,
     return true;
 }
 
+const char kRectPayloadMagic[4] = {'H', 'X', 'R', '1'};
+const std::uint8_t kRectPayloadVersion = 1;
+const std::size_t kRectPayloadHeaderSize = 20;
+
+std::vector<std::uint8_t> encodeRectPayload(RectClipboardKind kind,
+                                            std::uint32_t width,
+                                            std::uint32_t height,
+                                            const std::uint8_t *data,
+                                            std::uint32_t dataLength)
+{
+    std::vector<std::uint8_t> payload;
+    payload.reserve(kRectPayloadHeaderSize + dataLength);
+    payload.insert(payload.end(), std::begin(kRectPayloadMagic), std::end(kRectPayloadMagic));
+    payload.push_back(kRectPayloadVersion);
+    payload.push_back(static_cast<std::uint8_t>(kind));
+    payload.push_back(0);
+    payload.push_back(0);
+    auto appendLE32 = [&](std::uint32_t value) {
+        payload.push_back(static_cast<std::uint8_t>(value & 0xFF));
+        payload.push_back(static_cast<std::uint8_t>((value >> 8) & 0xFF));
+        payload.push_back(static_cast<std::uint8_t>((value >> 16) & 0xFF));
+        payload.push_back(static_cast<std::uint8_t>((value >> 24) & 0xFF));
+    };
+    appendLE32(width);
+    appendLE32(height);
+    appendLE32(dataLength);
+    if (data != nullptr && dataLength > 0) {
+        payload.insert(payload.end(), data, data + dataLength);
+    }
+    return payload;
+}
+
+bool decodeRectPayload(const std::uint8_t *bytes, std::size_t length, RectPayload &out)
+{
+    if (bytes == nullptr || length < kRectPayloadHeaderSize) {
+        return false;
+    }
+    if (std::memcmp(bytes, kRectPayloadMagic, sizeof(kRectPayloadMagic)) != 0) {
+        return false;
+    }
+    if (bytes[4] != kRectPayloadVersion) {
+        return false;
+    }
+    const std::uint8_t kindByte = bytes[5];
+    if (kindByte > static_cast<std::uint8_t>(RectClipboardKind::Addresses)) {
+        return false;
+    }
+    auto readLE32 = [bytes](std::size_t offset) -> std::uint32_t {
+        return static_cast<std::uint32_t>(bytes[offset]) |
+               (static_cast<std::uint32_t>(bytes[offset + 1]) << 8) |
+               (static_cast<std::uint32_t>(bytes[offset + 2]) << 16) |
+               (static_cast<std::uint32_t>(bytes[offset + 3]) << 24);
+    };
+    const std::uint32_t width = readLE32(8);
+    const std::uint32_t height = readLE32(12);
+    const std::uint32_t dataLength = readLE32(16);
+    // Bounds check against the actual input — the attacker-controlled dataLength
+    // header field cannot promise more bytes than the pasteboard handed us.
+    // size_t arithmetic is overflow-safe here because length is bounded by the
+    // pasteboard's allocator (NSData can't realistically exceed SIZE_MAX/2 on a
+    // user's Mac), and kRectPayloadHeaderSize is 20.
+    if (dataLength > length - kRectPayloadHeaderSize) {
+        return false;
+    }
+    out.kind = static_cast<RectClipboardKind>(kindByte);
+    out.width = width;
+    out.height = height;
+    out.dataLength = dataLength;
+    out.data = (dataLength > 0) ? (bytes + kRectPayloadHeaderSize) : nullptr;
+    return true;
+}
+
 }

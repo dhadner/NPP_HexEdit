@@ -224,6 +224,40 @@ happened — no need to scroll xcodebuild output.
 **The UI tier locks your keyboard and mouse for the duration of the run** —
 ~14 min for the full suite. The next section describes how to avoid this.
 
+### Tier 4 — Sanitizers + libFuzzer (`ctest -L fuzz`, opt-in)
+
+A separate build directory builds the C++ tests under AddressSanitizer +
+UndefinedBehaviorSanitizer, optionally with libFuzzer harnesses against the
+parsers in HexCore that consume attacker-controlled data (the custom-UTI
+binary payload + the Q2.b text fallback). See
+[macos/fuzz/README.md](macos/fuzz/README.md) for the harness inventory.
+
+ASan + UBSan only (works with Apple Clang, no extra install):
+
+```sh
+cmake -S macos -B macos/build-asan -DENABLE_SANITIZERS=ON -DCMAKE_OSX_ARCHITECTURES=arm64
+cmake --build macos/build-asan
+ctest --test-dir macos/build-asan -L "unit|smoke" --output-on-failure
+```
+
+Adds ASan + UBSan + libFuzzer (requires `brew install llvm` because Apple
+Clang ships the `-fsanitize=fuzzer` flag but not the runtime archive):
+
+```sh
+cmake -S macos -B macos/build-fuzz -DENABLE_FUZZ_TESTS=ON \
+  -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ \
+  -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang
+cmake --build macos/build-fuzz
+ctest --test-dir macos/build-fuzz -L fuzz --output-on-failure
+```
+
+Each fuzz harness runs for `FUZZ_DURATION_SEC` seconds (30 by default;
+override via `-DFUZZ_DURATION_SEC=N`). For a longer soak against one harness:
+
+```sh
+./macos/build-fuzz/fuzz_decodeRectPayload -max_total_time=600 -print_final_stats=1
+```
+
 ## Running UI tests in a VM (recommended)
 
 Running UI tests in a VM lets you keep using your Mac while the suite executes.

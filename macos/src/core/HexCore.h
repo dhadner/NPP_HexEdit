@@ -119,6 +119,57 @@ bool parseRectClipboardText(const std::string &text,
                             std::size_t &outWidth,
                             std::size_t &outHeight);
 
+// Wire-format constants for the custom-UTI pasteboard payload that carries a
+// rectangular selection between the plugin and itself across copy/paste. The
+// header is 20 bytes:
+//   [0..3]   magic = "HXR1"
+//   [4]      version (1)
+//   [5]      kind (RectClipboardKind)
+//   [6..7]   reserved (zero)
+//   [8..11]  width  (little-endian uint32)
+//   [12..15] height (little-endian uint32)
+//   [16..19] dataLength (little-endian uint32)
+//   [20..]   raw bytes (length = dataLength; 0 for kind=Addresses)
+extern const char kRectPayloadMagic[4];
+extern const std::uint8_t kRectPayloadVersion;
+extern const std::size_t kRectPayloadHeaderSize;
+
+enum class RectClipboardKind : std::uint8_t {
+    Bytes = 0,
+    Ascii = 1,
+    Addresses = 2,
+};
+
+struct RectPayload {
+    RectClipboardKind kind = RectClipboardKind::Bytes;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::uint32_t dataLength = 0;
+    const std::uint8_t *data = nullptr;
+};
+
+// Serialise a rect payload into the wire format. Always succeeds (returned vector
+// has size kRectPayloadHeaderSize + dataLength). When dataLength is 0, data may
+// be null — used for kind=Addresses where the text payload carries the user-visible
+// content and the structured payload is just the shape + kind tag.
+std::vector<std::uint8_t> encodeRectPayload(RectClipboardKind kind,
+                                            std::uint32_t width,
+                                            std::uint32_t height,
+                                            const std::uint8_t *data,
+                                            std::uint32_t dataLength);
+
+// Validate + parse a wire-format payload. Returns false on bad magic, version
+// mismatch, kind out of range, dataLength larger than the actual buffer, or
+// truncated header. On success, out.data points into the input buffer (no copy
+// is made — caller must not free the input until done with out).
+//
+// This is the function fed attacker-controlled bytes via the system pasteboard,
+// so all bounds checking happens here and only here. Any width/height/dataLength
+// is structurally validated against the input length. Caller is responsible for
+// the SEMANTIC check that dataLength == width * height before treating .data as
+// row-major byte content.
+bool decodeRectPayload(const std::uint8_t *bytes, std::size_t length, RectPayload &out);
+
 struct ByteEditOperation {
     std::size_t offset = 0;
     std::size_t replacedByteCount = 0;

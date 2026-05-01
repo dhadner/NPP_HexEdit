@@ -1333,6 +1333,99 @@ void testParseRectClipboardText()
     }
 }
 
+void testRectPayloadCodecRoundTrip()
+{
+    g_currentSuite = "rectPayloadCodecRoundTrip";
+
+    // Round-trip with non-empty data.
+    {
+        const std::uint8_t data[] = {0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02};
+        const auto payload = encodeRectPayload(RectClipboardKind::Bytes, 3, 2, data, 6);
+        HEX_EXPECT_EQ(payload.size(), kRectPayloadHeaderSize + 6);
+        RectPayload decoded;
+        HEX_EXPECT(decodeRectPayload(payload.data(), payload.size(), decoded));
+        HEX_EXPECT(decoded.kind == RectClipboardKind::Bytes);
+        HEX_EXPECT_EQ(decoded.width, static_cast<std::uint32_t>(3));
+        HEX_EXPECT_EQ(decoded.height, static_cast<std::uint32_t>(2));
+        HEX_EXPECT_EQ(decoded.dataLength, static_cast<std::uint32_t>(6));
+        HEX_EXPECT_EQ(decoded.data[0], static_cast<std::uint8_t>(0xDE));
+        HEX_EXPECT_EQ(decoded.data[5], static_cast<std::uint8_t>(0x02));
+    }
+
+    // Address kind with empty data — round-trips with .data == nullptr.
+    {
+        const auto payload = encodeRectPayload(RectClipboardKind::Addresses, 1, 4, nullptr, 0);
+        HEX_EXPECT_EQ(payload.size(), kRectPayloadHeaderSize);
+        RectPayload decoded;
+        HEX_EXPECT(decodeRectPayload(payload.data(), payload.size(), decoded));
+        HEX_EXPECT(decoded.kind == RectClipboardKind::Addresses);
+        HEX_EXPECT_EQ(decoded.dataLength, static_cast<std::uint32_t>(0));
+        HEX_EXPECT(decoded.data == nullptr);
+    }
+}
+
+void testDecodeRectPayloadRejectsAttacks()
+{
+    g_currentSuite = "decodeRectPayloadRejectsAttacks";
+
+    // nullptr / undersized buffer → reject without dereference.
+    {
+        RectPayload p;
+        HEX_EXPECT(!decodeRectPayload(nullptr, 0, p));
+        HEX_EXPECT(!decodeRectPayload(nullptr, 100, p));
+        const std::uint8_t tiny[10] = {};
+        HEX_EXPECT(!decodeRectPayload(tiny, sizeof(tiny), p));
+    }
+
+    // Wrong magic → reject.
+    {
+        std::vector<std::uint8_t> payload(kRectPayloadHeaderSize, 0);
+        payload[0] = 'X'; payload[1] = 'X'; payload[2] = 'X'; payload[3] = '1';
+        payload[4] = 1;
+        RectPayload p;
+        HEX_EXPECT(!decodeRectPayload(payload.data(), payload.size(), p));
+    }
+
+    // Right magic, wrong version → reject.
+    {
+        auto payload = encodeRectPayload(RectClipboardKind::Bytes, 1, 1, nullptr, 0);
+        payload[4] = 99;  // mutate version
+        RectPayload p;
+        HEX_EXPECT(!decodeRectPayload(payload.data(), payload.size(), p));
+    }
+
+    // Kind out of enum range → reject.
+    {
+        auto payload = encodeRectPayload(RectClipboardKind::Bytes, 1, 1, nullptr, 0);
+        payload[5] = 99;  // mutate kind
+        RectPayload p;
+        HEX_EXPECT(!decodeRectPayload(payload.data(), payload.size(), p));
+    }
+
+    // dataLength larger than the actual buffer → reject (this is the key OOB check).
+    // Forge a header that claims 1000 bytes of data while the actual buffer is only header-sized.
+    {
+        std::vector<std::uint8_t> payload(kRectPayloadHeaderSize, 0);
+        std::memcpy(payload.data(), kRectPayloadMagic, sizeof(kRectPayloadMagic));
+        payload[4] = kRectPayloadVersion;
+        payload[5] = 0;  // kind=Bytes
+        // dataLength = 1000 (LE32 at offset 16)
+        payload[16] = 0xE8; payload[17] = 0x03; payload[18] = 0; payload[19] = 0;
+        RectPayload p;
+        HEX_EXPECT(!decodeRectPayload(payload.data(), payload.size(), p));
+    }
+
+    // dataLength == UINT32_MAX → reject (extreme overflow attempt).
+    {
+        std::vector<std::uint8_t> payload(kRectPayloadHeaderSize, 0);
+        std::memcpy(payload.data(), kRectPayloadMagic, sizeof(kRectPayloadMagic));
+        payload[4] = kRectPayloadVersion;
+        payload[16] = 0xFF; payload[17] = 0xFF; payload[18] = 0xFF; payload[19] = 0xFF;
+        RectPayload p;
+        HEX_EXPECT(!decodeRectPayload(payload.data(), payload.size(), p));
+    }
+}
+
 }
 
 int main()
@@ -1367,9 +1460,11 @@ int main()
     testFormatRectClipboardHex();
     testFormatRectClipboardAscii();
     testParseRectClipboardText();
+    testRectPayloadCodecRoundTrip();
+    testDecodeRectPayloadRejectsAttacks();
 
     if (g_failures == 0) {
-        std::printf("PASS: %d assertions across 30 suites\n", g_assertions);
+        std::printf("PASS: %d assertions across 32 suites\n", g_assertions);
         return 0;
     }
     std::printf("FAIL: %d/%d assertions failed\n", g_failures, g_assertions);

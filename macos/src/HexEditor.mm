@@ -700,35 +700,18 @@ static bool applyRectBytesPaste(const hexedit::RectSelection &dest,
                                 const std::uint8_t *bytes,
                                 std::size_t byteCount);
 
-// Rectangular (block) clipboard kind — written into the custom-UTI payload header
-// so the paste path can apply the user's rules (Addresses-source rejected; Bytes /
-// Ascii sources interchangeable across hex / ascii panes; strict shape match against
-// the destination rect).
-enum class HexRectClipboardKind : std::uint8_t {
-    Bytes = 0,
-    Ascii = 1,
-    Addresses = 2,
-};
-
 // Custom pasteboard type that carries shape + kind alongside the byte data. When
 // the paste path finds this UTI it uses the structured payload directly; when only
 // public-text is on the clipboard (e.g. copied from another app), it falls back to
 // hexedit::parseRectClipboardText per the user's Q2.b decision.
+//
+// The wire format is owned by HexCore (kRectPayloadMagic, encodeRectPayload,
+// decodeRectPayload) so the same parser the plugin reads can also be exercised
+// from libFuzzer harnesses without dragging in AppKit. HexRectClipboardKind below
+// is a typedef alias so existing call sites read naturally.
 static NSString *const kHexRectPasteboardType = @"org.notepad-plus-plus.HexEditor.rectangular";
 
-// Wire-format constants for the custom-UTI payload. The header is 16 bytes:
-//   [0..3]   magic = "HXR1" (literal ASCII bytes 0x48 0x58 0x52 0x31)
-//   [4]      version (1)
-//   [5]      kind (HexRectClipboardKind)
-//   [6..7]   reserved (zero)
-//   [8..11]  width (little-endian uint32, bytes per row)
-//   [12..15] height (little-endian uint32, rows)
-//   [16..19] dataLength (little-endian uint32)
-//   [20..]   raw bytes (length = dataLength; 0 for kind=Addresses since address
-//            text is only useful externally and lives in the public-text payload).
-static const char kHexRectPayloadMagic[4] = {'H', 'X', 'R', '1'};
-static const std::uint8_t kHexRectPayloadVersion = 1;
-static const std::size_t kHexRectPayloadHeaderSize = 20;
+using HexRectClipboardKind = hexedit::RectClipboardKind;
 static bool deleteHexSelection();
 static void selectAllHexBytes();
 static bool handleHexDigit(unichar character);
@@ -2675,54 +2658,24 @@ static void selectedOrCurrentRange(size_t *offset, size_t *byteCount)
     *byteCount = range.byteCount;
 }
 
-// Encode a rectangular payload (kind + shape + bytes) into the wire format described
-// next to kHexRectPayloadMagic. Returns nil if width/height/data are inconsistent
-// (which would be a programming error — callers always pass extractRectBytes output).
+// Adapter that wraps hexedit::encodeRectPayload (pure C++) into an NSData. Kept
+// here rather than inline at the call site so the AppKit / Foundation dependency
+// stays out of the C++ core layer, where the encoder is unit-tested + fuzzed.
 static NSData *rectPayloadEncode(HexRectClipboardKind kind,
                                  std::uint32_t width,
                                  std::uint32_t height,
                                  const std::uint8_t *data,
                                  std::uint32_t dataLength)
 {
-    NSMutableData *payload = [NSMutableData dataWithCapacity:kHexRectPayloadHeaderSize + dataLength];
-    [payload appendBytes:kHexRectPayloadMagic length:sizeof(kHexRectPayloadMagic)];
-    const std::uint8_t version = kHexRectPayloadVersion;
-    [payload appendBytes:&version length:1];
-    const std::uint8_t kindByte = static_cast<std::uint8_t>(kind);
-    [payload appendBytes:&kindByte length:1];
-    const std::uint8_t reserved[2] = {0, 0};
-    [payload appendBytes:reserved length:2];
-    // Little-endian shape + length so the layout is identical on x86_64 and arm64.
-    const std::uint8_t widthBytes[4] = {
-        static_cast<std::uint8_t>(width & 0xFF),
-        static_cast<std::uint8_t>((width >> 8) & 0xFF),
-        static_cast<std::uint8_t>((width >> 16) & 0xFF),
-        static_cast<std::uint8_t>((width >> 24) & 0xFF),
-    };
-    const std::uint8_t heightBytes[4] = {
-        static_cast<std::uint8_t>(height & 0xFF),
-        static_cast<std::uint8_t>((height >> 8) & 0xFF),
-        static_cast<std::uint8_t>((height >> 16) & 0xFF),
-        static_cast<std::uint8_t>((height >> 24) & 0xFF),
-    };
-    const std::uint8_t lengthBytes[4] = {
-        static_cast<std::uint8_t>(dataLength & 0xFF),
-        static_cast<std::uint8_t>((dataLength >> 8) & 0xFF),
-        static_cast<std::uint8_t>((dataLength >> 16) & 0xFF),
-        static_cast<std::uint8_t>((dataLength >> 24) & 0xFF),
-    };
-    [payload appendBytes:widthBytes length:4];
-    [payload appendBytes:heightBytes length:4];
-    [payload appendBytes:lengthBytes length:4];
-    if (data != nullptr && dataLength > 0) {
-        [payload appendBytes:data length:dataLength];
-    }
-    return payload;
+    std::vector<std::uint8_t> payload =
+        hexedit::encodeRectPayload(kind, width, height, data, dataLength);
+    return [NSData dataWithBytes:payload.data() length:payload.size()];
 }
 
-// Decode a payload previously written by rectPayloadEncode. Returns NO on bad
-// magic, version mismatch, truncated header, or data-length larger than the
-// actual NSData. Out parameters are written only on success.
+// Adapter for hexedit::decodeRectPayload. Returns NO on malformed input (bad
+// magic, version mismatch, truncated header, dataLength > buffer size) — all
+// validation logic lives in the core function so libFuzzer can exercise it
+// without an AppKit dependency.
 static BOOL rectPayloadDecode(NSData *data,
                               HexRectClipboardKind *outKind,
                               std::uint32_t *outWidth,
@@ -2730,43 +2683,19 @@ static BOOL rectPayloadDecode(NSData *data,
                               const std::uint8_t **outDataPtr,
                               std::uint32_t *outDataLength)
 {
-    if (data == nil || data.length < kHexRectPayloadHeaderSize) {
+    if (data == nil) {
         return NO;
     }
-    const std::uint8_t *bytes = static_cast<const std::uint8_t *>(data.bytes);
-    if (std::memcmp(bytes, kHexRectPayloadMagic, sizeof(kHexRectPayloadMagic)) != 0) {
+    hexedit::RectPayload payload;
+    if (!hexedit::decodeRectPayload(static_cast<const std::uint8_t *>(data.bytes),
+                                     data.length, payload)) {
         return NO;
     }
-    if (bytes[4] != kHexRectPayloadVersion) {
-        return NO;
-    }
-    const std::uint8_t kindByte = bytes[5];
-    if (kindByte > static_cast<std::uint8_t>(HexRectClipboardKind::Addresses)) {
-        return NO;
-    }
-    const std::uint32_t width =
-        static_cast<std::uint32_t>(bytes[8]) |
-        (static_cast<std::uint32_t>(bytes[9]) << 8) |
-        (static_cast<std::uint32_t>(bytes[10]) << 16) |
-        (static_cast<std::uint32_t>(bytes[11]) << 24);
-    const std::uint32_t height =
-        static_cast<std::uint32_t>(bytes[12]) |
-        (static_cast<std::uint32_t>(bytes[13]) << 8) |
-        (static_cast<std::uint32_t>(bytes[14]) << 16) |
-        (static_cast<std::uint32_t>(bytes[15]) << 24);
-    const std::uint32_t dataLength =
-        static_cast<std::uint32_t>(bytes[16]) |
-        (static_cast<std::uint32_t>(bytes[17]) << 8) |
-        (static_cast<std::uint32_t>(bytes[18]) << 16) |
-        (static_cast<std::uint32_t>(bytes[19]) << 24);
-    if (kHexRectPayloadHeaderSize + dataLength > data.length) {
-        return NO;
-    }
-    if (outKind) *outKind = static_cast<HexRectClipboardKind>(kindByte);
-    if (outWidth) *outWidth = width;
-    if (outHeight) *outHeight = height;
-    if (outDataPtr) *outDataPtr = (dataLength > 0) ? (bytes + kHexRectPayloadHeaderSize) : nullptr;
-    if (outDataLength) *outDataLength = dataLength;
+    if (outKind) *outKind = payload.kind;
+    if (outWidth) *outWidth = payload.width;
+    if (outHeight) *outHeight = payload.height;
+    if (outDataPtr) *outDataPtr = payload.data;
+    if (outDataLength) *outDataLength = payload.dataLength;
     return YES;
 }
 
