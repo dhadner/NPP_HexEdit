@@ -108,15 +108,27 @@ choice. `CFPreferencesCopyAppValue` returns it unfiltered. See
 
 ## Tests
 
-There are three sets of tests, ordered from fastest to slowest:
+There are three sets of tests, from fastest to slowest:
+
+1. **Unit tests** — exercise the plugin's pure logic (cursor math, edit
+   planning, search, parsing) without touching Notepad++ or any macOS UI.
+   Run in milliseconds.
+2. **Smoke test** — loads the built plugin file and checks Notepad++ would
+   accept it (right exported functions, plugin name, menu entries).
+   Runs in well under a second.
+3. **UI tests** — launch the real Notepad++ app with the plugin installed
+   and drive it with synthetic clicks and keystrokes. ~14 minutes.
+
+The first two are fast and need nothing beyond the build, so they're bundled
+into one command. The UI tests are a separate command because they need a
+working Notepad++.app and they take over your keyboard and mouse for the
+duration:
 
 ```sh
-# Fast tests — the plugin's pure logic + a quick "does it load?" check.
-# Takes about half a second, no Notepad++ required.
+# Unit + smoke (the fast pair).
 ctest --test-dir macos/build-universal -L "unit|smoke" --output-on-failure
 
-# Slow tests — drives the real Notepad++ app through its UI. ~14 minutes.
-# Needs Notepad++.app installed (or built from source).
+# UI tests.
 macos/ui-tests-xcode/run-tests.sh
 ```
 
