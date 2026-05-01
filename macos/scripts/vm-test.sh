@@ -10,15 +10,32 @@
 #        ~/vm-test-local.sh ...
 #      Re-copy after any edits I push to the shared script.
 #   2. swiftc compiles .swift sources from the share with stale content, so
-#      test-code edits never reach the compiled test binary even after a
-#      DerivedData wipe. Workaround: rsync the entire ui-tests-xcode/ subtree
-#      to a VM-local working directory, run xcodebuild from there. The result
-#      bundle and Markdown summary are copied back to the shared folder so
-#      the host can read them.
+#      test-code edits never reach the compiled test binary. Workaround:
+#      rsync the entire ui-tests-xcode/ subtree to a VM-local working
+#      directory (with --checksum so updates are detected by content, not
+#      mtime) and run xcodebuild from there. The result bundle and Markdown
+#      summary are copied back to the shared folder so the host can read them.
+#
+# Why we DO NOT wipe DerivedData: the test runner is ad-hoc signed, and its
+# TCC (Privacy & Security → Accessibility) entry is keyed by the runner's
+# code hash. Wiping DerivedData forces a fresh build → fresh hash → macOS
+# treats it as a brand-new app and the user must re-grant Accessibility
+# permission via System Settings before xcodebuild can drive automation. By
+# preserving DerivedData, an unchanged source tree produces a byte-identical
+# runner whose TCC grant survives. Pass --clean to force a wipe (use after a
+# Swift toolchain upgrade or when something is genuinely stuck).
+#
+# First-run setup on a fresh VM: run vm-test-local.sh once with the VM's
+# desktop visible so you can click "Allow" on the macOS Accessibility prompt
+# that fires when the test runner first tries to drive Notepad++.app. Open
+# System Settings → Privacy & Security → Accessibility and verify
+# `HexEditorUITests-Runner` is listed and enabled. Subsequent runs are
+# unattended.
 #
 # Usage:
 #   ~/vm-test-local.sh                                              # full UI suite
 #   ~/vm-test-local.sh -only-testing:HexEditorUITests/HexEditorUITests/<test-name>
+#   ~/vm-test-local.sh --clean                                      # also wipe DerivedData
 #
 # Environment overrides (rarely needed — vm-bootstrap.sh writes a defaults
 # file at ~/.npp-hexedit-vm.env that is sourced automatically):
@@ -28,6 +45,16 @@
 #   LOCAL_TESTS     VM-local mirror of the test sources
 
 set -euo pipefail
+
+WIPE_DERIVED=0
+TEST_ARGS=()
+for arg in "$@"; do
+    if [[ "$arg" == "--clean" ]]; then
+        WIPE_DERIVED=1
+    else
+        TEST_ARGS+=("$arg")
+    fi
+done
 
 if [[ -f "$HOME/.npp-hexedit-vm.env" ]]; then
     # shellcheck disable=SC1091
@@ -65,23 +92,33 @@ rsync -a --delete --checksum \
     "$NPP_HEXEDIT/macos/ui-tests-xcode/" \
     "$LOCAL_TESTS/"
 
-# Wipe Xcode's DerivedData so nothing carries over from a previous run that
-# may have cached a stale source file. The local mirror above means the next
-# xcodebuild compiles from fresh content.
 DERIVED="$HOME/Library/Developer/Xcode/DerivedData"
-echo "==> Wiping Xcode DerivedData for HexEditorUITests"
-echo "    target: $DERIVED/HexEditorUITests-*"
-for d in "$DERIVED"/HexEditorUITests-*; do
-    if [[ -d "$d" ]]; then
-        echo "    removing: $d"
-        rm -rf "$d"
-    fi
-done
+if [[ $WIPE_DERIVED -eq 1 ]]; then
+    # Opt-in only (--clean). Default is to preserve DerivedData so the runner's
+    # ad-hoc code hash stays stable and TCC keeps its Accessibility grant.
+    echo "==> Wiping Xcode DerivedData for HexEditorUITests (--clean requested)"
+    echo "    NOTE: you'll need to re-grant the runner's Accessibility permission"
+    echo "          on the VM's System Settings → Privacy & Security → Accessibility"
+    echo "    target: $DERIVED/HexEditorUITests-*"
+    for d in "$DERIVED"/HexEditorUITests-*; do
+        if [[ -d "$d" ]]; then
+            echo "    removing: $d"
+            rm -rf "$d"
+        fi
+    done
+fi
 
 echo "==> Launching XCUITest from $LOCAL_TESTS"
-export NPP_MACOS_APP="$NPP_APP"
+# xcodebuild forwards env vars to the test process only when they're prefixed
+# with TEST_RUNNER_ (the prefix is stripped before delivery). Without this,
+# NPP_MACOS_APP would be set in xcodebuild's own env but invisible to the
+# Swift tests, and every UI test would skip with "Set NPP_MACOS_APP=...".
+export TEST_RUNNER_NPP_MACOS_APP="$NPP_APP"
 TEST_EXIT=0
-"$LOCAL_TESTS/run-tests.sh" "$@" || TEST_EXIT=$?
+# Bash 3.2 (and 5+ with `set -u`) treats `"${empty[@]}"` as referencing an
+# unset variable. The `${var+...}` idiom expands to nothing when the array
+# is unset/empty and to the quoted expansion when it has elements.
+"$LOCAL_TESTS/run-tests.sh" ${TEST_ARGS[@]+"${TEST_ARGS[@]}"} || TEST_EXIT=$?
 
 # Copy the result bundle and the human-readable summary back to the shared
 # folder so the host (and any code that reads via the share) can see them at

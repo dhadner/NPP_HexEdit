@@ -2,7 +2,28 @@
     "configurations": [
         {
             "name": "macOS",
-            "compileCommands": "${workspaceFolder}/macos/build-universal/compile_commands.json",
+            "//1": "Explicit include paths + defines instead of compileCommands. CMake's universal-binary build emits '-arch arm64 -arch x86_64' which the Microsoft C/C++ IntelliSense engine cannot consume in a single AST — falling back to defaults and surfacing fake 'HexCore.h not found' errors. The clangd extension uses macos/.clangd separately, which already strips those flags.",
+            "//2": "compilerPath lets the extension query clang++ for the default system include paths (libc++ in particular) so that std::clamp / std::min / etc. resolve without the extension guessing where the C++17 stdlib lives. Without this the include search uses the extension's bundled defaults which don't always match the active Xcode toolchain.",
+            "compilerPath": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++",
+            "compilerArgs": [
+                "-std=c++17",
+                "-isysroot",
+                "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+            ],
+            "includePath": [
+                "${workspaceFolder}/macos/src",
+                "${workspaceFolder}/macos/src/core",
+                "${workspaceFolder}/../notepad-plus-plus-macos/src",
+                "${workspaceFolder}/../notepad-plus-plus-macos/scintilla/include"
+            ],
+            "defines": [
+                "HexEditor_EXPORTS",
+                "NDEBUG"
+            ],
+            "macFrameworkPath": [
+                "/System/Library/Frameworks",
+                "/Library/Frameworks"
+            ],
             "intelliSenseMode": "macos-clang-arm64",
             "cStandard": "c17",
             "cppStandard": "c++17"
