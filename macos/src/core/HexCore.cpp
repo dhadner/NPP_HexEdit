@@ -408,15 +408,203 @@ std::string formatHexClipboardText(const std::uint8_t *bytes, std::size_t count)
     return out;
 }
 
+// Strip the address column + trailing ASCII column from one line of a hex dump.
+// See HexCore.h for the supported tool output formats. Pure transformation: returns
+// the line with non-byte content removed; never reports failure.
+std::string stripHexDumpAddressAndAscii(const std::string &line)
+{
+    std::string s = line;
+
+    // Strip trailing carriage return so "DE AD\r" → "DE AD" (CRLF tolerance handled
+    // here so the caller's per-line loop can split on '\n' alone).
+    if (!s.empty() && s.back() == '\r') {
+        s.pop_back();
+    }
+
+    // 1. Detect + strip leading address. The address pattern is:
+    //      [whitespace]* ( "0x" | "0X" )? [hex digits]+
+    //      ( ":" [hex digits]+ )?              <-- IDA segment:offset form
+    //      [whitespace]* ( ":" | "|" | ">" )   <-- the separator we strip through
+    //    OR
+    //      [hex digits >= 4] followed by 2+ whitespace then more hex bytes (xxd-ish).
+    //    A "hex digits" run of 1-2 chars by itself is a byte, NOT an address — the
+    //    address heuristic requires either a clear separator or an unusually long
+    //    hex run (4+ chars) followed by whitespace.
+    {
+        std::size_t i = 0;
+        while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+
+        const std::size_t addrStart = i;
+        if (i + 1 < s.size() && s[i] == '0' && (s[i + 1] == 'x' || s[i + 1] == 'X')) {
+            i += 2;
+        }
+        std::size_t hexRunStart = i;
+        while (i < s.size() && hexDigitValue(static_cast<unsigned char>(s[i])) >= 0) ++i;
+        const std::size_t hexRunLen = i - hexRunStart;
+
+        bool stripped = false;
+        if (hexRunLen > 0) {
+            // IDA segment:offset form: "0001:0000  48 65 ..." — the first ':' after
+            // the leading hex run is part of the address, not a separator. Skip it
+            // and the following hex run.
+            std::size_t scan = i;
+            if (scan < s.size() && s[scan] == ':') {
+                std::size_t after = scan + 1;
+                std::size_t segHexStart = after;
+                while (after < s.size() && hexDigitValue(static_cast<unsigned char>(s[after])) >= 0) ++after;
+                if (after - segHexStart > 0) {
+                    scan = after;
+                }
+            }
+            // Skip whitespace after the address run(s).
+            std::size_t wsStart = scan;
+            while (scan < s.size() && std::isspace(static_cast<unsigned char>(s[scan]))) ++scan;
+            const std::size_t wsLen = scan - wsStart;
+
+            // Recognised separators after the address.
+            if (scan < s.size() && (s[scan] == ':' || s[scan] == '|' || s[scan] == '>')) {
+                ++scan;
+                stripped = true;
+            } else if (hexRunLen >= 4 && wsLen >= 1 && scan < s.size()) {
+                // Address run was 4+ chars with whitespace afterwards — likely an
+                // address even without an explicit separator. Only strip if what
+                // follows looks like more hex bytes (so we don't over-eagerly
+                // strip "DEADBEEF cafebabe" as "address: data").
+                std::size_t peek = scan;
+                std::size_t peekHexLen = 0;
+                while (peek < s.size() && hexDigitValue(static_cast<unsigned char>(s[peek])) >= 0) {
+                    ++peekHexLen;
+                    ++peek;
+                }
+                if (peekHexLen >= 1 && peekHexLen <= 2) {
+                    stripped = true;
+                }
+            }
+            if (stripped) {
+                s = s.substr(scan);
+            } else {
+                // Not an address line — restore the leading whitespace we walked past.
+                (void)addrStart;
+            }
+        }
+    }
+
+    // 2. Strip trailing ASCII column. Walk past each 2+ whitespace gap and look
+    //    at the FIRST token after the gap — if it's a valid 1-2 char hex byte
+    //    (optionally "0x" / "\x" prefixed), keep scanning for the next gap; if
+    //    it's anything else (longer hex run, contains non-hex chars, etc.),
+    //    that's the ASCII column. The lldb format has an inner 2-space gap
+    //    between bytes 7 and 8 followed by a real byte and a separate 2-space
+    //    gap before the ASCII gloss, so a tail-as-a-whole heuristic mis-fires;
+    //    per-gap-then-per-token is the right shape.
+    auto isSeparator = [](char c) -> bool {
+        return std::isspace(static_cast<unsigned char>(c)) ||
+               c == ',' || c == ';' || c == ':' ||
+               c == '-' || c == '_';
+    };
+    {
+        std::size_t i = 0;
+        while (i + 1 < s.size()) {
+            if (!(std::isspace(static_cast<unsigned char>(s[i])) &&
+                  std::isspace(static_cast<unsigned char>(s[i + 1])))) {
+                ++i;
+                continue;
+            }
+            // 2+ whitespace gap detected. Skip past it.
+            std::size_t j = i + 2;
+            while (j < s.size() && std::isspace(static_cast<unsigned char>(s[j]))) ++j;
+            if (j >= s.size()) break;  // trailing whitespace only
+
+            // Inspect the first token after the gap. Skip "0x" / "0X" prefix
+            // (gdb-style per-byte) and "\x" / "\X" prefix (C-string escapes).
+            std::size_t k = j;
+            if (k + 1 < s.size() && s[k] == '0' && (s[k + 1] == 'x' || s[k + 1] == 'X')) {
+                k += 2;
+            } else if (k + 1 < s.size() && s[k] == '\\' && (s[k + 1] == 'x' || s[k + 1] == 'X')) {
+                k += 2;
+            }
+            std::size_t hexLen = 0;
+            while (k < s.size() && hexDigitValue(static_cast<unsigned char>(s[k])) >= 0) {
+                ++hexLen;
+                ++k;
+            }
+            const bool tokenEndsCleanly = (k == s.size() || isSeparator(s[k]));
+            const bool isByteToken = hexLen >= 1 && hexLen <= 2 && tokenEndsCleanly;
+            if (!isByteToken) {
+                s.resize(i);
+                break;
+            }
+            // Token IS a byte — keep scanning for the next gap, starting after the token.
+            i = k;
+        }
+    }
+
+    // 3. Replace "\x" / "\X" with whitespace so C-string escape sequences split into
+    //    tokens. Also handle braces / parens / brackets the same way so C array
+    //    literals like "{0x48, 0x65}" tokenise cleanly.
+    {
+        std::string out;
+        out.reserve(s.size());
+        for (std::size_t i = 0; i < s.size(); ++i) {
+            const char c = s[i];
+            if (c == '\\' && i + 1 < s.size() && (s[i + 1] == 'x' || s[i + 1] == 'X')) {
+                out.push_back(' ');
+                ++i;  // skip 'x'/'X' (loop ++i skips the backslash position)
+                continue;
+            }
+            if (c == '{' || c == '}' || c == '(' || c == ')' || c == '[' || c == ']') {
+                out.push_back(' ');
+                continue;
+            }
+            out.push_back(c);
+        }
+        s = std::move(out);
+    }
+
+    return s;
+}
+
+namespace {
+
+// Apply stripHexDumpAddressAndAscii to every '\n'-delimited line in `text` and
+// return the cleaned concatenation. Used by the linear + rectangular parsers to
+// normalise tool output before the byte-tokenising loop runs.
+std::string preprocessHexDumpText(const std::string &text)
+{
+    std::string out;
+    out.reserve(text.size());
+    std::size_t lineStart = 0;
+    for (std::size_t i = 0; i <= text.size(); ++i) {
+        if (i == text.size() || text[i] == '\n') {
+            const std::string line = text.substr(lineStart, i - lineStart);
+            out += stripHexDumpAddressAndAscii(line);
+            if (i < text.size()) {
+                out.push_back('\n');
+            }
+            lineStart = i + 1;
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
 bool parseHexClipboardText(const std::string &text, std::vector<std::uint8_t> &out)
 {
     out.clear();
 
+    // Pre-process to strip address columns + ASCII columns + C-style escapes from
+    // common debugger hex-dump formats (lldb, gdb, xxd, x64dbg, IDA, C arrays).
+    // The cleaned text contains only byte tokens + whitespace + separators which
+    // the loop below already handles. See stripHexDumpAddressAndAscii in the
+    // header for the recognised format catalogue.
+    const std::string cleaned = preprocessHexDumpText(text);
+
     int pendingDigit = -1;
     bool sawAnyDigit = false;
     std::size_t i = 0;
-    while (i < text.size()) {
-        unsigned char c = static_cast<unsigned char>(text[i]);
+    while (i < cleaned.size()) {
+        unsigned char c = static_cast<unsigned char>(cleaned[i]);
 
         if (std::isspace(c)) {
             if (pendingDigit >= 0) {
@@ -427,7 +615,7 @@ bool parseHexClipboardText(const std::string &text, std::vector<std::uint8_t> &o
             continue;
         }
 
-        if (c == '0' && i + 1 < text.size() && (text[i + 1] == 'x' || text[i + 1] == 'X')) {
+        if (c == '0' && i + 1 < cleaned.size() && (cleaned[i + 1] == 'x' || cleaned[i + 1] == 'X')) {
             i += 2;
             continue;
         }
@@ -1103,15 +1291,20 @@ bool parseRectClipboardText(const std::string &text,
         return false;
     }
 
-    // First pass: try to parse every line as hex. If any line fails, fall back to
-    // raw-bytes mode (each line treated as its own byte sequence — the user pasted
-    // plain ASCII, e.g. "abcd\nefgh", probably intending an ASCII rectangle).
+    // First pass: try to parse every line as hex. Each line is preprocessed
+    // through stripHexDumpAddressAndAscii first so debugger / xxd / x64dbg
+    // dumps with leading addresses + trailing ASCII columns parse cleanly
+    // into the bytes-only middle. If any line fails the hex parse, fall back
+    // to raw-bytes mode (each ORIGINAL line treated as its own byte sequence
+    // — the user pasted plain ASCII, e.g. "abcd\nefgh", probably intending
+    // an ASCII rectangle).
     std::vector<std::vector<std::uint8_t>> rows;
     rows.reserve(lines.size());
     bool allHex = true;
     for (const auto &line : lines) {
         std::vector<std::uint8_t> rowBytes;
-        if (!tryParseHexLine(line, rowBytes)) {
+        const std::string cleaned = stripHexDumpAddressAndAscii(line);
+        if (!tryParseHexLine(cleaned, rowBytes)) {
             allHex = false;
             break;
         }

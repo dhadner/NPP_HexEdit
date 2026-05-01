@@ -119,6 +119,32 @@ bool parseRectClipboardText(const std::string &text,
                             std::size_t &outWidth,
                             std::size_t &outHeight);
 
+// Strip the address column and trailing ASCII representation from a single line
+// of a hex dump, returning just the byte-data substring. Recognises patterns
+// emitted by common debuggers and hex tools:
+//   lldb   : "0x100000000: 48 65 6c 6c 6f 20 77 6f  Hello wo"
+//   gdb    : "0x7fff5fbff8c0: 0x48  0x65  0x6c  0x6c"
+//   xxd    : "00000000: 4865 6c6c 6f20 776f  Hello wo"
+//   x64dbg : "00007FF6BC471000 | 48 65 6C 6C 6F  Hello"
+//   IDA    : "0001:0000  48 65 6C 6C 6F 20 57 6F"
+//   C esc  : "\x48\x65\x6c\x6c"
+//   C arr  : "{ 0x48, 0x65, 0x6c, 0x6c }"
+//
+// The cleaning rules:
+//   * If the line opens with what looks like an address (4+ hex digits, optionally
+//     prefixed with "0x", possibly with a "0001:0000" segment+offset form) and is
+//     followed by a separator (":", "|", ">", or 2+ whitespace chars), strip
+//     everything up to and including the separator.
+//   * If the line contains 2+ consecutive whitespace chars and any non-hex / non-
+//     separator content follows them, strip from that gap to end of line — the
+//     trailing ASCII column.
+//   * Replace "\x" / "\X" with whitespace so C-string escapes split into tokens.
+//   * Replace braces/parens/brackets with whitespace so C array literals tokenise.
+//
+// Lines without an address pattern (e.g. plain "DE AD BE EF") pass through with
+// only the brace/escape transformations. Returns the cleaned line; never fails.
+std::string stripHexDumpAddressAndAscii(const std::string &line);
+
 // Wire-format constants for the custom-UTI pasteboard payload that carries a
 // rectangular selection between the plugin and itself across copy/paste. The
 // header is 20 bytes:

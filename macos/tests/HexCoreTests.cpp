@@ -1364,6 +1364,201 @@ void testRectPayloadCodecRoundTrip()
     }
 }
 
+void testStripHexDumpAddressAndAscii()
+{
+    g_currentSuite = "stripHexDumpAddressAndAscii";
+
+    // No-address bare bytes pass through unchanged (modulo \r trim + brace strip).
+    HEX_EXPECT(stripHexDumpAddressAndAscii("DE AD BE EF") == "DE AD BE EF");
+    HEX_EXPECT(stripHexDumpAddressAndAscii("DEADBEEF") == "DEADBEEF");
+
+    // CR trim — CRLF clipboards land here line-by-line.
+    HEX_EXPECT(stripHexDumpAddressAndAscii("DE AD\r") == "DE AD");
+
+    // lldb format: "0x100000000: 48 65 6c 6c 6f 20 77 6f  72 6c 64 21 0a 00 00 00  Hello world!...."
+    {
+        const std::string in = "0x100000000: 48 65 6c 6c 6f 20 77 6f  72 6c 64 21 0a 00 00 00  Hello world!....";
+        const std::string out = stripHexDumpAddressAndAscii(in);
+        // Address + ":" stripped; ASCII column after 2-space gap stripped.
+        HEX_EXPECT(out.find("Hello") == std::string::npos);
+        HEX_EXPECT(out.find("0x100000000") == std::string::npos);
+        // The 16 byte tokens should remain.
+        HEX_EXPECT(out.find("48 65") != std::string::npos);
+        HEX_EXPECT(out.find("00 00 00") != std::string::npos);
+    }
+
+    // gdb format: per-byte 0x prefixes, address + colon.
+    {
+        const std::string in = "0x7fff5fbff8c0: 0x48    0x65    0x6c    0x6c";
+        const std::string out = stripHexDumpAddressAndAscii(in);
+        HEX_EXPECT(out.find("0x7fff5fbff8c0") == std::string::npos);
+        // Per-byte 0x prefixes are NOT stripped here — the byte parser handles them.
+        HEX_EXPECT(out.find("0x48") != std::string::npos);
+    }
+
+    // x64dbg format: address, pipe separator, bytes, ASCII gloss.
+    {
+        const std::string in = "00007FF6BC471000 | 48 65 6C 6C 6F 20 57 6F  Hello Wo";
+        const std::string out = stripHexDumpAddressAndAscii(in);
+        HEX_EXPECT(out.find("00007FF6BC471000") == std::string::npos);
+        HEX_EXPECT(out.find("Hello") == std::string::npos);
+        HEX_EXPECT(out.find("48 65") != std::string::npos);
+    }
+
+    // xxd format: address with concatenated hex bytes + ASCII gloss after 2 spaces.
+    {
+        const std::string in = "00000000: 4865 6c6c 6f20 776f  Hello wo";
+        const std::string out = stripHexDumpAddressAndAscii(in);
+        HEX_EXPECT(out.find("00000000:") == std::string::npos);
+        HEX_EXPECT(out.find("Hello wo") == std::string::npos);
+        HEX_EXPECT(out.find("4865") != std::string::npos);
+    }
+
+    // IDA segment:offset form treated as part of address.
+    {
+        const std::string in = "0001:0000  48 65 6C 6C 6F";
+        const std::string out = stripHexDumpAddressAndAscii(in);
+        HEX_EXPECT(out.find("0001:0000") == std::string::npos);
+        HEX_EXPECT(out.find("48 65") != std::string::npos);
+    }
+
+    // C escape sequence: \x prefix becomes whitespace so tokens split.
+    {
+        const std::string out = stripHexDumpAddressAndAscii("\\x48\\x65\\x6c\\x6c");
+        HEX_EXPECT(out.find("\\") == std::string::npos);
+        HEX_EXPECT(out.find("48") != std::string::npos);
+        HEX_EXPECT(out.find("65") != std::string::npos);
+    }
+
+    // C array literal: braces and 0x prefixes preserved (parser handles 0x).
+    {
+        const std::string out = stripHexDumpAddressAndAscii("{ 0x48, 0x65, 0x6c, 0x6c }");
+        HEX_EXPECT(out.find('{') == std::string::npos);
+        HEX_EXPECT(out.find('}') == std::string::npos);
+        HEX_EXPECT(out.find("0x48") != std::string::npos);
+    }
+
+    // Negative case: lines that look hex-only must NOT be treated as having
+    // an address. "DEADBEEF cafebabe" is two 8-char tokens of bytes, not
+    // "DEADBEEF (addr) cafebabe (data)".
+    {
+        const std::string out = stripHexDumpAddressAndAscii("DEADBEEF cafebabe");
+        HEX_EXPECT(out.find("DEADBEEF") != std::string::npos);
+        HEX_EXPECT(out.find("cafebabe") != std::string::npos);
+    }
+}
+
+void testParseHexClipboardTextFromDebuggerOutput()
+{
+    g_currentSuite = "parseHexClipboardTextFromDebuggerOutput";
+
+    auto check = [&](const std::string &label, const std::string &input,
+                     const std::vector<std::uint8_t> &expected) {
+        std::vector<std::uint8_t> bytes;
+        const bool ok = parseHexClipboardText(input, bytes);
+        HEX_EXPECT(ok);
+        if (bytes != expected) {
+            std::fprintf(stderr, "FAIL [%s] %s: got %zu bytes, expected %zu\n",
+                         g_currentSuite, label.c_str(), bytes.size(), expected.size());
+            ++g_failures;
+        } else {
+            ++g_assertions;
+        }
+    };
+
+    // lldb single-line memory dump.
+    check("lldb",
+          "0x100000000: 48 65 6c 6c 6f 20 77 6f  72 6c 64 21 0a 00 00 00  Hello world!....",
+          {0x48,0x65,0x6c,0x6c,0x6f,0x20,0x77,0x6f,0x72,0x6c,0x64,0x21,0x0a,0x00,0x00,0x00});
+
+    // gdb single line, per-byte 0x prefix.
+    check("gdb",
+          "0x7fff5fbff8c0: 0x48    0x65    0x6c    0x6c",
+          {0x48,0x65,0x6c,0x6c});
+
+    // xxd single line, concatenated nibbles.
+    check("xxd",
+          "00000000: 4865 6c6c 6f20 776f  Hello wo",
+          {0x48,0x65,0x6c,0x6c,0x6f,0x20,0x77,0x6f});
+
+    // x64dbg single line, pipe separator, ASCII gloss.
+    check("x64dbg",
+          "00007FF6BC471000 | 48 65 6C 6C 6F 20 57 6F  Hello Wo",
+          {0x48,0x65,0x6C,0x6C,0x6F,0x20,0x57,0x6F});
+
+    // C escape sequence — the user copies a string literal from source code.
+    check("C escapes",
+          "\\x48\\x65\\x6c\\x6c\\x6f",
+          {0x48,0x65,0x6c,0x6c,0x6f});
+
+    // C array literal with braces, commas, 0x prefixes.
+    check("C array",
+          "{ 0x48, 0x65, 0x6c, 0x6c, 0x6f }",
+          {0x48,0x65,0x6c,0x6c,0x6f});
+
+    // Multi-line lldb dump (16 bytes per line, three lines).
+    check("multi-line lldb",
+          "0x100000000: 48 65 6c 6c 6f 20 77 6f  72 6c 64 21 0a 00 00 00  Hello world!....\n"
+          "0x100000010: 41 42 43 44 45 46 47 48  49 4a 4b 4c 4d 4e 4f 50  ABCDEFGHIJKLMNOP\n",
+          {0x48,0x65,0x6c,0x6c,0x6f,0x20,0x77,0x6f,0x72,0x6c,0x64,0x21,0x0a,0x00,0x00,0x00,
+           0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48,0x49,0x4a,0x4b,0x4c,0x4d,0x4e,0x4f,0x50});
+
+    // Negative: plain text must still fail the hex parse so the linear paste
+    // path falls through to UTF-8 bytes.
+    {
+        std::vector<std::uint8_t> bytes;
+        HEX_EXPECT(!parseHexClipboardText("Hello world", bytes));
+    }
+}
+
+void testParseRectClipboardTextFromDebuggerOutput()
+{
+    g_currentSuite = "parseRectClipboardTextFromDebuggerOutput";
+
+    // 2-line lldb dump → rect of 16 bytes wide × 2 rows tall.
+    {
+        const std::string in =
+            "0x100000000: 48 65 6c 6c 6f 20 77 6f  72 6c 64 21 0a 00 00 00  Hello world!....\n"
+            "0x100000010: 41 42 43 44 45 46 47 48  49 4a 4b 4c 4d 4e 4f 50  ABCDEFGHIJKLMNOP\n";
+        std::vector<std::uint8_t> bytes;
+        std::size_t w = 0, h = 0;
+        HEX_EXPECT(parseRectClipboardText(in, bytes, w, h));
+        HEX_EXPECT_EQ(w, static_cast<std::size_t>(16));
+        HEX_EXPECT_EQ(h, static_cast<std::size_t>(2));
+        HEX_EXPECT_EQ(bytes.size(), static_cast<std::size_t>(32));
+        HEX_EXPECT_EQ(bytes[0], static_cast<std::uint8_t>(0x48));
+        HEX_EXPECT_EQ(bytes[16], static_cast<std::uint8_t>(0x41));
+        HEX_EXPECT_EQ(bytes[31], static_cast<std::uint8_t>(0x50));
+    }
+
+    // 3-line x64dbg dump → 8×3 rect.
+    {
+        const std::string in =
+            "00007FF6BC471000 | 48 65 6C 6C 6F 20 57 6F  Hello Wo\n"
+            "00007FF6BC471008 | 72 6C 64 21 00 00 00 00  rld!....\n"
+            "00007FF6BC471010 | DE AD BE EF CA FE BA BE  ........\n";
+        std::vector<std::uint8_t> bytes;
+        std::size_t w = 0, h = 0;
+        HEX_EXPECT(parseRectClipboardText(in, bytes, w, h));
+        HEX_EXPECT_EQ(w, static_cast<std::size_t>(8));
+        HEX_EXPECT_EQ(h, static_cast<std::size_t>(3));
+        HEX_EXPECT_EQ(bytes[0], static_cast<std::uint8_t>(0x48));
+        HEX_EXPECT_EQ(bytes[8], static_cast<std::uint8_t>(0x72));
+        HEX_EXPECT_EQ(bytes[16], static_cast<std::uint8_t>(0xDE));
+        HEX_EXPECT_EQ(bytes[23], static_cast<std::uint8_t>(0xBE));
+    }
+
+    // Mismatched per-line byte counts → reject (unchanged behavior).
+    {
+        const std::string in =
+            "0x100: 48 65 6c 6c\n"
+            "0x110: 48 65\n";
+        std::vector<std::uint8_t> bytes;
+        std::size_t w = 0, h = 0;
+        HEX_EXPECT(!parseRectClipboardText(in, bytes, w, h));
+    }
+}
+
 void testDecodeRectPayloadRejectsAttacks()
 {
     g_currentSuite = "decodeRectPayloadRejectsAttacks";
@@ -1462,9 +1657,12 @@ int main()
     testParseRectClipboardText();
     testRectPayloadCodecRoundTrip();
     testDecodeRectPayloadRejectsAttacks();
+    testStripHexDumpAddressAndAscii();
+    testParseHexClipboardTextFromDebuggerOutput();
+    testParseRectClipboardTextFromDebuggerOutput();
 
     if (g_failures == 0) {
-        std::printf("PASS: %d assertions across 32 suites\n", g_assertions);
+        std::printf("PASS: %d assertions across 35 suites\n", g_assertions);
         return 0;
     }
     std::printf("FAIL: %d/%d assertions failed\n", g_failures, g_assertions);

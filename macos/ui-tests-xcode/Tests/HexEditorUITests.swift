@@ -1781,6 +1781,115 @@ func testContextMenuCommands() throws {
         XCTAssertTrue(true, "Pasteboard attack '\(label)' did not crash the host or modify the buffer.")
     }
 
+    // MARK: - Cross-app paste from external hex tools (v1.1.1+)
+    //
+    // Verifies that text on the system pasteboard formatted by common
+    // debuggers / hex viewers (lldb, gdb, xxd, x64dbg, IDA, C-string escapes,
+    // C array literals) parses correctly when pasted into the hex view.
+    // The full format catalogue is unit-tested in HexCore — these UI tests
+    // are the in-suite end-to-end check that the clipboard plumbing applies
+    // the preprocessor on the real Edit > Paste path.
+
+    func testCrossAppPaste_LldbMemoryDumpLineSurvivesAddressAndAsciiStripping() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // Seed with a buffer that's larger than what we'll paste, so we can
+        // verify the paste OVERWROTE only the first 16 bytes and left the rest
+        // untouched.
+        try createBufferWithText(app: app, text: "0123456789abcdef0123456789abcdef")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        try positionHexCursorAtZero(app: app, hexTable: hexTable)
+
+        // Realistic lldb `memory read` output — leading address, the split
+        // 2-space gap between bytes 7 and 8, trailing ASCII gloss.
+        let lldbDump = "0x100000000: 48 65 6c 6c 6f 20 77 6f  72 6c 64 21 0a 00 00 00  Hello world!...."
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(lldbDump, forType: .string)
+
+        invokeEditMenuItem(app: app, item: "Paste")
+        Thread.sleep(forTimeInterval: 0.3)
+
+        // First row should now show the 16 lldb bytes: 48 65 6c 6c 6f 20 77 6f
+        // followed by 72 6c 64 21 0a 00 00 00. NOT the address bytes 0x10, 0x00,
+        // 0x00, 0x00, ... that the pre-fix parser would have spuriously included.
+        let row0 = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(row0.waitForExistence(timeout: 5))
+        wait(for: [
+            expectation(for: NSPredicate(format: "value == %@", "48"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: cellIndex(forByte: 0)),
+                        handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "6f"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: cellIndex(forByte: 4)),
+                        handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "72"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: cellIndex(forByte: 8)),
+                        handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "00"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: cellIndex(forByte: 15)),
+                        handler: nil),
+        ], timeout: 5)
+
+        // Undo so terminate doesn't surface a save-changes prompt.
+        app.typeKey("z", modifierFlags: .command)
+        _ = waitForStatus(in: app, contains: "32 bytes", timeout: 3)
+    }
+
+    func testCrossAppPaste_RectangularFromMultiLineXxdDump() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "ABCDEFGHIJKLMNOPabcdefghijklmnop")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        try positionHexCursorAtZero(app: app, hexTable: hexTable)
+
+        // Build a 4×2 destination rect at offset 0 to receive the paste.
+        extendRectViaKeyboard(app: app, addCols: 3, addRows: 1)
+        let rect = HexCursorState.read(from: app)
+        XCTAssertEqual(rect?.rectWidth, 4)
+        XCTAssertEqual(rect?.rectHeight, 2)
+
+        // Two-line xxd-format dump — addresses + concatenated nibble pairs +
+        // ASCII gloss. Each cleaned line yields exactly 4 bytes so the rect
+        // shape match passes (4×2 dest = 4×2 source).
+        let xxdDump =
+            "00000000: dead beef  ....\n" +
+            "00000010: cafe babe  ....\n"
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(xxdDump, forType: .string)
+
+        invokeEditMenuItem(app: app, item: "Paste")
+        Thread.sleep(forTimeInterval: 0.5)
+
+        // Row 0 cols 0..3 should now be DE AD BE EF; row 1 cols 0..3 = CA FE BA BE.
+        let row0 = hexTable.tableRows.element(boundBy: 0)
+        let row1 = hexTable.tableRows.element(boundBy: 1)
+        wait(for: [
+            expectation(for: NSPredicate(format: "value == %@", "de"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: cellIndex(forByte: 0)),
+                        handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "ef"),
+                        evaluatedWith: row0.staticTexts.element(boundBy: cellIndex(forByte: 3)),
+                        handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "ca"),
+                        evaluatedWith: row1.staticTexts.element(boundBy: cellIndex(forByte: 0)),
+                        handler: nil),
+            expectation(for: NSPredicate(format: "value == %@", "be"),
+                        evaluatedWith: row1.staticTexts.element(boundBy: cellIndex(forByte: 3)),
+                        handler: nil),
+        ], timeout: 5)
+    }
+
     func testPasteboardAttack_TruncatedHeader() throws {
         // 5 bytes — well below kRectPayloadHeaderSize (20). decodeRectPayload
         // must reject before reading any of the multi-byte header fields.
