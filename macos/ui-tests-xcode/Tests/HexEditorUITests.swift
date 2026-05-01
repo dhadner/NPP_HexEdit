@@ -6,6 +6,62 @@ private enum AXID {
     static let root = "hex-editor.root"
     static let table = "hex-editor.table"
     static let status = "hex-editor.status"
+    static let cursor = "hex-editor.cursor.diagnostic"
+}
+
+/// Snapshot of the hex view's caret + selection state, parsed from the AX value
+/// of the diagnostic element. Format contract is owned by HexCursorDiagnosticView
+/// in HexEditor.mm: "offset=<size_t>;selStart=<size_t>;selEnd=<size_t>;hasSelection=<0|1>"
+private struct HexCursorState {
+    let offset: Int
+    let selStart: Int
+    let selEnd: Int
+    let hasSelection: Bool
+    /// Status-label frame height (points). Set when the diagnostic includes layout fields.
+    let statusFrameHeight: Double?
+    /// Minimum height the status-label font needs to render without clipping descenders.
+    let statusFontLineHeight: Double?
+    /// Raw values captureScintillaSelection() most recently observed from
+    /// Scintilla. -1 = sentinel ("not yet run"). Useful for diagnosing why a
+    /// selection-mirror assertion failed.
+    let sciSelStart: Int?
+    let sciSelEnd: Int?
+    let sciCaret: Int?
+
+    /// Compact dump of all fields for failure messages.
+    var debugDescription: String {
+        var s = "offset=\(offset);selStart=\(selStart);selEnd=\(selEnd);hasSelection=\(hasSelection)"
+        if let a = sciSelStart, let b = sciSelEnd, let c = sciCaret {
+            s += ";sciSelStart=\(a);sciSelEnd=\(b);sciCaret=\(c)"
+        }
+        return s
+    }
+
+    static func read(from app: XCUIApplication) -> HexCursorState? {
+        let element = app.descendants(matching: .any).matching(identifier: AXID.cursor).firstMatch
+        guard element.waitForExistence(timeout: 3) else { return nil }
+        guard let raw = element.value as? String else { return nil }
+        var fields: [String: String] = [:]
+        for piece in raw.split(separator: ";") {
+            let kv = piece.split(separator: "=", maxSplits: 1)
+            if kv.count == 2 { fields[String(kv[0])] = String(kv[1]) }
+        }
+        guard let offset = fields["offset"].flatMap({ Int($0) }),
+              let selStart = fields["selStart"].flatMap({ Int($0) }),
+              let selEnd = fields["selEnd"].flatMap({ Int($0) }),
+              let has = fields["hasSelection"].flatMap({ Int($0) }) else { return nil }
+        return HexCursorState(
+            offset: offset,
+            selStart: selStart,
+            selEnd: selEnd,
+            hasSelection: has != 0,
+            statusFrameHeight: fields["statusH"].flatMap({ Double($0) }),
+            statusFontLineHeight: fields["statusFontH"].flatMap({ Double($0) }),
+            sciSelStart: fields["sciSelStart"].flatMap({ Int($0) }),
+            sciSelEnd: fields["sciSelEnd"].flatMap({ Int($0) }),
+            sciCaret: fields["sciCaret"].flatMap({ Int($0) })
+        )
+    }
 }
 
 private extension XCUIElement {
@@ -154,6 +210,11 @@ func testStatusLabelReportsByteCount() throws {
 
         let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
         XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        // Cursor preservation places the hex caret at end-of-paste (= EOF append slot).
+        // Cut/Copy/Delete are correctly disabled at EOF because there's no current byte.
+        // Reposition to byte 0 so we test the responder-chain routing (the test's actual
+        // intent), not edge-of-buffer caret semantics.
+        try positionHexCursorAtZero(app: app, hexTable: hexTable)
 
         let editMenu = app.menuBars.menuBarItems["Edit"]
         XCTAssertTrue(editMenu.waitForExistence(timeout: 5))
@@ -925,6 +986,9 @@ func testContextMenuCommands() throws {
 
         let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
         XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        // The hex view opens with the caret at end-of-paste (the new cursor-preservation
+        // behavior). This test exercises bit-editing on byte 0, so navigate there first.
+        try positionHexCursorAtZero(app: app, hexTable: hexTable)
 
         // Switch to binary notation via View in → to Binary
         hexTable.rightClick()
@@ -1089,9 +1153,266 @@ func testContextMenuCommands() throws {
                        "Invalid Address Width should be rejected and original 8-digit width preserved.")
     }
 
+    // MARK: - Initial open state
+    //
+    // These tests catch the class of regressions where the hex view opens with the
+    // wrong cursor or with row 0 hidden behind the column-header bar. The earlier
+    // suite asserted only on AX-tree existence (`tableRows.element(boundBy: 0)`),
+    // which passes whether row 0 is visible or clipped — and never observed the
+    // hex caret position because no AX surface exposed it. The diagnostic element
+    // (HexCursorDiagnosticView) plus visibility checks below close those gaps.
+
+    func testRow0HittableOnInitialOpen() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+        try createBufferWithText(app: app, text: "Hello, hex world! 0123ABCD")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 3))
+        // The actual visibility check — `waitForExistence` alone passes even when
+        // the row is fully clipped behind the header. `isHittable` is true only
+        // when the element's interactive area is on-screen and unobscured by other
+        // elements (such as the floating column-header bar).
+        XCTAssertTrue(firstRow.isHittable,
+                      "Row 0 must be fully visible on initial open, not clipped behind the column-header bar.")
+        // Stronger guard: row 0 must extend at least its full height vertically.
+        // A "sliver" row (top hidden behind the header, only a few pixels visible)
+        // would have a frame.height much smaller than the row height.
+        XCTAssertGreaterThan(firstRow.frame.height, 10,
+                             "Row 0 frame height \(firstRow.frame.height) is too small — row is being clipped.")
+    }
+
+    func testHexCursorMatchesScintillaCaretAfterPaste() throws {
+        // After createBufferWithText pastes via Edit > Paste, Scintilla's caret
+        // sits at the end of the pasted text. Opening the hex view must mirror
+        // that caret position into activeByteOffset (no selection state).
+        let text = "ABCDEFGHIJKLMNOP"   // 16 bytes
+        let app = try launchNotepad()
+        defer { app.terminate() }
+        try createBufferWithText(app: app, text: text)
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        let cursor = HexCursorState.read(from: app)
+        XCTAssertNotNil(cursor, "Cursor diagnostic AX element should be present after the hex view opens.")
+        XCTAssertEqual(cursor?.offset, text.count,
+                       "Hex cursor must land at the Scintilla caret offset (\(text.count)), got \(cursor?.offset ?? -1).")
+        XCTAssertFalse(cursor?.hasSelection ?? true,
+                       "No Scintilla selection ⇒ no hex selection.")
+    }
+
+    func testHexSelectionMirrorsScintillaSelectAll() throws {
+        // Paste, then Cmd+A to select the whole buffer in Scintilla. The hex view
+        // must mirror selStart=0, selEnd=length, and place the caret at the end.
+        let text = "0123456789ABCDEFGHIJ"   // 20 bytes
+        let app = try launchNotepad()
+        defer { app.terminate() }
+        try createBufferWithText(app: app, text: text)
+
+        // After Edit > Paste, keyboard focus is on the SplitGroup, not Scintilla
+        // itself, so Cmd+A and Edit > Select All silently no-op against the source
+        // text. Explicitly click Scintilla to make it first responder; then both
+        // keyboard and menu actions route to it. Verified by inspecting the AX
+        // hierarchy + the diagnostic AX (sciSelStart/End match expected after
+        // this click; before it, Scintilla's state never changed).
+        try focusScintilla(in: app)
+
+        // Cmd+A now reaches Scintilla because it's the first responder.
+        app.typeKey("a", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        let cursor = HexCursorState.read(from: app)
+        XCTAssertNotNil(cursor)
+        let diag = cursor?.debugDescription ?? "(no diagnostic)"
+        XCTAssertTrue(cursor?.hasSelection ?? false,
+                      "Scintilla had a selection; hex view should mirror it. Diagnostic: \(diag)")
+        XCTAssertEqual(cursor?.selStart, 0, "Selection should start at 0. Diagnostic: \(diag)")
+        XCTAssertEqual(cursor?.selEnd, text.count, "Selection should end at \(text.count). Diagnostic: \(diag)")
+        XCTAssertEqual(cursor?.offset, text.count, "Hex caret should land at end of selection. Diagnostic: \(diag)")
+    }
+
+    func testStatusLabelGlyphsNotClipped() throws {
+        // The status row above the column headers reports buffer size. Earlier the
+        // label's frame height was hardcoded at 16pt while the font's line-height
+        // could exceed that, so descender glyphs ('y' in "Showing N bytes.") got
+        // clipped at the bottom. The layout now sizes the label from the font's
+        // ascender+descender extent; this test guards against future regressions
+        // by asserting the label's rendered frame is at least as tall as the font
+        // it must display.
+        let app = try launchNotepad()
+        defer { app.terminate() }
+        try createBufferWithText(app: app, text: "Hello, hex world!")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        let state = HexCursorState.read(from: app)
+        XCTAssertNotNil(state)
+        let frameH = state?.statusFrameHeight ?? 0
+        let fontH = state?.statusFontLineHeight ?? .infinity
+        XCTAssertGreaterThanOrEqual(frameH, fontH,
+            "Status label frame (\(frameH)pt) must be at least as tall as its font's line-height (\(fontH)pt) so descenders don't clip.")
+    }
+
+    func testCanReachRow0AfterDeepCursorOpen() throws {
+        // Paste a buffer big enough that the Scintilla caret (which lands at end
+        // of paste) puts the hex view's initial scroll deep into the file. Then
+        // navigate back to offset 0 via Cmd+L (Go to Offset) and assert row 0 is
+        // reachable. This catches the "scrollable range excludes row 0" class of
+        // regression that survived earlier suites because no test ever opened
+        // far-down then asked for row 0.
+        let longText = String(repeating: "0123456789ABCDEF", count: 64)   // 1024 bytes
+        let app = try launchNotepad()
+        defer { app.terminate() }
+        try createBufferWithText(app: app, text: longText)
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        // Initial state: caret deep, row 0 likely off-screen (not hittable).
+        let initialCursor = HexCursorState.read(from: app)
+        XCTAssertEqual(initialCursor?.offset, longText.count,
+                       "Initial hex caret should match Scintilla caret (end of paste, \(longText.count)).")
+
+        // Navigate to offset 0 via right-click → Go to Offset… (matches the
+        // pattern used by other goto-bearing tests in this suite).
+        hexTable.rightClick()
+        let gotoItem = app.menuItems["Go to Offset…"]
+        XCTAssertTrue(gotoItem.waitForExistence(timeout: 3))
+        gotoItem.click()
+        let gotoInput = app.textFields["hex-editor.goto.input"]
+        XCTAssertTrue(gotoInput.waitForExistence(timeout: 5),
+                      "Go to Offset input should appear after invoking the menu item.")
+        gotoInput.replaceFieldText(with: "0")
+        let goButton = app.buttons["Go"].firstMatch
+        XCTAssertTrue(goButton.waitForExistence(timeout: 3))
+        goButton.click()
+        XCTAssertTrue(gotoInput.waitForNonExistence(timeout: 5),
+                      "Goto dialog should dismiss after clicking Go.")
+
+        // Now row 0 must be visible and hittable.
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 3))
+        XCTAssertTrue(firstRow.isHittable,
+                      "After navigating to offset 0, row 0 must be visible and hittable.")
+        let postCursor = HexCursorState.read(from: app)
+        XCTAssertEqual(postCursor?.offset, 0,
+                       "After Cmd+L → 0, the hex caret should be at offset 0.")
+    }
+
+    // MARK: - Localization cascade
+    //
+    // Drive the runtime localization chain by force-launching the host with
+    // -AppleLanguages '(<tag>)' and asserting the About dialog's diagnostic line
+    // ("about.localeTag" key) shows the file we expect was loaded. Each shipped
+    // .strings file declares its own tag, so:
+    //   - en        → "Strings: en"                (canonical en.strings)
+    //   - en-GB     → "Strings: en-GB"             (regional override layer 1)
+    //   - en-US     → "Strings: en-US"             (regional override layer 1)
+    //   - de        → "Strings: de"                (full German translation)
+    //   - fr (etc.) → "Strings: (embedded)"        (no shipped file → defaults)
+    //
+    // For en-GB / en-US, only the localeTag is overridden — every other key
+    // cascades to en.strings, which we verify by also checking that the body
+    // text is the English about.body rather than something else.
+
+    func testLocalizationCascadeDefaultEnglish() throws {
+        let app = try launchNotepad(language: "en")
+        defer { app.terminate() }
+        try assertAboutDialog(app: app, helpItem: "Help...",
+                              expectedTag: "Strings: en",
+                              expectedBodyContains: "Native macOS port")
+    }
+
+    func testLocalizationCascadeBritishEnglish() throws {
+        let app = try launchNotepad(language: "en-GB")
+        defer { app.terminate() }
+        // en-GB only overrides the locale tag; body cascades to en.strings.
+        try assertAboutDialog(app: app, helpItem: "Help...",
+                              expectedTag: "Strings: en-GB",
+                              expectedBodyContains: "Native macOS port")
+    }
+
+    func testLocalizationCascadeAmericanEnglish() throws {
+        let app = try launchNotepad(language: "en-US")
+        defer { app.terminate() }
+        // en-US only overrides the locale tag; body cascades to en.strings.
+        try assertAboutDialog(app: app, helpItem: "Help...",
+                              expectedTag: "Strings: en-US",
+                              expectedBodyContains: "Native macOS port")
+    }
+
+    func testLocalizationCascadeGerman() throws {
+        let app = try launchNotepad(language: "de")
+        defer { app.terminate() }
+        // German is a full translation, so the leaf menu item is "Hilfe..." and
+        // the body text is the German about.body.
+        try assertAboutDialog(app: app, helpItem: "Hilfe...",
+                              expectedTag: "Strings: de",
+                              expectedBodyContains: "Native macOS-Portierung")
+    }
+
+    func testLocalizationCascadeUnsupportedFallsBackToEmbedded() throws {
+        // "fr" is unsupported — no Localizable.fr.strings ships. The cascade
+        // chain ends up empty, L() falls through to the embedded English
+        // defaults table, and the diagnostic tag is "Strings: (embedded)".
+        let app = try launchNotepad(language: "fr")
+        defer { app.terminate() }
+        try assertAboutDialog(app: app, helpItem: "Help...",
+                              expectedTag: "Strings: (embedded)",
+                              expectedBodyContains: "Native macOS port")
+    }
+
+    private func assertAboutDialog(app: XCUIApplication,
+                                   helpItem: String,
+                                   expectedTag: String,
+                                   expectedBodyContains: String,
+                                   file: StaticString = #file,
+                                   line: UInt = #line) throws {
+        try invokeHexEditorMenu(app: app, item: helpItem)
+
+        let aboutDialog = app.dialogs.firstMatch
+        XCTAssertTrue(aboutDialog.waitForExistence(timeout: 5),
+                      "About dialog should appear after Help.", file: file, line: line)
+
+        // The dialog body is delivered as one informativeText combining about.body
+        // and about.localeTag separated by a blank line. Match against either
+        // staticText `value` or `label` since NSAlert exposes the text via both.
+        let tagPredicate = NSPredicate(format: "value CONTAINS %@ OR label CONTAINS %@",
+                                       expectedTag, expectedTag)
+        XCTAssertTrue(aboutDialog.staticTexts.element(matching: tagPredicate).exists,
+                      "About dialog should display \(expectedTag).",
+                      file: file, line: line)
+
+        let bodyPredicate = NSPredicate(format: "value CONTAINS %@ OR label CONTAINS %@",
+                                        expectedBodyContains, expectedBodyContains)
+        XCTAssertTrue(aboutDialog.staticTexts.element(matching: bodyPredicate).exists,
+                      "About dialog should contain '\(expectedBodyContains)'.",
+                      file: file, line: line)
+
+        // Dismiss — OK label is localized; under German it's still "OK" (the
+        // string file matches the macOS convention).
+        let okButton = aboutDialog.buttons["OK"].firstMatch
+        XCTAssertTrue(okButton.waitForExistence(timeout: 3),
+                      "About dialog should have an OK button.", file: file, line: line)
+        okButton.click()
+    }
+
     // MARK: - Helpers
 
-    private func launchNotepad(extraArguments: [String] = []) throws -> XCUIApplication {
+    private func launchNotepad(language: String = "en", extraArguments: [String] = []) throws -> XCUIApplication {
         let app = XCUIApplication(url: try notepadAppURL())
         // -nosession suppresses session restore so each test starts with a single empty,
         // focused buffer.
@@ -1099,13 +1420,57 @@ func testContextMenuCommands() throws {
         //   ~/Library/Preferences/org.notepad-plus-plus.HexEditor.plist before loading,
         //   so each test sees defaults. The runner cannot delete that plist itself —
         //   sandboxed UserDefaults(suiteName:) writes redirect to the runner container.
-        // -AppleLanguages forces the host (and the in-process plugin) into English so the
-        // tests' string assertions stay valid no matter what locale the dev machine is set
-        // to. The plugin's runtime localization respects this.
-        app.launchArguments = ["-nosession", "--reset-hex-prefs", "-AppleLanguages", "(en)"] + extraArguments
+        app.launchArguments = ["-nosession", "--reset-hex-prefs"] + extraArguments
+        // Drive the plugin's localization cascade via a plugin-only env var
+        // instead of -AppleLanguages or `defaults write`. The argv form pollutes
+        // NPP Mac's positional file-opener (it tries to open `(de)` as a file
+        // and fails to create an empty buffer). The persistent-prefs path is
+        // silently sandbox-redirected when invoked from the XCUI runner — the
+        // write goes to the runner's container, not the user defaults NPP Mac
+        // reads. The env var path bypasses both: the plugin checks
+        // HEX_EDITOR_LANG_OVERRIDE first in hexUserPreferredLanguages().
+        app.launchEnvironment = ["HEX_EDITOR_LANG_OVERRIDE": language]
         app.launch()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "Notepad++ macOS did not launch.")
         return app
+    }
+
+    /// Positions the hex view's caret at byte 0 by invoking Go to Offset → 0.
+    /// Scintilla doesn't reliably receive synthetic key events from XCUITest
+    /// (paste-via-Edit-menu works; typeKey to Scintilla does not), so we cannot
+    /// reset Scintilla's caret from the test runner. Instead, we open the hex
+    /// view (which mirrors Scintilla's caret — typically at end-of-paste) and
+    /// then navigate to byte 0 via the hex view's own Go to Offset dialog.
+    /// HexTableView.performKeyEquivalent: intercepts Cmd+L so this works even
+    /// though typeKey-to-Scintilla doesn't.
+    /// Brings Scintilla to first-responder status. After menu-driven actions
+    /// (Edit > Paste), the macOS focus lands on the enclosing SplitGroup rather
+    /// than the Scintilla TextView itself. Subsequent keyboard / Edit menu
+    /// actions that should target Scintilla (Cmd+A, Cmd+Z, Select All, etc.)
+    /// silently no-op until something gives Scintilla focus. Clicking the
+    /// Scintilla view fixes that. Required before any keyboard input or
+    /// selectAll: action that needs to affect the source buffer.
+    private func focusScintilla(in app: XCUIApplication) throws {
+        let scintilla = app.descendants(matching: .textView).matching(identifier: "Scintilla").firstMatch
+        XCTAssertTrue(scintilla.waitForExistence(timeout: 5),
+                      "Scintilla TextView should be present in the AX hierarchy.")
+        scintilla.click()
+        Thread.sleep(forTimeInterval: 0.3)
+    }
+
+    private func positionHexCursorAtZero(app: XCUIApplication, hexTable: XCUIElement) throws {
+        hexTable.rightClick()
+        let gotoItem = app.menuItems["Go to Offset…"]
+        XCTAssertTrue(gotoItem.waitForExistence(timeout: 3))
+        gotoItem.click()
+        let gotoInput = app.textFields["hex-editor.goto.input"]
+        XCTAssertTrue(gotoInput.waitForExistence(timeout: 3))
+        gotoInput.replaceFieldText(with: "0")
+        let goButton = app.buttons["Go"].firstMatch
+        XCTAssertTrue(goButton.waitForExistence(timeout: 3))
+        goButton.click()
+        XCTAssertTrue(gotoInput.waitForNonExistence(timeout: 5),
+                      "Go to Offset dialog should dismiss after clicking Go.")
     }
 
     private func createBufferWithText(app: XCUIApplication, text: String) throws {
