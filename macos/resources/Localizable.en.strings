@@ -173,11 +173,15 @@
 "table.header.offset"              = "Offset";
 "table.header.ascii"               = "ASCII";
 
+/* Help popovers (shared) */
+"help.button.axLabel"              = "Help";
+
 /* Options dialog (Plugins > HexEditor > Options...) */
 "options.title"                    = "HexEditor Options";
 "options.message"                  = "Plugin-wide preferences. Reset restores the defaults shown below; click Save to apply.";
-"options.button.save"              = "Save";
+"options.button.apply"             = "Apply";
 "options.button.reset"             = "Reset to Defaults";
 "options.rectModifier.label"       = "Modifier key for rectangular (block) selection drag:";
-"options.rectModifier.option"      = "Option (matches Scintilla / Windows hex editor)";
+"options.rectModifier.option"      = "Option (default; matches the Windows HexEditor plugin)";
 "options.rectModifier.shiftOption" = "Shift+Option (matches VS Code)";
+"options.rectModifier.help"        = "While dragging in the hex or ASCII pane, holding this modifier turns the drag into a rectangular (block) selection — the same kind of selection used by hex editors and column-mode text editors.\n\nOption is the default — it matches the Windows HexEditor plugin and the column-select convention on macOS. Pick Shift+Option if your muscle memory comes from Visual Studio Code.";

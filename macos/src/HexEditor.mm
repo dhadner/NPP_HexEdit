@@ -354,14 +354,18 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"table.header.offset":              @"Offset",
             @"table.header.ascii":               @"ASCII",
 
+            // Help popovers (shared)
+            @"help.button.axLabel":              @"Help",
+
             // Options dialog
             @"options.title":                    @"HexEditor Options",
             @"options.message":                  @"Plugin-wide preferences. Reset restores the defaults shown below; click Save to apply.",
-            @"options.button.save":              @"Save",
+            @"options.button.apply":             @"Apply",
             @"options.button.reset":             @"Reset to Defaults",
             @"options.rectModifier.label":       @"Modifier key for rectangular (block) selection drag:",
-            @"options.rectModifier.option":      @"Option (matches Scintilla / Windows hex editor)",
+            @"options.rectModifier.option":      @"Option (default; matches the Windows HexEditor plugin)",
             @"options.rectModifier.shiftOption": @"Shift+Option (matches VS Code)",
+            @"options.rectModifier.help":        @"While dragging in the hex or ASCII pane, holding this modifier turns the drag into a rectangular (block) selection — the same kind of selection used by hex editors and column-mode text editors.\n\nOption is the default — it matches the Windows HexEditor plugin and the column-select convention on macOS. Pick Shift+Option if your muscle memory comes from Visual Studio Code.",
         };
     });
     return defaults;
@@ -973,7 +977,7 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
         return [NSString stringWithUTF8String:ascii.c_str()];
     }
 
-    if ([identifier isEqualToString:@"spacer"]) {
+    if ([identifier isEqualToString:@"offsetSpacer"] || [identifier isEqualToString:@"spacer"]) {
         return @"";
     }
 
@@ -2049,9 +2053,10 @@ static CGFloat widestHexHeaderWidth()
     return maxWidth;
 }
 
-// Trailing whitespace inside the offset column so the address pane visually
-// separates from the first hex byte. Glyph-width-relative so the gap stays
-// proportional under pinch-zoom.
+// Width of the spacer column between the address pane and the first hex byte.
+// A real column (rather than padding inside the offset column) gives the address
+// pane a visible frame-edge gap from the hex grid. Glyph-width-relative so the
+// gap stays proportional under pinch-zoom.
 static CGFloat offsetTrailingPadding(NSFont *font)
 {
     return ceil(monospacedGlyphWidth(font) * HEX_OFFSET_TRAILING_GLYPHS);
@@ -2068,8 +2073,7 @@ static CGFloat offsetColumnWidth(NSFont *font)
 {
     const int width = std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH);
     NSString *sample = [@"" stringByPaddingToLength:static_cast<NSUInteger>(width) withString:@"0" startingAtIndex:0];
-    const CGFloat content = std::max(paddedTextWidth(sample, font), headerCellNaturalWidth(L(@"table.header.offset")));
-    return content + offsetTrailingPadding(font);
+    return std::max(paddedTextWidth(sample, font), headerCellNaturalWidth(L(@"table.header.offset")));
 }
 
 static CGFloat cellColumnWidth(NSFont *font, const hexedit::ViewMode &mode)
@@ -2103,7 +2107,7 @@ static CGFloat tableContentWidth(NSFont *font)
 {
     const hexedit::ViewMode mode = currentViewMode();
     const int cells = std::max(currentCellsPerRow(), 1);
-    return offsetColumnWidth(font) + (static_cast<CGFloat>(cells) * cellColumnWidth(font, mode)) + asciiSeparatorWidth(font) + asciiColumnWidth(font);
+    return offsetColumnWidth(font) + offsetTrailingPadding(font) + (static_cast<CGFloat>(cells) * cellColumnWidth(font, mode)) + asciiSeparatorWidth(font) + asciiColumnWidth(font);
 }
 
 static CGFloat tableContainerWidth(NSFont *font)
@@ -4031,6 +4035,17 @@ static void presentPatternReplaceDialog()
     }
 }
 
+// NSTableView's cell-based AX traversal honors the legacy informal-protocol
+// method `accessibilityIsIgnored` (NSAccessibility), not the newer
+// setAccessibilityElement:. Override both for belt-and-suspenders coverage so
+// these spacer cells don't appear as indexable static texts in XCUI.
+@interface HexSpacerCell : NSTextFieldCell
+@end
+@implementation HexSpacerCell
+- (BOOL)accessibilityIsIgnored { return YES; }
+- (NSAccessibilityRole)accessibilityRole { return NSAccessibilityUnknownRole; }
+@end
+
 static void configureTableColumn(NSTableView *tableView, NSString *identifier, NSString *title, CGFloat width, NSFont *font)
 {
     NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:identifier];
@@ -4041,7 +4056,13 @@ static void configureTableColumn(NSTableView *tableView, NSString *identifier, N
 
     const NSTextAlignment alignment = [identifier hasPrefix:@"cell"] ? NSTextAlignmentCenter : NSTextAlignmentLeft;
 
-    NSTextFieldCell *cell = [[NSTextFieldCell alloc] init];
+    // Spacer columns ("offsetSpacer" between address and bytes, "spacer" between
+    // bytes and ASCII) are pure visual gutters with empty values. Use the
+    // AX-ignored cell subclass so they don't become indexable static texts —
+    // this keeps `row.staticTexts.element(boundBy:N)` mapped to byte N-1
+    // uniformly across the row, regardless of how many spacer columns we add.
+    const BOOL isSpacer = [identifier isEqualToString:@"offsetSpacer"] || [identifier isEqualToString:@"spacer"];
+    NSTextFieldCell *cell = isSpacer ? [[HexSpacerCell alloc] init] : [[NSTextFieldCell alloc] init];
     cell.font = font;
     cell.lineBreakMode = NSLineBreakByClipping;
     cell.alignment = alignment;
@@ -4049,9 +4070,37 @@ static void configureTableColumn(NSTableView *tableView, NSString *identifier, N
 
     // Match the header's alignment to the data cell's so the column index ("00", "01",
     // ...) sits visually centered above the centered byte values, and "Offset" / "ASCII"
-    // stay left-aligned over their left-aligned data. Default NSTableHeaderCell is
-    // always left-aligned, which looks unbalanced over the centered cell columns.
+    // stay left-aligned over their left-aligned data.
+    //
+    // We set alignment via TWO mechanisms because each plays a different role:
+    //
+    //   - `headerCell.alignment` — semantic property. Reported by the AX
+    //     diagnostic (`hdrAlignMatch`) and observable by anything that reads
+    //     the cell's intended alignment. NSTableHeaderCell *renders* the title
+    //     buggily when this property is non-left (clips to a horizontal sliver
+    //     of pixels that looks like "_"), but the property itself is fine to
+    //     set and read back.
+    //
+    //   - `headerCell.attributedStringValue` with NSParagraphStyle.alignment —
+    //     drives the actual draw. AppKit honors the paragraph attributes when
+    //     rendering attributed-string-based titles, bypassing the buggy
+    //     alignment-property code path. This is what produces the correctly
+    //     drawn centered "00" / "0f" headers.
+    //
+    // Setting only one fails: alignment-only renders as dashes; attributed-only
+    // leaves the cell's alignment property as the default left, breaking the
+    // hdrAlignMatch assertion.
     column.headerCell.alignment = alignment;
+    NSMutableParagraphStyle *headerParagraph = [[NSMutableParagraphStyle defaultParagraphStyle] mutableCopy];
+    headerParagraph.alignment = alignment;
+    headerParagraph.lineBreakMode = NSLineBreakByClipping;
+    NSFont *headerFont = column.headerCell.font ?: [NSFont systemFontOfSize:[NSFont smallSystemFontSize]];
+    column.headerCell.attributedStringValue = [[NSAttributedString alloc]
+        initWithString:title
+            attributes:@{
+                NSFontAttributeName: headerFont,
+                NSParagraphStyleAttributeName: headerParagraph,
+            }];
 
     [tableView addTableColumn:column];
 }
@@ -4063,6 +4112,12 @@ static void addHexCellColumns(NSTableView *table, NSFont *font)
     const CGFloat cellWidth = cellColumnWidth(font, mode);
 
     configureTableColumn(table, @"offset", L(@"table.header.offset"), offsetColumnWidth(font), font);
+    // Empty spacer column between offset and the first hex byte. Real column
+    // (not padding inside offset) so the visible gap is reflected in the AX
+    // frame geometry the spacing test asserts on. AX-hidden inside
+    // configureTableColumn so this column does not become an indexable
+    // staticTexts entry — keeps `boundBy:N = byte N-1` for tests.
+    configureTableColumn(table, @"offsetSpacer", @"", offsetTrailingPadding(font), font);
     for (int column = 0; column < cells; ++column) {
         const std::size_t firstByte = static_cast<std::size_t>(column) * static_cast<std::size_t>(g_bytesPerCell);
         configureTableColumn(
@@ -4212,6 +4267,8 @@ static void applyHexTableLayout(NSTableView *table, NSTextField *statusLabel)
             width = offsetColumnWidth(font);
         } else if ([identifier isEqualToString:@"ascii"]) {
             width = asciiColumnWidth(font);
+        } else if ([identifier isEqualToString:@"offsetSpacer"]) {
+            width = offsetTrailingPadding(font);
         } else if ([identifier isEqualToString:@"spacer"]) {
             width = asciiSeparatorWidth(font);
         } else {
@@ -4230,10 +4287,15 @@ static void applyHexTableLayout(NSTableView *table, NSTextField *statusLabel)
 
         NSView *rootView = statusLabel.superview;
         if (rootView) {
-            const CGFloat tableWidth = tableContainerWidth(font);
-            NSRect rootFrame = rootView.frame;
-            rootFrame.size.width = tableWidth;
-            rootView.frame = rootFrame;
+            // Use the rootView's *actual* size (set by NPP based on the editor
+            // view dimensions), not HEX_TABLE_HEIGHT — that constant is only
+            // valid when the host's editor area happens to be 640pt tall. When
+            // NPP allocates a taller editor (e.g. 688pt), the old code positioned
+            // the status label at y=619 (HEX_TABLE_HEIGHT-based), leaving a dark
+            // band of empty space above the status, between the host's tab bar
+            // and our hex view's top.
+            const CGFloat rootHeight = NSHeight(rootView.frame);
+            const CGFloat rootWidth = NSWidth(rootView.frame);
 
             // Status row height tracks the font's full ascender+descender extent,
             // plus a 4 pt margin above the row, so descender glyphs never clip.
@@ -4242,10 +4304,10 @@ static void applyHexTableLayout(NSTableView *table, NSTextField *statusLabel)
             const CGFloat labelHeight = textFrameHeightForFont(labelFont);
             const CGFloat topMargin = 4.0;
             const CGFloat statusAreaHeight = labelHeight + topMargin;
-            statusLabel.frame = NSMakeRect(8, HEX_TABLE_HEIGHT - topMargin - labelHeight,
-                                           tableWidth - 16, labelHeight);
-            table.enclosingScrollView.frame = NSMakeRect(0, 0, tableWidth,
-                                                         HEX_TABLE_HEIGHT - statusAreaHeight);
+            statusLabel.frame = NSMakeRect(8, rootHeight - topMargin - labelHeight,
+                                           rootWidth - 16, labelHeight);
+            table.enclosingScrollView.frame = NSMakeRect(0, 0, rootWidth,
+                                                         rootHeight - statusAreaHeight);
         }
     }
 }
@@ -4256,6 +4318,13 @@ static NSView *createHexTableView(NSTableView **tableView, NSTextField **statusL
     const CGFloat tableWidth = tableContainerWidth(font);
     NSView *rootView = [[HexTableContainerView alloc] initWithFrame:NSMakeRect(0, 0, tableWidth, HEX_TABLE_HEIGHT)];
     rootView.accessibilityIdentifier = kHexEditorRootAccessibilityID;
+    // Without autoresizing, the rootView stays a fixed 640pt tall regardless
+    // of the dock-panel space NPP allocates around it — when NPP gives more
+    // vertical room, the difference shows up as a dark band above (or below)
+    // the rootView. Subviews (status label sticks to top via MinYMargin, scroll
+    // view fills the rest via HeightSizable) already adapt; the rootView itself
+    // just needs the same flexibility to inherit the parent's actual size.
+    rootView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 
     NSTextField *label = [NSTextField labelWithString:@""];
     NSFont *labelFont = statusLabelFontFor(font);
@@ -4517,46 +4586,252 @@ static void patternReplacePreview()
     presentPatternReplaceDialog();
 }
 
+// MARK: - Help popovers
+
+// Round bezel-style "?" button (NSBezelStyleHelpButton) that owns its own NSPopover
+// and toggles it on click. Each instance is self-contained — it retains the popover
+// (which retains its content controller and view), so callers only need to keep the
+// button itself in the view hierarchy.
+//
+// Dismiss-on-outside-click implementation: NSPopoverBehaviorTransient is supposed
+// to auto-dismiss when the user interacts outside the popover, but in practice a
+// click on another AppKit control inside the same window often gets consumed by
+// that control's tracking loop before the popover sees it. The monitor below
+// catches every left-mouse-down at the application level and closes the popover
+// whenever the click lands outside the popover's window — except when it hits the
+// help button itself (the button's own action handler handles toggle semantics
+// without re-entrant close-then-reopen).
+@interface HexHelpButton : NSButton <NSPopoverDelegate>
+@property (nonatomic, strong) NSPopover *popover;
+@property (nonatomic, strong) id outsideClickMonitor;
+- (void)hexShowHelpPopover:(id)sender;
+@end
+
+@implementation HexHelpButton
+
+- (void)hexShowHelpPopover:(id)sender
+{
+    if (self.popover.shown) {
+        [self.popover close];
+        return;
+    }
+    self.popover.delegate = self;
+    [self.popover showRelativeToRect:self.bounds
+                              ofView:self
+                       preferredEdge:NSRectEdgeMaxY];
+    [self installOutsideClickMonitor];
+}
+
+- (void)installOutsideClickMonitor
+{
+    if (self.outsideClickMonitor != nil) {
+        return;
+    }
+    // This file is MRC (no ARC). __unsafe_unretained gives the block a
+    // non-retaining reference to break the retain cycle: button retains the
+    // monitor (via the property), the monitor's block would otherwise retain
+    // the button. Safe because -dealloc removes the monitor before the button
+    // is freed, so the block never fires with a dangling pointer.
+    __unsafe_unretained HexHelpButton *unsafeSelf = self;
+    self.outsideClickMonitor =
+        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown
+                                              handler:^NSEvent *(NSEvent *event) {
+        if (!unsafeSelf.popover.shown) {
+            return event;
+        }
+        NSWindow *popoverWindow = unsafeSelf.popover.contentViewController.view.window;
+        if (event.window == popoverWindow) {
+            return event;   // click inside the popover content — leave it
+        }
+        if (event.window == unsafeSelf.window) {
+            // Don't close on a click of the help button itself; the action
+            // handler will toggle the popover. Otherwise we'd close-then-reopen.
+            const NSPoint locInButton = [unsafeSelf convertPoint:event.locationInWindow fromView:nil];
+            if (NSPointInRect(locInButton, unsafeSelf.bounds)) {
+                return event;
+            }
+        }
+        [unsafeSelf.popover close];
+        return event;   // pass the click through to its target as well
+    }];
+}
+
+- (void)popoverDidClose:(NSNotification *)notification
+{
+    if (self.outsideClickMonitor != nil) {
+        [NSEvent removeMonitor:self.outsideClickMonitor];
+        self.outsideClickMonitor = nil;
+    }
+}
+
+- (void)dealloc
+{
+    if (_outsideClickMonitor != nil) {
+        [NSEvent removeMonitor:_outsideClickMonitor];
+    }
+    [super dealloc];
+}
+@end
+
+// View controller whose loadView produces a soft-padded wrapping label sized to the
+// given preferred width. Manual frame layout (no Auto Layout) to match the rest of
+// this file, and so the popover knows its exact final size at first show.
+@interface HexHelpPopoverController : NSViewController
+@property (nonatomic, copy) NSString *helpText;
+@property (nonatomic, assign) CGFloat preferredWidth;
+@end
+
+@implementation HexHelpPopoverController
+- (void)loadView
+{
+    const CGFloat horizPad = 12.0;
+    const CGFloat vertPad = 12.0;
+    const CGFloat innerWidth = self.preferredWidth - 2.0 * horizPad;
+
+    NSTextField *label = [NSTextField wrappingLabelWithString:self.helpText ?: @""];
+    label.preferredMaxLayoutWidth = innerWidth;
+    label.selectable = YES;     // allows VoiceOver / copy of help text
+    const NSSize labelSize = label.intrinsicContentSize;
+    label.frame = NSMakeRect(horizPad, vertPad, innerWidth, ceil(labelSize.height));
+
+    NSView *root = [[NSView alloc] initWithFrame:NSMakeRect(0, 0,
+                                                            self.preferredWidth,
+                                                            ceil(labelSize.height) + 2.0 * vertPad)];
+    [root addSubview:label];
+    self.view = root;
+}
+@end
+
+// Build a help button that pops `helpText` (already-localized) on click. Caller is
+// responsible for placing the returned button (frame is initialised at the AppKit
+// standard 22×22; reposition with `button.frame = ...` after creation).
+static HexHelpButton *makeHexHelpButton(NSString *helpText, NSString *accessibilityId)
+{
+    HexHelpButton *button = [[HexHelpButton alloc] initWithFrame:NSMakeRect(0, 0, 22, 22)];
+    button.bezelStyle = NSBezelStyleHelpButton;
+    button.title = @"";
+    button.bordered = YES;
+    if (accessibilityId.length > 0) {
+        button.accessibilityIdentifier = accessibilityId;
+    }
+    // Help button visible label for VoiceOver (the "?" glyph alone reads as
+    // unhelpful "help button" without this).
+    button.accessibilityLabel = L(@"help.button.axLabel");
+
+    HexHelpPopoverController *controller = [[HexHelpPopoverController alloc] init];
+    controller.helpText = helpText;
+    controller.preferredWidth = 320.0;
+
+    NSPopover *popover = [[NSPopover alloc] init];
+    popover.contentViewController = controller;
+    popover.behavior = NSPopoverBehaviorTransient;
+    popover.animates = YES;
+    button.popover = popover;
+
+    button.target = button;
+    button.action = @selector(hexShowHelpPopover:);
+    return button;
+}
+
 // MARK: - Options dialog
 
-// Modal sheet for plugin-wide preferences. Today there is one row (rectangular-selection
-// modifier); the layout leaves room above each row for additional preferences to be
-// appended later without restructuring. Reset only updates the in-dialog state — the
-// user must still click Save for the change to land in NSUserDefaults.
+// Tags returned by the option-dialog buttons via [NSApp stopModalWithCode:].
+// Why an NSWindow (rather than NSAlert): AppKit's NSAlert intercepts events
+// through its own modal session, so an inline NSPopover anchored to a help
+// button never receives the outside-click signal that would normally dismiss
+// it. Building the dialog as a regular NSWindow + [NSApp runModalForWindow:]
+// gives popovers the standard event flow they need to behave correctly. It
+// also gives us a real window to host an NSTabView when the Options dialog
+// grows the four-tab Windows-parity layout (Start Layout / Startup / Colors /
+// Font).
+// The "OK" button is the commit-and-close action; named "OK" rather than
+// "Save" in the UI because this is a hex editor and "Save" would imply saving
+// the document. Internal symbols match the user-visible label for clarity.
+static const NSInteger kHexOptionsResultOk     = 1;
+static const NSInteger kHexOptionsResultReset  = 2;
+static const NSInteger kHexOptionsResultCancel = 3;
+static const NSInteger kHexOptionsResultApply  = 4;
+
+// Target object that bridges NSButton actions in the modal window to
+// [NSApp stopModalWithCode:]. Lives only for the lifetime of presentOptionsDialog.
+@interface HexOptionsButtonTarget : NSObject
+- (void)hexOptionsOk:(id)sender;
+- (void)hexOptionsReset:(id)sender;
+- (void)hexOptionsCancel:(id)sender;
+- (void)hexOptionsApply:(id)sender;
+@end
+
+@implementation HexOptionsButtonTarget
+- (void)hexOptionsOk:(id)sender     { [NSApp stopModalWithCode:kHexOptionsResultOk];     }
+- (void)hexOptionsReset:(id)sender  { [NSApp stopModalWithCode:kHexOptionsResultReset];  }
+- (void)hexOptionsCancel:(id)sender { [NSApp stopModalWithCode:kHexOptionsResultCancel]; }
+- (void)hexOptionsApply:(id)sender  { [NSApp stopModalWithCode:kHexOptionsResultApply];  }
+@end
+
+// Modal preference window. Today there is one row (rectangular-selection
+// modifier) with an inline help button; the layout leaves room above each row
+// for additional preferences to be appended later. Reset only updates the
+// in-dialog state — the user must still click Save for the change to land in
+// NSUserDefaults.
 static void presentOptionsDialog()
 {
     @autoreleasepool {
-        NSAlert *alert = [[NSAlert alloc] init];
-        alert.messageText = L(@"options.title");
-        alert.informativeText = L(@"options.message");
-        [alert addButtonWithTitle:L(@"options.button.save")];
-        [alert addButtonWithTitle:L(@"options.button.reset")];
-        [alert addButtonWithTitle:L(@"button.cancel")];
-
-        const CGFloat width = 380.0;
-        const CGFloat labelHeight = 18.0;
+        // ---- Layout constants ----
+        const CGFloat windowWidth = 460.0;
+        const CGFloat innerMargin = 20.0;
+        const CGFloat innerWidth = windowWidth - 2 * innerMargin;
+        const CGFloat labelHeight = 22.0;
         const CGFloat popupHeight = 26.0;
-        const CGFloat sectionGap = 4.0;
-        const CGFloat totalHeight = labelHeight + sectionGap + popupHeight;
+        const CGFloat sectionGap = 6.0;
+        const CGFloat helpButtonSize = 22.0;
+        const CGFloat helpButtonGap = 6.0;
+        const CGFloat buttonRowHeight = 32.0;
+        const CGFloat buttonRowGap = 16.0;
+        const CGFloat buttonHeight = 28.0;
 
-        NSView *accessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, totalHeight)];
+        // Stack from the bottom up: button row, then a top section that's the
+        // sum of its children. Total height is labelHeight + sectionGap +
+        // popupHeight + buttonRowGap + buttonRowHeight, plus margins.
+        const CGFloat contentHeight = labelHeight + sectionGap + popupHeight + buttonRowGap + buttonRowHeight;
+        const CGFloat windowHeight = contentHeight + 2 * innerMargin;
 
-        CGFloat y = totalHeight - labelHeight;
+        // ---- Window ----
+        NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, windowWidth, windowHeight)
+                                                       styleMask:NSWindowStyleMaskTitled
+                                                         backing:NSBackingStoreBuffered
+                                                           defer:NO];
+        window.title = L(@"options.title");
+        window.releasedWhenClosed = NO;
+        window.accessibilityIdentifier = @"hex-editor.options.window";
+        [window center];
+
+        NSView *content = window.contentView;
+
+        // ---- Top section: rect-modifier row ----
+        // y measured from window bottom up; first compute the label row's y.
+        CGFloat y = windowHeight - innerMargin - labelHeight;
+
+        const CGFloat labelMaxX = innerWidth - helpButtonSize - helpButtonGap;
         NSTextField *label = [NSTextField labelWithString:L(@"options.rectModifier.label")];
-        label.frame = NSMakeRect(0, y, width, labelHeight);
-        [accessory addSubview:label];
+        label.frame = NSMakeRect(innerMargin, y, labelMaxX, labelHeight);
+        [content addSubview:label];
+
+        HexHelpButton *helpButton = makeHexHelpButton(L(@"options.rectModifier.help"),
+                                                       @"hex-editor.options.help.rectModifier");
+        helpButton.frame = NSMakeRect(windowWidth - innerMargin - helpButtonSize, y,
+                                      helpButtonSize, helpButtonSize);
+        [content addSubview:helpButton];
 
         y -= (popupHeight + sectionGap);
-        NSPopUpButton *modifierPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, y, width, popupHeight)
+        NSPopUpButton *modifierPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(innerMargin, y, innerWidth, popupHeight)
                                                                  pullsDown:NO];
         modifierPopup.accessibilityIdentifier = @"hex-editor.options.rectMod.popup";
         [modifierPopup addItemWithTitle:L(@"options.rectModifier.option")];
         modifierPopup.lastItem.representedObject = HEX_RECT_MOD_OPTION;
         [modifierPopup addItemWithTitle:L(@"options.rectModifier.shiftOption")];
         modifierPopup.lastItem.representedObject = HEX_RECT_MOD_SHIFT_OPTION;
-        [accessory addSubview:modifierPopup];
+        [content addSubview:modifierPopup];
 
-        // Block to apply a modifier value to the popup, shared by initial population and Reset.
         void (^applyModifier)(NSString *) = ^(NSString *modifier) {
             for (NSMenuItem *item in modifierPopup.itemArray) {
                 if ([(NSString *)item.representedObject isEqualToString:modifier]) {
@@ -4568,28 +4843,97 @@ static void presentOptionsDialog()
         };
         applyModifier(g_rectModifier);
 
-        alert.accessoryView = accessory;
-        [alert.window setInitialFirstResponder:modifierPopup];
+        // ---- Bottom button row: [Reset] .......... [Cancel] [Apply] [OK] ----
+        // Right-anchored stack: OK is the rightmost (and the default action),
+        // Apply sits to its left and applies values without closing the window,
+        // Cancel sits to Apply's left, Reset is left-anchored at the opposite edge.
+        // OK rather than "Save" — this is a hex editor and "Save" would imply
+        // saving the document.
+        HexOptionsButtonTarget *target = [[HexOptionsButtonTarget alloc] init];
+        const CGFloat buttonY = innerMargin + (buttonRowHeight - buttonHeight) / 2.0;
+        const CGFloat buttonGap = 12.0;
 
-        // Loop on Reset so the user can preview the defaults before committing.
-        // Save / Cancel exit the loop; Reset stays in it.
+        NSButton *okBtn = [NSButton buttonWithTitle:L(@"button.ok")
+                                             target:target
+                                             action:@selector(hexOptionsOk:)];
+        okBtn.keyEquivalent = @"\r";   // Return triggers OK
+        okBtn.bezelStyle = NSBezelStyleRounded;
+        okBtn.accessibilityIdentifier = @"hex-editor.options.button.ok";
+        [okBtn sizeToFit];
+        const CGFloat okWidth = std::max<CGFloat>(NSWidth(okBtn.frame), 90.0);
+        okBtn.frame = NSMakeRect(windowWidth - innerMargin - okWidth, buttonY, okWidth, buttonHeight);
+        [content addSubview:okBtn];
+
+        NSButton *applyBtn = [NSButton buttonWithTitle:L(@"options.button.apply")
+                                                target:target
+                                                action:@selector(hexOptionsApply:)];
+        applyBtn.bezelStyle = NSBezelStyleRounded;
+        applyBtn.accessibilityIdentifier = @"hex-editor.options.button.apply";
+        [applyBtn sizeToFit];
+        const CGFloat applyWidth = std::max<CGFloat>(NSWidth(applyBtn.frame), 90.0);
+        applyBtn.frame = NSMakeRect(NSMinX(okBtn.frame) - buttonGap - applyWidth, buttonY, applyWidth, buttonHeight);
+        [content addSubview:applyBtn];
+
+        NSButton *cancelBtn = [NSButton buttonWithTitle:L(@"button.cancel")
+                                                 target:target
+                                                 action:@selector(hexOptionsCancel:)];
+        cancelBtn.keyEquivalent = @"\e";   // Escape triggers Cancel
+        cancelBtn.bezelStyle = NSBezelStyleRounded;
+        cancelBtn.accessibilityIdentifier = @"hex-editor.options.button.cancel";
+        [cancelBtn sizeToFit];
+        const CGFloat cancelWidth = std::max<CGFloat>(NSWidth(cancelBtn.frame), 90.0);
+        cancelBtn.frame = NSMakeRect(NSMinX(applyBtn.frame) - buttonGap - cancelWidth, buttonY, cancelWidth, buttonHeight);
+        [content addSubview:cancelBtn];
+
+        NSButton *resetBtn = [NSButton buttonWithTitle:L(@"options.button.reset")
+                                                target:target
+                                                action:@selector(hexOptionsReset:)];
+        resetBtn.bezelStyle = NSBezelStyleRounded;
+        resetBtn.accessibilityIdentifier = @"hex-editor.options.button.reset";
+        [resetBtn sizeToFit];
+        const CGFloat resetWidth = NSWidth(resetBtn.frame);
+        resetBtn.frame = NSMakeRect(innerMargin, buttonY, resetWidth, buttonHeight);
+        [content addSubview:resetBtn];
+
+        [window setInitialFirstResponder:modifierPopup];
+        window.defaultButtonCell = okBtn.cell;
+
+        // Commit the dialog's current state to globals + NSUserDefaults and
+        // refresh any open hex view so display-affecting settings land
+        // immediately. Shared by Apply (loops back into the modal) and OK
+        // (exits the modal). The rect-modifier today is a behavior setting —
+        // the applyHexViewMode() call is a no-op for it but keeps the contract
+        // consistent for the Start Layout / Colors / Font tabs to come.
+        void (^commitDialog)(void) = ^{
+            NSString *chosen = (NSString *)modifierPopup.selectedItem.representedObject ?: HEX_RECT_MOD_DEFAULT;
+            if (![chosen isEqualToString:g_rectModifier]) {
+                g_rectModifier = chosen;
+                saveHexPrefs();
+            }
+            if (hexTableView != nil) {
+                applyHexViewMode();
+            }
+        };
+
+        // ---- Modal session (loop on Reset / Apply) ----
         while (true) {
-            const NSModalResponse response = [alert runModal];
-            if (response == NSAlertSecondButtonReturn) {
+            const NSModalResponse response = [NSApp runModalForWindow:window];
+            if (response == kHexOptionsResultReset) {
                 applyModifier(HEX_RECT_MOD_DEFAULT);
                 continue;
             }
-            if (response != NSAlertFirstButtonReturn) {
+            if (response == kHexOptionsResultApply) {
+                commitDialog();
+                continue;
+            }
+            if (response != kHexOptionsResultOk) {
+                [window orderOut:nil];
                 return;
             }
             break;
         }
-
-        NSString *chosen = (NSString *)modifierPopup.selectedItem.representedObject ?: HEX_RECT_MOD_DEFAULT;
-        if (![chosen isEqualToString:g_rectModifier]) {
-            g_rectModifier = chosen;
-            saveHexPrefs();
-        }
+        [window orderOut:nil];
+        commitDialog();
     }
 }
 

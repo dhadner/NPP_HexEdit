@@ -1,0 +1,499 @@
+#!/usr/bin/env python3
+"""Update the persistent UI test dashboard after a run.
+
+Reads:
+    --xcresult       The .xcresult bundle just produced by xcodebuild
+    --tests-source   HexEditorUITests.swift (canonical list of tests in source)
+    --history        run-history.json (created if missing)
+
+Writes:
+    --md             dashboard.md   (Markdown view)
+    --html           dashboard.html (HTML view)
+    --history        run-history.json (updated)
+
+Dashboard content:
+    Section 1: every `func test*` in the Swift source, with last status,
+               last duration, total runs, pass rate, last-failure timestamp.
+    Section 2: last 20 runs, newest first, with date, duration, pass/fail.
+
+Best-effort: any parsing error logs to stderr and exits 0 (the test suite's
+exit status is the source of truth, not this script).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+HISTORY_LIMIT = 20
+
+
+# ---- xcresult parsing (mirrors summarize-results.py) -----------------------
+
+def run_xcresulttool(xcresult_path: str, kind: str) -> dict | None:
+    cmd = ["xcrun", "xcresulttool", "get", "test-results", kind, "--path", xcresult_path]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        print(f"warning: xcresulttool {kind} failed (rc={result.returncode}):", file=sys.stderr)
+        print(result.stderr, file=sys.stderr)
+        return None
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        print(f"warning: could not parse xcresulttool {kind} output: {exc}", file=sys.stderr)
+        return None
+
+
+def walk_test_cases(node, out: list[dict]) -> None:
+    if isinstance(node, dict):
+        if node.get("nodeType") == "Test Case":
+            # xcresulttool reports test case names as "testFoo()", but the
+            # canonical Swift source list parser produces "testFoo" (no parens).
+            # Normalize here so both views key the same dict.
+            raw = node.get("name", "(unknown)")
+            normalized = raw[:-2] if raw.endswith("()") else raw
+            out.append({
+                "name": normalized,
+                "result": node.get("result", "Unknown"),
+                "duration": node.get("duration", ""),
+            })
+        for child in node.get("children", []) or []:
+            walk_test_cases(child, out)
+        for child in node.get("testNodes", []) or []:
+            walk_test_cases(child, out)
+    elif isinstance(node, list):
+        for item in node:
+            walk_test_cases(item, out)
+
+
+def parse_duration_seconds(value) -> float | None:
+    """xcresulttool returns durations as either floats (seconds) or strings."""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        # Strings like "1.234s" — strip non-numeric tail.
+        m = re.match(r"^([\d.]+)", str(value))
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                return None
+    return None
+
+
+# ---- Source parsing --------------------------------------------------------
+
+def list_tests_in_source(source_path: str) -> list[str]:
+    """Find every `func testFoo(...)` in the Swift source, in declaration order."""
+    out: list[str] = []
+    pattern = re.compile(r"^\s+func\s+(test[A-Za-z0-9_]+)\s*\(")
+    try:
+        with open(source_path, encoding="utf-8") as fp:
+            for line in fp:
+                m = pattern.match(line)
+                if m:
+                    out.append(m.group(1))
+    except OSError as exc:
+        print(f"warning: could not read tests source {source_path}: {exc}", file=sys.stderr)
+    return out
+
+
+# ---- History I/O -----------------------------------------------------------
+
+def load_history(history_path: str) -> list[dict]:
+    if not os.path.exists(history_path):
+        return []
+    try:
+        with open(history_path, encoding="utf-8") as fp:
+            data = json.load(fp)
+        if isinstance(data, list):
+            return data
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"warning: could not load history {history_path}: {exc}", file=sys.stderr)
+    return []
+
+
+def save_history(history_path: str, history: list[dict]) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(history_path)) or ".", exist_ok=True)
+    with open(history_path, "w", encoding="utf-8") as fp:
+        json.dump(history, fp, indent=2, sort_keys=True)
+
+
+# ---- Dashboard renderers ---------------------------------------------------
+
+def per_test_aggregate(history: list[dict], all_tests: list[str]) -> list[dict]:
+    """For each known test, compute last status / duration / total runs / passes."""
+    rows = []
+    for name in all_tests:
+        last_status = "—"
+        last_duration: float | None = None
+        last_run: str | None = None
+        last_failure: str | None = None
+        runs = 0
+        passes = 0
+        for entry in reversed(history):
+            tests = entry.get("tests", {})
+            if name not in tests:
+                continue
+            info = tests[name]
+            status = info.get("result", "Unknown")
+            runs += 1
+            if status == "Passed":
+                passes += 1
+            if last_status == "—":
+                last_status = status
+                last_duration = parse_duration_seconds(info.get("duration"))
+                last_run = entry.get("timestamp")
+            if status == "Failed" and last_failure is None:
+                last_failure = entry.get("timestamp")
+        rows.append({
+            "name": name,
+            "last_status": last_status,
+            "last_duration": last_duration,
+            "last_run": last_run,
+            "last_failure": last_failure,
+            "runs": runs,
+            "passes": passes,
+        })
+    return rows
+
+
+def status_emoji(status: str) -> str:
+    return {"Passed": "✅", "Failed": "❌", "Skipped": "⊘", "—": "—"}.get(status, "❓")
+
+
+def status_class(status: str) -> str:
+    return {"Passed": "pass", "Failed": "fail", "Skipped": "skip", "—": "never"}.get(status, "unknown")
+
+
+def fmt_duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "—"
+    if seconds < 1:
+        return f"{seconds:.2f}s"
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, secs = divmod(int(seconds), 60)
+    return f"{minutes}m {secs}s"
+
+
+def fmt_timestamp(iso: str | None) -> str:
+    if not iso:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return iso
+    # Render in local time so a human reading the dashboard sees their wall clock.
+    local = dt.astimezone()
+    return local.strftime("%Y-%m-%d %H:%M")
+
+
+def render_markdown(per_test: list[dict], history: list[dict], screenshots: list[dict]) -> str:
+    lines: list[str] = []
+    lines.append("# HexEditor UI Test Dashboard")
+    lines.append("")
+    lines.append(f"_Updated: {datetime.now().astimezone().strftime('%Y-%m-%d %H:%M %Z')}_")
+    lines.append("")
+
+    if history:
+        latest = history[-1]
+        passed = latest.get("passed", 0)
+        failed = latest.get("failed", 0)
+        skipped = latest.get("skipped", 0)
+        total = latest.get("total", passed + failed + skipped)
+        result_icon = "✅" if failed == 0 and passed > 0 else ("❌" if failed > 0 else "❓")
+        lines.append(
+            f"**Latest run:** {result_icon} {passed} passed · {failed} failed · "
+            f"{skipped} skipped · {total} total — {fmt_duration(latest.get('duration_seconds'))} "
+            f"at {fmt_timestamp(latest.get('timestamp'))}"
+        )
+        lines.append("")
+
+    lines.append(f"## All tests ({len(per_test)})")
+    lines.append("")
+    lines.append("| Test | Last | Duration | Last run | Runs | Pass rate |")
+    lines.append("|------|------|----------|----------|-----:|----------:|")
+    for row in per_test:
+        rate = ""
+        if row["runs"] > 0:
+            pct = (row["passes"] / row["runs"]) * 100
+            rate = f"{pct:.0f}% ({row['passes']}/{row['runs']})"
+        else:
+            rate = "—"
+        lines.append(
+            f"| `{row['name']}` "
+            f"| {status_emoji(row['last_status'])} {row['last_status']} "
+            f"| {fmt_duration(row['last_duration'])} "
+            f"| {fmt_timestamp(row['last_run'])} "
+            f"| {row['runs']} "
+            f"| {rate} |"
+        )
+    lines.append("")
+
+    if screenshots:
+        lines.append(f"## Screenshots from latest run ({len(screenshots)})")
+        lines.append("")
+        for shot in screenshots:
+            lines.append(f"- [`{shot['name']}`](screenshots/{shot['filename']})")
+        lines.append("")
+
+    lines.append(f"## Run history (last {len(history)})")
+    lines.append("")
+    if not history:
+        lines.append("_No runs yet._")
+        lines.append("")
+    else:
+        lines.append("| When | Duration | Result | Failures |")
+        lines.append("|------|---------:|--------|----------|")
+        for entry in reversed(history):
+            failed = entry.get("failed", 0)
+            passed = entry.get("passed", 0)
+            total = entry.get("total", passed + failed)
+            res = "✅ all pass" if failed == 0 else f"❌ {failed} of {total} failed"
+            fail_names = entry.get("failed_tests", [])
+            fails_md = ", ".join(f"`{n}`" for n in fail_names) if fail_names else "—"
+            lines.append(
+                f"| {fmt_timestamp(entry.get('timestamp'))} "
+                f"| {fmt_duration(entry.get('duration_seconds'))} "
+                f"| {res} "
+                f"| {fails_md} |"
+            )
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def list_screenshots(screenshot_dir: str) -> list[dict]:
+    """List PNGs in `screenshot_dir`, sorted by mtime descending.
+
+    Returns dicts with `name` (filename without extension), `filename` (full
+    filename), and `mtime` (seconds since epoch). The dashboard HTML embeds
+    these via relative paths so the file works when opened locally without a
+    web server.
+    """
+    if not screenshot_dir or not os.path.isdir(screenshot_dir):
+        return []
+    rows: list[dict] = []
+    for entry in os.scandir(screenshot_dir):
+        if not entry.is_file() or not entry.name.lower().endswith(".png"):
+            continue
+        rows.append({
+            "name": os.path.splitext(entry.name)[0],
+            "filename": entry.name,
+            "mtime": entry.stat().st_mtime,
+        })
+    rows.sort(key=lambda r: r["mtime"], reverse=True)
+    return rows
+
+
+def render_html(per_test: list[dict], history: list[dict], screenshots: list[dict]) -> str:
+    head = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HexEditor UI Test Dashboard</title>
+<style>
+body { font: 14px -apple-system, BlinkMacSystemFont, sans-serif; max-width: 1100px; margin: 24px auto; padding: 0 20px; color: #222; }
+h1, h2 { font-weight: 600; }
+h1 { margin-bottom: 0; }
+.subtle { color: #777; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0 28px; }
+th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #eee; vertical-align: top; }
+th { background: #f7f7f7; font-weight: 600; }
+tr:hover td { background: #fafafa; }
+code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; background: #f3f3f3; padding: 1px 5px; border-radius: 3px; }
+.pass  { color: #2e7d32; }
+.fail  { color: #c62828; font-weight: 600; }
+.skip  { color: #7b6500; }
+.never { color: #999; }
+.mono  { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.right { text-align: right; }
+.banner { padding: 10px 14px; border-radius: 6px; margin: 12px 0 24px; }
+.banner.pass { background: #e6f4ea; border: 1px solid #c8e6c9; }
+.banner.fail { background: #fdecea; border: 1px solid #f5c6c6; }
+.banner.empty { background: #f3f3f3; border: 1px solid #e0e0e0; color: #666; }
+</style>
+</head>
+<body>
+"""
+    out: list[str] = [head]
+    out.append("<h1>HexEditor UI Test Dashboard</h1>")
+    out.append(f'<p class="subtle">Updated {datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")}</p>')
+
+    if history:
+        latest = history[-1]
+        passed = latest.get("passed", 0)
+        failed = latest.get("failed", 0)
+        skipped = latest.get("skipped", 0)
+        total = latest.get("total", passed + failed + skipped)
+        banner = "pass" if failed == 0 and passed > 0 else ("fail" if failed > 0 else "empty")
+        out.append(f'<div class="banner {banner}">')
+        out.append(
+            f"<b>Latest run:</b> {passed} passed · {failed} failed · {skipped} skipped · "
+            f"{total} total — {fmt_duration(latest.get('duration_seconds'))} "
+            f"at {fmt_timestamp(latest.get('timestamp'))}"
+        )
+        out.append("</div>")
+    else:
+        out.append('<div class="banner empty"><b>No runs recorded yet.</b></div>')
+
+    out.append(f"<h2>All tests ({len(per_test)})</h2>")
+    out.append("<table>")
+    out.append("<tr><th>Test</th><th>Last</th><th>Duration</th><th>Last run</th>"
+               "<th class='right'>Runs</th><th class='right'>Pass rate</th></tr>")
+    for row in per_test:
+        rate_str = "—"
+        if row["runs"] > 0:
+            pct = (row["passes"] / row["runs"]) * 100
+            rate_str = f"{pct:.0f}% ({row['passes']}/{row['runs']})"
+        out.append(
+            "<tr>"
+            f"<td><code>{row['name']}</code></td>"
+            f"<td class='{status_class(row['last_status'])}'>{status_emoji(row['last_status'])} {row['last_status']}</td>"
+            f"<td>{fmt_duration(row['last_duration'])}</td>"
+            f"<td class='mono'>{fmt_timestamp(row['last_run'])}</td>"
+            f"<td class='right'>{row['runs']}</td>"
+            f"<td class='right'>{rate_str}</td>"
+            "</tr>"
+        )
+    out.append("</table>")
+
+    if screenshots:
+        out.append(f"<h2>Screenshots from latest run ({len(screenshots)})</h2>")
+        out.append('<p class="subtle">Visual evidence captured by tests via captureToDashboard(name). Embedded with relative paths so the file works offline.</p>')
+        out.append('<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(360px, 1fr)); gap:16px; margin-bottom:28px;">')
+        for shot in screenshots:
+            # Two-line caption: filename (which encodes test + assertion stage),
+            # then the mtime so the human can confirm freshness.
+            mtime_str = datetime.fromtimestamp(shot["mtime"]).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            out.append('<figure style="margin:0; border:1px solid #ddd; border-radius:6px; padding:8px; background:#fafafa;">')
+            out.append(f'<img src="screenshots/{shot["filename"]}" style="max-width:100%; height:auto; display:block; border-radius:4px;" alt="{shot["name"]}">')
+            out.append(f'<figcaption style="font-size:12px; color:#555; margin-top:6px; word-break:break-all;"><code>{shot["name"]}</code><br><span class="subtle">{mtime_str}</span></figcaption>')
+            out.append('</figure>')
+        out.append('</div>')
+
+    out.append(f"<h2>Run history (last {len(history)})</h2>")
+    if not history:
+        out.append("<p class='subtle'>No runs yet.</p>")
+    else:
+        out.append("<table>")
+        out.append("<tr><th>When</th><th>Duration</th><th>Result</th><th>Failures</th></tr>")
+        for entry in reversed(history):
+            failed = entry.get("failed", 0)
+            passed = entry.get("passed", 0)
+            total = entry.get("total", passed + failed)
+            if failed == 0:
+                res_html = "<span class='pass'>✅ all pass</span>"
+            else:
+                res_html = f"<span class='fail'>❌ {failed} of {total} failed</span>"
+            fail_names = entry.get("failed_tests", []) or []
+            fails_html = ", ".join(f"<code>{n}</code>" for n in fail_names) or "—"
+            out.append(
+                "<tr>"
+                f"<td class='mono'>{fmt_timestamp(entry.get('timestamp'))}</td>"
+                f"<td>{fmt_duration(entry.get('duration_seconds'))}</td>"
+                f"<td>{res_html}</td>"
+                f"<td>{fails_html}</td>"
+                "</tr>"
+            )
+        out.append("</table>")
+    out.append("</body></html>")
+    return "\n".join(out)
+
+
+# ---- Main ------------------------------------------------------------------
+
+def main() -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("--xcresult", required=True)
+    p.add_argument("--tests-source", required=True)
+    p.add_argument("--history", required=True)
+    p.add_argument("--md", required=True)
+    p.add_argument("--html", required=True)
+    p.add_argument("--screenshots-dir", default=None,
+                   help="Optional directory containing PNGs written by captureToDashboard(). When set, screenshots are embedded in dashboard.html and listed in dashboard.md.")
+    args = p.parse_args()
+
+    history = load_history(args.history)
+
+    # Parse the run we just completed and append to history.
+    if os.path.exists(args.xcresult):
+        summary = run_xcresulttool(args.xcresult, "summary") or {}
+        tests = run_xcresulttool(args.xcresult, "tests") or {}
+        cases: list[dict] = []
+        walk_test_cases(tests, cases)
+        passed = int(summary.get("passedTests", 0))
+        failed = int(summary.get("failedTests", 0))
+        skipped = int(summary.get("skippedTests", 0))
+        total = int(summary.get("totalTestCount", passed + failed + skipped))
+        start = summary.get("startTime") or 0
+        finish = summary.get("finishTime") or 0
+        duration = (finish - start) if (finish and start) else None
+        # xcresulttool startTime is unix epoch seconds (number).
+        if isinstance(start, (int, float)) and start > 0:
+            ts = datetime.fromtimestamp(start, tz=timezone.utc).isoformat()
+        else:
+            ts = datetime.now(tz=timezone.utc).isoformat()
+
+        per_test_map: dict[str, dict] = {}
+        for case in cases:
+            per_test_map[case["name"]] = {
+                "result": case["result"],
+                "duration": case.get("duration"),
+            }
+        failed_names = [c["name"] for c in cases if c.get("result") == "Failed"]
+
+        history.append({
+            "timestamp": ts,
+            "passed": passed,
+            "failed": failed,
+            "skipped": skipped,
+            "total": total,
+            "duration_seconds": duration,
+            "tests": per_test_map,
+            "failed_tests": failed_names,
+        })
+        history = history[-HISTORY_LIMIT:]
+        save_history(args.history, history)
+    else:
+        print(f"warning: xcresult not found at {args.xcresult}; dashboard rendered from history alone", file=sys.stderr)
+
+    # Build the per-test aggregate from full history + canonical source list.
+    all_tests = list_tests_in_source(args.tests_source)
+    per_test = per_test_aggregate(history, all_tests)
+
+    # Tests that exist in history but are no longer in source go to a tail
+    # section so we can spot stale entries (e.g. renamed tests) without
+    # losing their history.
+    seen_in_source = set(all_tests)
+    extra_names: list[str] = []
+    for entry in history:
+        for name in (entry.get("tests") or {}).keys():
+            if name not in seen_in_source and name not in extra_names:
+                extra_names.append(name)
+    per_test += per_test_aggregate(history, extra_names)
+
+    screenshots = list_screenshots(args.screenshots_dir) if args.screenshots_dir else []
+
+    md = render_markdown(per_test, history, screenshots)
+    Path(args.md).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.md).write_text(md, encoding="utf-8")
+
+    html = render_html(per_test, history, screenshots)
+    Path(args.html).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.html).write_text(html, encoding="utf-8")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

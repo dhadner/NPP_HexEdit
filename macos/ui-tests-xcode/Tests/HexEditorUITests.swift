@@ -148,6 +148,34 @@ final class HexEditorUITests: XCTestCase {
         try await super.tearDown()
     }
 
+    /// Capture the current screen as a PNG and (a) attach it to the test result
+    /// for archival in the .xcresult bundle and (b) write it directly to the
+    /// runner's sandbox container so run-tests.sh can extract it after xcodebuild
+    /// completes.
+    ///
+    /// Why NSHomeDirectory() and not an env-var-supplied path: the XCUITest
+    /// runner is App-Sandboxed (per `org.notepadplusplus.hexeditor.uitests.xctrunner`
+    /// container). Writes to arbitrary user-fs paths — even ones the runner's
+    /// uid owns, like ~/vm-local/... — fail with NSPOSIXErrorDomain Code=1
+    /// "Operation not permitted". NSHomeDirectory() inside the sandbox resolves
+    /// to ~/Library/Containers/<runner-id>/Data and IS writable. run-tests.sh
+    /// sweeps that container for the screenshots dir after the test pass.
+    private func captureToDashboard(_ name: String) {
+        let screenshot = XCUIScreen.main.screenshot()
+
+        // Archival in xcresult — visible in Xcode's "Test Result" navigator.
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        // Direct write inside the sandbox container.
+        let dirURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("captureToDashboard-screenshots")
+        try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
+        let fileURL = dirURL.appendingPathComponent("\(name).png")
+        try? screenshot.pngRepresentation.write(to: fileURL)
+    }
+
     /// Force-kills any running dev-build Notepad++.app instance (path matches `expectedURL`),
     /// then waits up to 5 seconds for the process to disappear from the running-apps list.
     /// Leaves instances at other paths (e.g. /Applications/Notepad++.app) untouched — those
@@ -198,16 +226,69 @@ final class HexEditorUITests: XCTestCase {
 
         try invokeHexEditorMenu(app: app, item: "Options...")
 
-        let dialog = app.dialogs.firstMatch
-        XCTAssertTrue(dialog.waitForExistence(timeout: 5),
-                      "Options... should open a modal dialog.")
-
+        // The dialog is a real NSWindow (not NSAlert). Query by the popup AX id —
+        // it's the most reliable hook because XCUITest indexes interactive
+        // controls by accessibilityIdentifier directly without going through
+        // window-role intermediation.
         let modifierPopup = app.popUpButtons["hex-editor.options.rectMod.popup"]
-        XCTAssertTrue(modifierPopup.waitForExistence(timeout: 3),
+        XCTAssertTrue(modifierPopup.waitForExistence(timeout: 5),
                       "Options dialog should expose the rectangular-modifier popup.")
 
-        dialog.buttons["Cancel"].click()
-        XCTAssertTrue(dialog.waitForNonExistence(timeout: 5),
+        app.buttons["hex-editor.options.button.cancel"].click()
+        XCTAssertTrue(modifierPopup.waitForNonExistence(timeout: 5),
+                      "Options dialog should dismiss after Cancel (popup goes away).")
+    }
+
+    func testOptionsHelpPopoverShowsAndDismisses() throws {
+        // Each control in the Options dialog has an inline "?" help button next to it.
+        // Clicking the button shows an NSPopover with localized help text; clicking
+        // outside the popover dismisses it (NSPopoverBehaviorTransient). This test
+        // exercises the full round-trip on the rect-modifier row, which is the only
+        // help-button anchor the dialog has today.
+
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try invokeHexEditorMenu(app: app, item: "Options...")
+
+        let helpButton = app.buttons["hex-editor.options.help.rectModifier"]
+        XCTAssertTrue(helpButton.waitForExistence(timeout: 5),
+                      "Options dialog should expose a help button next to the rect-modifier control.")
+
+        // Visual evidence: capture the dialog before, during, and after the popover
+        // is shown. The before/after pair proves the popover is genuinely transient,
+        // not just an AX-visible text node added once and never removed.
+        captureToDashboard("testOptionsHelpPopover-01-dialog-without-popover")
+
+        helpButton.click()
+
+        // The popover content is a wrapping NSTextField; AX exposes its rendered
+        // string as a static text. Substring-match a distinctive snippet of the
+        // localized help that does NOT appear on the dialog's row label (which
+        // also contains the word "rectangular"). "muscle memory" only appears in
+        // the popover body, so the predicate isolates the popover content.
+        let popoverText = app.staticTexts.containing(
+            NSPredicate(format: "value CONTAINS[c] %@", "muscle memory")
+        ).firstMatch
+        XCTAssertTrue(popoverText.waitForExistence(timeout: 3),
+                      "Help popover should appear with localized text after clicking the ? button.")
+
+        captureToDashboard("testOptionsHelpPopover-02-popover-shown")
+
+        // Transient popovers dismiss on outside click. Click the modifier popup —
+        // it's inside the same window but outside the popover's frame, so the
+        // popover should auto-dismiss without committing any selection change.
+        app.popUpButtons["hex-editor.options.rectMod.popup"].click()
+        // The popup itself opens a menu; press Escape to close it without selecting.
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(popoverText.waitForNonExistence(timeout: 3),
+                      "Help popover should dismiss when the user clicks outside it.")
+
+        captureToDashboard("testOptionsHelpPopover-03-popover-dismissed")
+
+        let cancelButton = app.buttons["hex-editor.options.button.cancel"]
+        cancelButton.click()
+        XCTAssertTrue(cancelButton.waitForNonExistence(timeout: 5),
                       "Options dialog should dismiss after Cancel.")
     }
 
@@ -370,6 +451,7 @@ func testStatusLabelReportsByteCount() throws {
         cutItem.click()
 
         XCTAssertTrue(waitForStatus(in: app, contains: "empty", timeout: 5), "After Cut, status should report the document is empty.")
+        captureToDashboard("diag-cut-emptyAfterSelectAllCut")
 
         // Undo should restore the cut bytes.
         app.typeKey("z", modifierFlags: .command)
@@ -694,6 +776,7 @@ func testContextMenuCommands() throws {
         let predicate = NSPredicate(format: "value == %@", "4142")
         let waiter = expectation(for: predicate, evaluatedWith: cellOneAfter, handler: nil)
         wait(for: [waiter], timeout: 5)
+        captureToDashboard("diag-viewSubmode-after16Bit")
     }
 
     func testAddressWidthDialogChangesOffsetGutter() throws {
@@ -737,6 +820,7 @@ func testContextMenuCommands() throws {
         let predicate = NSPredicate(format: "value == %@", "000000000000")
         let waiter = expectation(for: predicate, evaluatedWith: offsetCellAfter, handler: nil)
         wait(for: [waiter], timeout: 5)
+        captureToDashboard("diag-addressWidth-after12")
     }
 
     func testColumnsDialogChangesRowCount() throws {
@@ -777,6 +861,15 @@ func testContextMenuCommands() throws {
         let predicate = NSPredicate(format: "count >= 6")
         let waiter = expectation(for: predicate, evaluatedWith: hexTable.tableRows, handler: nil)
         wait(for: [waiter], timeout: 5)
+
+        // Confirm the ASCII column actually carries the full row text, not a
+        // truncated prefix — this asserts the row's last AX-visible static text
+        // (the ASCII column) reports "ABCD" for byte values 0x41..0x44.
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        let asciiCell = firstRow.staticTexts.element(boundBy: 5)
+        XCTAssertEqual(asciiCell.value as? String, "ABCD",
+                       "ASCII column for row 0 should render the full 4-byte string at columns=4.")
+        captureToDashboard("diag-columns-after4")
     }
 
     func testFindNextLandsOnAsciiMatch() throws {
@@ -1342,6 +1435,7 @@ func testContextMenuCommands() throws {
         let offsetCell = firstRow.staticTexts.element(boundBy: 0)
         XCTAssertEqual(offsetCell.value as? String, "00000000",
                        "Invalid Address Width should be rejected and original 8-digit width preserved.")
+        captureToDashboard("diag-invalidAddressWidth-afterError")
     }
 
     // MARK: - Initial open state
@@ -1375,6 +1469,7 @@ func testContextMenuCommands() throws {
         // would have a frame.height much smaller than the row height.
         XCTAssertGreaterThan(firstRow.frame.height, 10,
                              "Row 0 frame height \(firstRow.frame.height) is too small — row is being clipped.")
+        captureToDashboard("diag-row0-initialOpen")
     }
 
     func testHexCursorMatchesScintillaCaretAfterPaste() throws {
@@ -1454,6 +1549,7 @@ func testContextMenuCommands() throws {
         let fontH = state?.statusFontLineHeight ?? .infinity
         XCTAssertGreaterThanOrEqual(frameH, fontH,
             "Status label frame (\(frameH)pt) must be at least as tall as its font's line-height (\(fontH)pt) so descenders don't clip.")
+        captureToDashboard("diag-statusLabel-glyphs")
     }
 
     func testCanReachRow0AfterDeepCursorOpen() throws {
@@ -1501,6 +1597,7 @@ func testContextMenuCommands() throws {
         let postCursor = HexCursorState.read(from: app)
         XCTAssertEqual(postCursor?.offset, 0,
                        "After Cmd+L → 0, the hex caret should be at offset 0.")
+        captureToDashboard("diag-row0-afterDeepCursorOpen")
     }
 
     // MARK: - Localization cascade
@@ -1592,9 +1689,14 @@ func testContextMenuCommands() throws {
     /// See [HexEditor.mm: addHexCellColumns](../../macos/src/HexEditor.mm) for the
     /// canonical column layout: `offset, cell00..cell0(M-1), midspacer, cell0M..cell0F, spacer, ascii`.
     private func cellIndex(forByte byte: Int, cellsPerRow: Int = 16) -> Int {
-        let midpoint = cellsPerRow / 2
-        let offsetSlot = 1
-        return byte < midpoint ? offsetSlot + byte : offsetSlot + byte + 1
+        // The mid-row spacer column was removed in the column-spacing rework
+        // (offsetSpacer + ascii spacer are both AX-hidden), so byte N maps
+        // uniformly to row.staticTexts.element(boundBy: byte+1) — no +1 shift
+        // past the midpoint anymore. cellsPerRow is unused now but kept for
+        // call-site source compatibility (a future bpc-aware variant might
+        // reintroduce visible separators between groups).
+        _ = cellsPerRow
+        return 1 + byte
     }
 
     /// Clicks an Edit-menu item (Cut / Copy / Paste / etc.). Existing tests use this
@@ -2117,6 +2219,7 @@ func testContextMenuCommands() throws {
         // The plugin's empty-document status path emits "Current document is empty."
         XCTAssertTrue(waitForStatus(in: app, contains: "empty", timeout: 8),
                       "0-byte fixture should report the empty-document status.")
+        captureToDashboard("diag-emptyFile-status")
     }
 
     func testLargeFile_OneByteShowsSingleByte() throws {
@@ -2162,6 +2265,7 @@ func testContextMenuCommands() throws {
                       "Fixture 1 byte past PREVIEW_LIMIT must show the truncation banner. Actual: '\(currentStatusText(in: app))'")
         XCTAssertTrue(waitForStatus(in: app, contains: "1048576 of 1048577", timeout: 5),
                       "Truncation banner should name both the displayed size (1 MiB) and the file's true size. Actual: '\(currentStatusText(in: app))'")
+        captureToDashboard("diag-largeFile-truncationBanner")
     }
 
     func testLargeFile_GotoOffsetFarIntoFile() throws {
@@ -2185,6 +2289,7 @@ func testContextMenuCommands() throws {
         let cursor = HexCursorState.read(from: app)
         XCTAssertEqual(cursor?.offset, 999000,
                        "Goto must land precisely at offset 999000 in a multi-MB file.")
+        captureToDashboard("diag-largeFile-gotoFarOffset")
     }
 
     func testLargeFile_HundredMBLoadsAndTruncates() throws {
@@ -2210,6 +2315,142 @@ func testContextMenuCommands() throws {
                       "limit-edge behaviour; the 1.5 MB Goto test exercises the truncated-buffer " +
                       "navigation path. Process-crash detection at extreme size is supplied by " +
                       "XCTest itself (any sub-process exit during a test fails the test).")
+    }
+
+    // MARK: - Wide content / horizontal scroll
+    //
+    // The hex pane's rootView fills the host's editor view (whatever NPP allocates).
+    // When the column-width sum exceeds the editor view's width, a horizontal scroll
+    // bar appears at the bottom of the scroll view. Two layout invariants must hold
+    // regardless of horizontal-scroll state:
+    //   (a) the status label sits flush with the top of the hex pane — no "dark band"
+    //       between NPP's tab bar and our status row.
+    //   (b) the column header row sits immediately below the status — no displacement.
+    // These two guards regression-protect the bugs fixed in this same change.
+
+    func testWideContent_HorizontalScrollAppearsWithoutDarkBand() throws {
+        // 32-Bit cells (each cell holds 4 bytes ⇒ 8 hex digits per cell) plus
+        // 16 columns plus a 16-digit address width pushes the column-width sum
+        // well beyond a typical NPP window width on the VM, forcing horizontal
+        // scrolling.
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: String(repeating: "A", count: 64))
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        // (1) Switch to 32-Bit cells via View in submenu.
+        hexTable.rightClick()
+        let viewIn1 = app.menuItems["View in"]
+        XCTAssertTrue(viewIn1.waitForExistence(timeout: 3))
+        viewIn1.click()
+        let bits32 = app.menuItems["32-Bit"]
+        XCTAssertTrue(bits32.waitForExistence(timeout: 3))
+        bits32.click()
+        Thread.sleep(forTimeInterval: 0.5)
+
+        // (2) Bump address width to its maximum (16) via the Address Width dialog.
+        hexTable.rightClick()
+        let addrItem = app.menuItems["Address Width..."]
+        XCTAssertTrue(addrItem.waitForExistence(timeout: 3))
+        addrItem.click()
+        let addrField = app.textFields["hex-editor.dialog.input"]
+        XCTAssertTrue(addrField.waitForExistence(timeout: 3))
+        addrField.replaceFieldText(with: "16")
+        app.buttons["OK"].firstMatch.click()
+        XCTAssertTrue(addrField.waitForNonExistence(timeout: 5),
+                      "Address Width dialog should dismiss after OK.")
+        Thread.sleep(forTimeInterval: 0.5)
+
+        // After the rebuild, the data row's offset should be 16 hex digits wide
+        // (sanity check that the address-width change actually took).
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 5))
+        let offsetCell = firstRow.staticTexts.element(boundBy: 0)
+        let predicate = NSPredicate(format: "value == %@", "0000000000000000")
+        wait(for: [expectation(for: predicate, evaluatedWith: offsetCell, handler: nil)], timeout: 5)
+
+        // (3) Layout invariant — column header row sits directly below the
+        // status row. The "dark band" Bug 1 made this gap balloon to ~50pt;
+        // a healthy layout keeps it well under 10pt. Verifying the gap rather
+        // than absolute positions sidesteps the fact that the hex root
+        // container is a plain NSView and not directly XCUI-queryable by
+        // accessibility identifier.
+        let statusLabel = app.staticTexts[AXID.status]
+        XCTAssertTrue(statusLabel.waitForExistence(timeout: 3))
+        let offsetHeader = hexTable.descendants(matching: .button)
+            .matching(NSPredicate(format: "title == %@", "Offset")).firstMatch
+        XCTAssertTrue(offsetHeader.waitForExistence(timeout: 3),
+                      "'Offset' column header should be reachable via AX.")
+        let headerToStatusGap = offsetHeader.frame.minY - statusLabel.frame.maxY
+        XCTAssertLessThan(headerToStatusGap, 10,
+                          "Header row should sit directly below status (≤ 10pt gap); got \(headerToStatusGap)pt — Bug 1 regression.")
+
+        // (4) Cell-column headers render legibly (Bug 2 regression guard). With
+        // 16 cell columns and 32-bit width, headers are "00", "04", ..., "3c".
+        // Sample one — its title must come back as the literal string, not
+        // truncated/dashed.
+        let cell00Header = hexTable.descendants(matching: .button)
+            .matching(NSPredicate(format: "title == %@", "00")).firstMatch
+        XCTAssertTrue(cell00Header.exists,
+                      "Cell-column header '00' should be present and unellipsized.")
+
+        // (6) Visual evidence for the dashboard.
+        captureToDashboard("test-wideContent-horizontalScroll")
+    }
+
+    func testWideContent_AddressWidth16Plus64BitCells() throws {
+        // Same intent as above, but uses the wider 64-Bit cell mode (8 bytes per
+        // cell ⇒ 16 hex digits per cell). Reaches a much wider column-width sum
+        // (~1.9k pt) than the 32-Bit test, guaranteeing horizontal scroll on any
+        // reasonable window. Different bit-width path through the column rebuild
+        // logic — separate test so a regression that only affects one path is
+        // still caught.
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: String(repeating: "Z", count: 128))
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        // 64-Bit cells.
+        hexTable.rightClick()
+        let viewIn2 = app.menuItems["View in"]
+        XCTAssertTrue(viewIn2.waitForExistence(timeout: 3))
+        viewIn2.click()
+        let bits64 = app.menuItems["64-Bit"]
+        XCTAssertTrue(bits64.waitForExistence(timeout: 3))
+        bits64.click()
+        Thread.sleep(forTimeInterval: 0.5)
+
+        // Layout invariant — header row directly below status (no dark band).
+        let statusLabel = app.staticTexts[AXID.status]
+        XCTAssertTrue(statusLabel.waitForExistence(timeout: 3))
+        let offsetHeader = hexTable.descendants(matching: .button)
+            .matching(NSPredicate(format: "title == %@", "Offset")).firstMatch
+        XCTAssertTrue(offsetHeader.waitForExistence(timeout: 3))
+        let headerToStatusGap = offsetHeader.frame.minY - statusLabel.frame.maxY
+        XCTAssertLessThan(headerToStatusGap, 10,
+                          "Header row should sit directly below status in 64-Bit mode; got \(headerToStatusGap)pt — Bug 1 regression.")
+
+        // The first cell of the first row should report 16 hex digits (8 bytes).
+        // 'Z' = 0x5A so byte 0..7 = 5a 5a 5a 5a 5a 5a 5a 5a, with little/big-endian
+        // depending on default. Either way, the cell value is 16 chars long.
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 5))
+        let cell0 = firstRow.staticTexts.element(boundBy: 1)   // byte cell 0 = boundBy:1
+        let cell0Value = (cell0.value as? String) ?? ""
+        XCTAssertEqual(cell0Value.count, 16,
+                       "64-Bit cell should display 16 hex digits; got '\(cell0Value)' (\(cell0Value.count) chars).")
+
+        captureToDashboard("test-wideContent-64BitHorizontalScroll")
     }
 
     private func positionHexCursorAt(app: XCUIApplication, hexTable: XCUIElement, offset: Int) throws {

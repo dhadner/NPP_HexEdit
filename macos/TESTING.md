@@ -80,21 +80,70 @@ The macOS port should use Scintilla as the source of truth for document bytes an
 
 Host-level UI automation uses an XcodeGen-generated `.xcodeproj` under `macos/ui-tests-xcode/`. SwiftPM XCTest packages cannot host `XCUIApplication` (it requires a UI test bundle, not a unit test bundle), so we use a real Xcode project with a minimal stub runner app and a `bundle.ui-testing` test target. `project.yml` is checked in; the generated `.xcodeproj` is gitignored and rebuilt on demand.
 
-Set `NPP_MACOS_APP=/path/to/Notepad++.app` to test a specific host build. If unset, the tests default to the sibling checkout at `../notepad-plus-plus-macos/build/Notepad++.app`.
+UI tests run inside a Parallels VM, **not** on the host. XCUITest synthesizes events through Window Server and locks the active session's keyboard/mouse for the duration of the run — having that happen on the host machine you're typing on is unworkable. The VM is one-time set up via `macos/scripts/vm-bootstrap.sh`; thereafter all runs go through the host-side wrapper described next.
 
-Run directly:
+### Running UI tests
 
-```sh
-macos/ui-tests-xcode/run-tests.sh
-```
-
-Run through CTest:
+One command, from the host:
 
 ```sh
-ctest --test-dir macos/build-universal -L xctest --output-on-failure
+macos/scripts/test-ui.sh                          # all UI tests
+macos/scripts/test-ui.sh testFooBar               # a single test by name
+macos/scripts/test-ui.sh testFoo testBar testBaz  # a subset
+macos/scripts/test-ui.sh --list                   # enumerate all test names
+macos/scripts/test-ui.sh --failed                 # re-run only last run's failures
+macos/scripts/test-ui.sh --clean                  # also wipe Xcode DerivedData on VM
+macos/scripts/test-ui.sh --re-bootstrap           # repair a broken VM env
+macos/scripts/test-ui.sh --dashboard              # open dashboard.html in browser
 ```
 
-Current XCTest coverage:
+The wrapper SSHes to the VM (`npp-vm`), syncs the source tree and Notepad++.app to VM-local paths (Parallels' shared-folder protocol caches reads aggressively, so we work from a checksum-synced mirror), runs the tests, and copies the results back. After the run it also rebuilds + installs the host's `HexEditor.dylib` from the same source so your own Notepad++ matches whatever the VM just tested (restart Notepad++ to load the new dylib). If the host build directory hasn't been configured yet, that step is skipped with a hint to run `cmake -S macos -B macos/build` once. After the run, three artefacts land at stable paths under [macos/ui-tests-xcode/build/](ui-tests-xcode/build/):
+
+- `dashboard.html` — human-readable dashboard. Per-test status and last 20 runs. Open with `test-ui.sh --dashboard`.
+- `dashboard.md` — same content, Markdown.
+- `test-results.md` — detailed result of the most recent run only.
+- `run-history.json` — accumulated history (read by the dashboard generator).
+
+### Adding a UI test
+
+Edit [macos/ui-tests-xcode/Tests/HexEditorUITests.swift](ui-tests-xcode/Tests/HexEditorUITests.swift). Any function whose name begins with `func test` is automatically picked up by `xcodebuild`, by `--list`, by the dashboard's "All tests" section, and by the canonical source list. Save and run — no other registration needed.
+
+Conventions:
+
+- Name tests after the user-visible behavior (`testHexBookmarkClickPath`), not the implementation (`testTableViewBookmarkColumnZeroClick`).
+- Use the helpers at the top of the file (`launchNotepad`, `createBufferWithText`, `invokeHexEditorMenu`) rather than open-coding XCUI sequences — see "Patterns the harness depends on" below.
+- Read the structural diagnostic via `HexCursorState.read(from: app)` rather than scraping AX values one at a time. New diagnostic fields go through that struct.
+
+### Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| `Cannot reach VM at host alias 'npp-vm'` | Start the VM in Parallels; verify `ssh npp-vm true` works manually. |
+| `error: env file references ephemeral path` | An old buggy bootstrap captured a `/dev/fd/N` path. Run `test-ui.sh --re-bootstrap`. |
+| `error: Notepad++.app not found` | Build Notepad++ macOS on the host first. The wrapper rsyncs the build product to the VM. |
+| Dashboard shows tests "—" (never run) | Those tests are in the source but haven't run since `run-history.json` was started. Run them once. |
+| Run hangs at "Timed out while enabling automation mode" | Runner's TCC Accessibility grant was revoked (e.g. by `--clean`). Re-grant on the VM: System Settings → Privacy & Security → Accessibility → enable `HexEditorUITests-Runner`. |
+| Stale-bytes problems (test asserts old behavior despite fresh source) | Should be impossible after the rsync change. If it happens, `test-ui.sh --clean` forces a from-scratch xcodebuild. |
+| Host's Notepad++ shows old plugin behavior after a code edit | Restart Notepad++ on the host. `test-ui.sh` rebuilds + installs the host plugin after every run, but macOS doesn't hot-reload dylibs in a running app. |
+
+### Direct invocation (rarely needed)
+
+If you must run from the VM directly without the host wrapper:
+
+```sh
+ssh npp-vm bash -lc '~/vm-test-local.sh'                          # full suite
+ssh npp-vm bash -lc '~/vm-test-local.sh -only-testing:HexEditorUITests/HexEditorUITests/testFoo'
+```
+
+Or via CTest on the VM (label `xctest`):
+
+```sh
+ssh npp-vm bash -lc 'ctest --test-dir ~/build-NPP_HexEdit -L xctest --output-on-failure'
+```
+
+`NPP_MACOS_APP=/path/to/Notepad++.app` overrides the default app location if you're testing a specific host build outside the standard sibling layout.
+
+### Current XCTest coverage
 
 - `testHostApplicationLaunches` — launches Notepad++ macOS via `XCUIApplication(url:)` and waits for foreground.
 - `testHexEditorPluginMenuIsPresent` — asserts the `HexEditor` submenu under `Plugins`.

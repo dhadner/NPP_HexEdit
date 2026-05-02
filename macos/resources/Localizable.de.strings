@@ -173,11 +173,15 @@
 "patternReplace.messageRect"         = "Aktuelles %1$lu × %2$lu Rechteck mit einem sich wiederholenden Hex-Muster füllen.\nDas Muster beginnt am ersten Byte jeder Zeile neu.\n\nMuster: nur Hex-Bytes (z. B. 0xFF oder DE AD).";
 "patternReplace.summaryRect"         = "%1$lu × %2$lu Rechteck (%3$lu Bytes) mit dem Muster gefüllt.";
 
+/* Hilfe-Popover (gemeinsam) */
+"help.button.axLabel"              = "Hilfe";
+
 /* Einstellungsdialog (Plugins > HexEditor > Einstellungen...) */
 "options.title"                    = "HexEditor-Einstellungen";
 "options.message"                  = "Plugin-weite Einstellungen. „Standardwerte zurücksetzen“ stellt die unten angezeigten Vorgaben wieder her; klicken Sie auf „Speichern“, um die Änderung zu übernehmen.";
-"options.button.save"              = "Speichern";
+"options.button.apply"             = "Anwenden";
 "options.button.reset"             = "Standardwerte zurücksetzen";
 "options.rectModifier.label"       = "Modifikatortaste für rechteckige (Block-)Auswahl beim Ziehen:";
-"options.rectModifier.option"      = "Wahltaste (entspricht Scintilla / Windows-Hex-Editor)";
+"options.rectModifier.option"      = "Wahltaste (Standard; entspricht dem Windows-HexEditor-Plugin)";
 "options.rectModifier.shiftOption" = "Umschalt+Wahltaste (entspricht VS Code)";
+"options.rectModifier.help"        = "Wenn Sie im Hex- oder ASCII-Bereich ziehen, verwandelt das Halten dieser Modifikatortaste den Zug in eine rechteckige (Block-)Auswahl — dieselbe Auswahlart, die Hex-Editoren und Spaltenmodus-Texteditoren verwenden.\n\nDie Wahltaste ist der Standard — sie entspricht dem Windows-HexEditor-Plugin und der üblichen macOS-Konvention für Spaltenauswahl. Wählen Sie Umschalt+Wahltaste, wenn Ihre Gewohnheit aus Visual Studio Code kommt.";

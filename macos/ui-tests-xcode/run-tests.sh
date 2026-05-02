@@ -47,6 +47,17 @@ fi
 # NPP_HEXEDIT_FIXTURES_DIR to locate the fixture files at runtime.
 export TEST_RUNNER_NPP_HEXEDIT_FIXTURES_DIR="$FIXTURES_DIR"
 
+# Tests that call captureToDashboard(name) write PNG screenshots into their
+# XCUITest runner's App Sandbox container (see helper docs in
+# Tests/HexEditorUITests.swift for why arbitrary paths don't work). After the
+# xcodebuild test pass completes, we sweep the container's
+# captureToDashboard-screenshots/ directory and copy the PNGs into the public
+# build/screenshots dir, where update-dashboard.py picks them up. Cleared at
+# the start of each run so stale screenshots don't accumulate.
+SCREENSHOT_DIR="$SCRIPT_DIR/build/screenshots"
+rm -rf "$SCREENSHOT_DIR"
+mkdir -p "$SCREENSHOT_DIR"
+
 XCRESULT="build/HexEditorUITests.xcresult"
 SUMMARY_MD="build/test-results.md"
 
@@ -76,6 +87,26 @@ if [[ -d "$XCRESULT" ]]; then
     fi
 else
     echo "warning: no .xcresult bundle produced (build may have failed before tests ran)" >&2
+fi
+
+# Extract screenshots from the runner's App Sandbox container into the public
+# screenshots dir. The runner ID looks like
+# org.notepadplusplus.hexeditor.uitests.xctrunner; we glob across containers
+# to be robust to renames. nullglob means the loop is a no-op when no test
+# wrote any screenshots.
+shopt -s nullglob
+shot_count=0
+for src_dir in "$HOME/Library/Containers/"*"/Data/captureToDashboard-screenshots"; do
+    [[ -d "$src_dir" ]] || continue
+    for png in "$src_dir"/*.png; do
+        [[ -f "$png" ]] || continue
+        cp "$png" "$SCREENSHOT_DIR/"
+        shot_count=$((shot_count + 1))
+    done
+done
+shopt -u nullglob
+if [[ $shot_count -gt 0 ]]; then
+    echo "==> Extracted $shot_count screenshot(s) → $SCREENSHOT_DIR"
 fi
 
 exit "$XCB_EXIT"
