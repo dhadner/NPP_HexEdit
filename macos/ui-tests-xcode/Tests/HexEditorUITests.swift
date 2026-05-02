@@ -37,6 +37,10 @@ private struct HexCursorState {
     /// Source pane the rectangular drag originated in: "Hex" or "Ascii". Used by
     /// paste-matrix tests to confirm the source-pane tag survives the round-trip.
     let rectOriginPane: String?
+    /// 1 iff every column's headerCell.alignment equals its dataCell.alignment.
+    /// 0 means at least one column will look visually unbalanced — header text
+    /// left-justified above centered data, or vice versa.
+    let hdrAlignMatch: Int?
 
     /// Compact dump of all fields for failure messages.
     var debugDescription: String {
@@ -79,7 +83,8 @@ private struct HexCursorState {
             rectWidth: fields["rectWidth"].flatMap({ Int($0) }),
             rectHeight: fields["rectHeight"].flatMap({ Int($0) }),
             rectBpr: fields["rectBpr"].flatMap({ Int($0) }),
-            rectOriginPane: fields["rectOriginPane"]
+            rectOriginPane: fields["rectOriginPane"],
+            hdrAlignMatch: fields["hdrAlignMatch"].flatMap({ Int($0) })
         )
     }
 }
@@ -430,8 +435,8 @@ func testStatusLabelReportsByteCount() throws {
         XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
 
         // The hex table exposes each row's cells as a flat list of NSStaticText elements
-        // ordered: offset, byte00..byte07, midspacer, byte08..byte15, ascii spacer, ascii.
-        // Spacer cells have no AXValue. Index 0 is the offset, index 1 is byte 0, etc.
+        // ordered: offset, byte00..byte15, ascii spacer, ascii. The ascii spacer carries
+        // no AXValue. Index 0 is the offset, index 1 is byte 0, ..., index 16 is byte 15.
         let firstRow = hexTable.tableRows.element(boundBy: 0)
         XCTAssertTrue(firstRow.waitForExistence(timeout: 5))
 
@@ -444,6 +449,155 @@ func testStatusLabelReportsByteCount() throws {
         XCTAssertEqual(byte0.value as? String, "41", "Byte 0 should display 41 ('A' = 0x41).")
         XCTAssertEqual(byte1.value as? String, "42", "Byte 1 should display 42 ('B' = 0x42).")
         XCTAssertEqual(byte2.value as? String, "43", "Byte 2 should display 43 ('C' = 0x43).")
+    }
+
+    func testColumnHeadersAreNotEllipsizedAtDefaultWidth() throws {
+        // AX returns each column header's full title even when NSTableHeaderCell has
+        // ellipsized it visually to "...", so a value-equality assertion can't catch
+        // header truncation. This test reads each header's actual rendered width and
+        // compares it against NSTableHeaderCell's *own* cellSize for the same title —
+        // i.e., the exact width AppKit needs to render the title without truncation
+        // or right-edge pixel clipping. Same source of truth as the prod fix in
+        // HexEditor.mm, so the assertion catches anything the user would see.
+
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "ABCDEFGHIJKLMNOP")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        // NSTableView exposes each column-header cell as an AX button child of the table.
+        let headerButtons = hexTable.descendants(matching: .button).allElementsBoundByIndex
+        XCTAssertGreaterThan(headerButtons.count, 0,
+                             "Hex table should expose column-header buttons via accessibility.")
+
+        // The exact-measurement probe: ask NSTableHeaderCell what width IT thinks it
+        // needs for each title. cellSize includes the cell's own insets and the
+        // proportional small-system header font's glyph metrics — no estimates, no
+        // hand-tuned padding constants. Reused for every header so we're not paying
+        // an alloc per column.
+        let probe = NSTableHeaderCell()
+
+        // Default 16-byte rows + 8-bit cells: expect "Offset", per-cell hex column
+        // indices ("00".."0f", lowercase per the %02zx format string), and "ASCII".
+        // Spacer columns carry no title and are skipped. Sanity-check that the
+        // localized labels we're asserting on are actually present in the AX tree
+        // (defends against a rename that would silently skip those columns).
+        let expectedTitles: Set<String> = ["Offset", "ASCII", "00", "0f"]
+        var seenTitles: Set<String> = []
+        var inspected = 0
+        for header in headerButtons {
+            // NSTableHeaderCell publishes its title to AX via NSAccessibilityTitleAttribute,
+            // which XCUIElement exposes as `.title`. (`.label` and `.value` come back empty
+            // for these elements, so don't be tempted to use them.)
+            let title = header.title
+            if title.isEmpty { continue }   // spacer columns
+            seenTitles.insert(title)
+            probe.stringValue = title
+            let needed = ceil(probe.cellSize.width)
+            let actual = header.frame.width
+            XCTAssertGreaterThanOrEqual(actual, needed,
+                "Column header '\(title)' width=\(actual)pt is narrower than NSTableHeaderCell's own cellSize (\(needed)pt). The title will visually clip at the right edge or ellipsize to '...'.")
+            inspected += 1
+        }
+        XCTAssertGreaterThan(inspected, 0,
+                             "Test should have inspected at least one non-empty column header.")
+        let missing = expectedTitles.subtracting(seenTitles)
+        XCTAssertTrue(missing.isEmpty,
+                      "Expected to see column headers \(expectedTitles) but missed \(missing). Saw: \(seenTitles).")
+
+        // Header text must use the same alignment as the data text in the same column —
+        // otherwise centered byte values "41 42 43..." sit under left-justified column-
+        // index headers ("00", "01", ...) and the table looks unbalanced. AX doesn't
+        // expose alignment per cell, so the plugin's diagnostic AX value reports a
+        // single boolean: 1 iff every column's header.alignment == dataCell.alignment.
+        guard let state = HexCursorState.read(from: app) else {
+            XCTFail("Could not read HexCursorState diagnostic.")
+            return
+        }
+        XCTAssertEqual(state.hdrAlignMatch, 1,
+                       "At least one column has a header alignment that doesn't match its data alignment — table will look visually unbalanced (e.g. left-aligned '00' headers above centered '41' data).")
+    }
+
+    func testHexColumnSpacingIsUniformAndPanesAreVisuallySeparated() throws {
+        // Three structural assertions on column geometry:
+        //   1. All 16 hex cell columns have the same width.
+        //   2. The horizontal spacing between adjacent cell columns is uniform — no
+        //      mid-row gap (the old "midspacer" column we removed used to insert ~5pt
+        //      between byte 7 and byte 8, breaking the uniform rhythm).
+        //   3. There is a visible gap *both* between offset↔byte00 (offset trailing pad)
+        //      and between byte15↔ASCII (separator column). Without these gaps the
+        //      address pane reads as glued to the hex pane.
+        // Reads frames directly from the AX header buttons exposed by NSTableView, so
+        // the geometry assertions don't depend on the data cells being non-empty.
+
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "ABCDEFGHIJKLMNOP")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        // Map title → frame for every non-empty header. Titles "00".."0f" are the cell
+        // columns; "Offset" and "ASCII" are the panes flanking them. Spacer columns
+        // carry an empty title and are skipped — but they still take up x-space, so
+        // they show up implicitly in the gaps we measure between named columns.
+        var framesByTitle: [String: CGRect] = [:]
+        for header in hexTable.descendants(matching: .button).allElementsBoundByIndex {
+            let title = header.title
+            if title.isEmpty { continue }
+            framesByTitle[title] = header.frame
+        }
+
+        // (1) Cell-column widths uniform. Assert max - min < 0.5pt — i.e. the only
+        // possible variance is sub-pixel rounding inside a single ceil() call.
+        let cellTitles = (0..<16).map { String(format: "%02x", $0) }
+        let cellFrames = cellTitles.compactMap { framesByTitle[$0] }
+        XCTAssertEqual(cellFrames.count, 16,
+                       "Expected all 16 cell-column headers (00..0f) but only saw: \(cellTitles.filter { framesByTitle[$0] != nil }).")
+        let widths = cellFrames.map { $0.width }
+        if let minW = widths.min(), let maxW = widths.max() {
+            XCTAssertLessThan(maxW - minW, 0.5,
+                              "Cell column widths should be uniform; got min=\(minW)pt max=\(maxW)pt across 16 columns.")
+        }
+
+        // (2) Adjacent cell-column spacing uniform (no mid-row gap). Sort by minX,
+        // measure the x-stride between consecutive columns; max - min should be near
+        // zero. The old midspacer would have made stride[7→8] ~5pt larger than the
+        // others — this assertion would have failed in that world.
+        let sortedCells = cellFrames.sorted { $0.minX < $1.minX }
+        let strides = zip(sortedCells.dropLast(), sortedCells.dropFirst()).map { $1.minX - $0.minX }
+        if let minS = strides.min(), let maxS = strides.max() {
+            XCTAssertLessThan(maxS - minS, 0.5,
+                              "Cell-column x-strides should be uniform across all 15 adjacent pairs; got min=\(minS)pt max=\(maxS)pt. A mid-row gap (e.g. between byte 7 and byte 8) would surface here.")
+        }
+
+        // (3) Visible gaps between panes. The offset→byte00 gap is the offset column's
+        // trailing padding (one glyph width). The byte15→ASCII gap is the spacer
+        // column (half a glyph width). Both should be at minimum a couple of points
+        // at the default font size — assert > 2pt to catch a regression where the
+        // helpers return zero. (Tighter bounds are font-dependent and would be
+        // brittle; "more than nothing" is the structural property we care about.)
+        guard let offsetFrame = framesByTitle["Offset"],
+              let asciiFrame  = framesByTitle["ASCII"],
+              let firstCell   = sortedCells.first,
+              let lastCell    = sortedCells.last else {
+            XCTFail("Could not locate Offset / ASCII / first / last cell column header frames. Saw: \(framesByTitle.keys.sorted()).")
+            return
+        }
+        let offsetToFirst = firstCell.minX - offsetFrame.maxX
+        let lastToAscii   = asciiFrame.minX - lastCell.maxX
+        XCTAssertGreaterThan(offsetToFirst, 2.0,
+                             "Address pane and hex pane are glued together — offset.maxX→byte00.minX gap is only \(offsetToFirst)pt. Expected the offset column's trailing padding to leave > 2pt.")
+        XCTAssertGreaterThan(lastToAscii, 2.0,
+                             "Hex pane and ASCII pane have no separator — byte15.maxX→ASCII.minX gap is only \(lastToAscii)pt. Expected the ascii spacer column to leave > 2pt.")
     }
 
     func testHexBookmarkClickPath() throws {

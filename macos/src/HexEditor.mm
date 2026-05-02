@@ -400,8 +400,11 @@ static const CGFloat HEX_TABLE_HEIGHT = 640.0;
 static const CGFloat HEX_STATUS_HEIGHT = 24.0;
 static const CGFloat HEX_FALLBACK_FONT_SIZE = 10.0;
 static const CGFloat HEX_CELL_HORIZONTAL_PADDING = 2.0;
-static const CGFloat HEX_MID_BYTE_SEPARATOR_WIDTH = 5.0;
-static const CGFloat HEX_ASCII_SEPARATOR_WIDTH = 8.0;
+// Inter-pane gaps are derived from the current font's monospaced glyph width so
+// they scale with pinch-zoom — fixed-pt values would look generous at small font
+// sizes and disappear at large ones. See offsetTrailingPadding / asciiSeparatorWidth.
+static const CGFloat HEX_OFFSET_TRAILING_GLYPHS = 1.0;
+static const CGFloat HEX_ASCII_SEPARATOR_GLYPHS = 0.5;
 static const CGFloat HEX_MIN_FONT_SIZE = 6.0;
 static const CGFloat HEX_MAX_FONT_SIZE = 32.0;
 static const CGFloat HEX_CARET_WIDTH = 2.0;
@@ -832,10 +835,30 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
     // the user changes columns). rectOriginPane is "Hex" / "Ascii" so tests can confirm
     // the source-pane tag will travel through to the clipboard.
     NSString *rectOriginPane = (g_rectOriginField == HexCursorField::Ascii) ? @"Ascii" : @"Hex";
+    // Header-vs-data alignment match. Set to 1 iff every column's headerCell.alignment
+    // equals its dataCell.alignment. The XCUI test asserts this — covers the visual
+    // "centered data with left-aligned header" imbalance bug. 0 means at least one
+    // column will look unbalanced; the testfailure shouldn't need to dig into which.
+    int headerAlignsMatchData = 1;
+    if (hexTableView != nil) {
+        for (NSTableColumn *col in hexTableView.tableColumns) {
+            id dc = col.dataCell;
+            id hc = col.headerCell;
+            if (![dc respondsToSelector:@selector(alignment)] ||
+                ![hc respondsToSelector:@selector(alignment)]) {
+                continue;
+            }
+            if ([dc alignment] != [hc alignment]) {
+                headerAlignsMatchData = 0;
+                break;
+            }
+        }
+    }
     return [NSString stringWithFormat:
             @"offset=%zu;selStart=%zu;selEnd=%zu;hasSelection=%d;statusH=%.1f;statusFontH=%.1f"
             @";sciSelStart=%lld;sciSelEnd=%lld;sciCaret=%lld;preferredLanguages=%@;userPrefs=%@"
-            @";rectActive=%d;rectOrigin=%zu;rectWidth=%zu;rectHeight=%zu;rectBpr=%zu;rectOriginPane=%@",
+            @";rectActive=%d;rectOrigin=%zu;rectWidth=%zu;rectHeight=%zu;rectBpr=%zu;rectOriginPane=%@"
+            @";hdrAlignMatch=%d",
             activeByteOffset, selectedByteStart, selectedByteEnd,
             (selectedByteEnd > selectedByteStart) ? 1 : 0,
             statusFrameHeight, statusFontLineHeight,
@@ -849,7 +872,8 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
             g_rectSelection.width,
             g_rectSelection.height,
             g_rectSelection.bytesPerRow,
-            rectOriginPane];
+            rectOriginPane,
+            headerAlignsMatchData];
 }
 @end
 
@@ -949,7 +973,7 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
         return [NSString stringWithUTF8String:ascii.c_str()];
     }
 
-    if ([identifier isEqualToString:@"midspacer"] || [identifier isEqualToString:@"spacer"]) {
+    if ([identifier isEqualToString:@"spacer"]) {
         return @"";
     }
 
@@ -1996,13 +2020,56 @@ static CGFloat paddedTextWidth(NSString *text, NSFont *font)
     return textWidth(text, font) + HEX_CELL_HORIZONTAL_PADDING;
 }
 
+// Width an NSTableHeaderCell needs to render `title` without ellipsizing — text in
+// the header font plus the cell's own internal insets. Using NSTableHeaderCell.cellSize
+// (rather than a hand-picked padding constant) means the column is exactly as wide as
+// macOS's own header rendering needs, no more.
+static CGFloat headerCellNaturalWidth(NSString *title)
+{
+    static NSTableHeaderCell *probe = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        probe = [[NSTableHeaderCell alloc] init];
+    });
+    probe.stringValue = title;
+    return ceil([probe cellSize].width);
+}
+
+// Widest cell-column header across all 256 possible "%02zx" indices ("00".."ff").
+// Per-glyph metrics make "00" the widest in some fonts, "04" or "ee" in others —
+// measure them all and take the real max so the cell width is right for every
+// rendered title regardless of font / locale / bytesPerRow.
+static CGFloat widestHexHeaderWidth()
+{
+    CGFloat maxWidth = 0.0;
+    for (int i = 0; i < 256; ++i) {
+        NSString *candidate = [NSString stringWithFormat:@"%02x", i];
+        maxWidth = std::max(maxWidth, headerCellNaturalWidth(candidate));
+    }
+    return maxWidth;
+}
+
+// Trailing whitespace inside the offset column so the address pane visually
+// separates from the first hex byte. Glyph-width-relative so the gap stays
+// proportional under pinch-zoom.
+static CGFloat offsetTrailingPadding(NSFont *font)
+{
+    return ceil(monospacedGlyphWidth(font) * HEX_OFFSET_TRAILING_GLYPHS);
+}
+
+// Width of the spacer column between the last hex cell and the ASCII pane.
+// Glyph-width-relative for the same scaling reason.
+static CGFloat asciiSeparatorWidth(NSFont *font)
+{
+    return ceil(monospacedGlyphWidth(font) * HEX_ASCII_SEPARATOR_GLYPHS);
+}
+
 static CGFloat offsetColumnWidth(NSFont *font)
 {
     const int width = std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH);
     NSString *sample = [@"" stringByPaddingToLength:static_cast<NSUInteger>(width) withString:@"0" startingAtIndex:0];
-    // Measure against the localized header so wider translations (e.g. a future
-    // "Adresse" / "Adresák" in some language) don't clip.
-    return std::max(paddedTextWidth(sample, font), paddedTextWidth(L(@"table.header.offset"), font));
+    const CGFloat content = std::max(paddedTextWidth(sample, font), headerCellNaturalWidth(L(@"table.header.offset")));
+    return content + offsetTrailingPadding(font);
 }
 
 static CGFloat cellColumnWidth(NSFont *font, const hexedit::ViewMode &mode)
@@ -2011,7 +2078,9 @@ static CGFloat cellColumnWidth(NSFont *font, const hexedit::ViewMode &mode)
     NSString *sample = [@"" stringByPaddingToLength:static_cast<NSUInteger>(std::max(digits, 1))
                                           withString:@"0"
                                      startingAtIndex:0];
-    return std::max(paddedTextWidth(sample, font), paddedTextWidth(@"0F", font));
+    return std::max({paddedTextWidth(sample, font),
+                     paddedTextWidth(@"0F", font),
+                     widestHexHeaderWidth()});
 }
 
 static CGFloat cellGlyphLeft(NSTableView *tableView, NSInteger column, NSInteger row, NSFont *font)
@@ -2027,14 +2096,14 @@ static CGFloat asciiColumnWidth(NSFont *font)
 {
     const int bpr = std::max(currentBytesPerRow(), 1);
     NSString *sample = [@"" stringByPaddingToLength:static_cast<NSUInteger>(bpr) withString:@"." startingAtIndex:0];
-    return std::max(paddedTextWidth(sample, font), paddedTextWidth(L(@"table.header.ascii"), font));
+    return std::max(paddedTextWidth(sample, font), headerCellNaturalWidth(L(@"table.header.ascii")));
 }
 
 static CGFloat tableContentWidth(NSFont *font)
 {
     const hexedit::ViewMode mode = currentViewMode();
     const int cells = std::max(currentCellsPerRow(), 1);
-    return offsetColumnWidth(font) + (static_cast<CGFloat>(cells) * cellColumnWidth(font, mode)) + HEX_MID_BYTE_SEPARATOR_WIDTH + HEX_ASCII_SEPARATOR_WIDTH + asciiColumnWidth(font);
+    return offsetColumnWidth(font) + (static_cast<CGFloat>(cells) * cellColumnWidth(font, mode)) + asciiSeparatorWidth(font) + asciiColumnWidth(font);
 }
 
 static CGFloat tableContainerWidth(NSFont *font)
@@ -3970,11 +4039,19 @@ static void configureTableColumn(NSTableView *tableView, NSString *identifier, N
     column.minWidth = width;
     column.resizingMask = NSTableColumnNoResizing;
 
+    const NSTextAlignment alignment = [identifier hasPrefix:@"cell"] ? NSTextAlignmentCenter : NSTextAlignmentLeft;
+
     NSTextFieldCell *cell = [[NSTextFieldCell alloc] init];
     cell.font = font;
     cell.lineBreakMode = NSLineBreakByClipping;
-    cell.alignment = [identifier hasPrefix:@"cell"] ? NSTextAlignmentCenter : NSTextAlignmentLeft;
+    cell.alignment = alignment;
     column.dataCell = cell;
+
+    // Match the header's alignment to the data cell's so the column index ("00", "01",
+    // ...) sits visually centered above the centered byte values, and "Offset" / "ASCII"
+    // stay left-aligned over their left-aligned data. Default NSTableHeaderCell is
+    // always left-aligned, which looks unbalanced over the centered cell columns.
+    column.headerCell.alignment = alignment;
 
     [tableView addTableColumn:column];
 }
@@ -3984,7 +4061,6 @@ static void addHexCellColumns(NSTableView *table, NSFont *font)
     const hexedit::ViewMode mode = currentViewMode();
     const int cells = std::max(currentCellsPerRow(), 1);
     const CGFloat cellWidth = cellColumnWidth(font, mode);
-    const int midpoint = cells / 2;  // 8 for bpc=1, 4 for bpc=2, 2 for bpc=4, 1 for bpc=8
 
     configureTableColumn(table, @"offset", L(@"table.header.offset"), offsetColumnWidth(font), font);
     for (int column = 0; column < cells; ++column) {
@@ -3995,11 +4071,8 @@ static void addHexCellColumns(NSTableView *table, NSFont *font)
             [NSString stringWithFormat:@"%02zx", firstByte],
             cellWidth,
             font);
-        if (cells >= 2 && column == midpoint - 1) {
-            configureTableColumn(table, @"midspacer", @"", HEX_MID_BYTE_SEPARATOR_WIDTH, font);
-        }
     }
-    configureTableColumn(table, @"spacer", @"", HEX_ASCII_SEPARATOR_WIDTH, font);
+    configureTableColumn(table, @"spacer", @"", asciiSeparatorWidth(font), font);
     configureTableColumn(table, @"ascii", L(@"table.header.ascii"), asciiColumnWidth(font), font);
 }
 
@@ -4139,10 +4212,8 @@ static void applyHexTableLayout(NSTableView *table, NSTextField *statusLabel)
             width = offsetColumnWidth(font);
         } else if ([identifier isEqualToString:@"ascii"]) {
             width = asciiColumnWidth(font);
-        } else if ([identifier isEqualToString:@"midspacer"]) {
-            width = HEX_MID_BYTE_SEPARATOR_WIDTH;
         } else if ([identifier isEqualToString:@"spacer"]) {
-            width = HEX_ASCII_SEPARATOR_WIDTH;
+            width = asciiSeparatorWidth(font);
         } else {
             width = cellWidth;
         }
