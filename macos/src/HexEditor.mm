@@ -2339,6 +2339,37 @@ static CGFloat readEditorFontSize()
     return std::clamp(size, HEX_MIN_FONT_SIZE, HEX_MAX_FONT_SIZE);
 }
 
+// Concrete SciReader for the live host-side Scintilla. Buffer-shape logic is
+// in hexedit::readPreviewBuffer (HexCore) so it's exercised by ASan-instrumented
+// unit tests via a FakeScintilla that obeys the same SCI_GETTEXTRANGEFULL
+// contract. Anything that goes wrong with buffer sizing / NUL handling is
+// caught at <1 ms unit-test feedback rather than via the 25-minute UI suite.
+class LiveSciReader final : public hexedit::SciReader {
+public:
+    explicit LiveSciReader(NppHandle handle) : handle_(handle) {}
+
+    std::size_t documentLength() const override
+    {
+        if (!handle_) {
+            return 0;
+        }
+        const intptr_t length = sci(handle_, SCI_GETLENGTH);
+        return length > 0 ? static_cast<std::size_t>(length) : 0;
+    }
+
+    void readRange(std::size_t cpMin, std::size_t cpMax, char *dest) const override
+    {
+        Sci_TextRangeFull range = {};
+        range.chrg.cpMin = static_cast<Sci_Position>(cpMin);
+        range.chrg.cpMax = static_cast<Sci_Position>(cpMax);
+        range.lpstrText = dest;
+        sci(handle_, SCI_GETTEXTRANGEFULL, 0, reinterpret_cast<intptr_t>(&range));
+    }
+
+private:
+    NppHandle handle_ = 0;
+};
+
 static std::vector<uint8_t> readCurrentBuffer(size_t *totalLength)
 {
     NppHandle editor = previewScintillaHandle ? previewScintillaHandle : getCurrentScintilla();
@@ -2348,29 +2379,8 @@ static std::vector<uint8_t> readCurrentBuffer(size_t *totalLength)
         }
         return {};
     }
-
-    const intptr_t length = sci(editor, SCI_GETLENGTH);
-    if (length <= 0) {
-        if (totalLength) {
-            *totalLength = 0;
-        }
-        return {};
-    }
-
-    const size_t byteCount = static_cast<size_t>(length);
-    const size_t bytesToRead = std::min(byteCount, PREVIEW_LIMIT);
-    std::vector<uint8_t> bytes;
-    bytes.reserve(bytesToRead);
-
-    for (size_t offset = 0; offset < bytesToRead; ++offset) {
-        bytes.push_back(static_cast<uint8_t>(sci(editor, SCI_GETCHARAT, offset, 0) & 0xff));
-    }
-
-    if (totalLength) {
-        *totalLength = byteCount;
-    }
-
-    return bytes;
+    LiveSciReader reader(editor);
+    return hexedit::readPreviewBuffer(reader, PREVIEW_LIMIT, totalLength);
 }
 
 static NSInteger cellColumnIndex(NSString *identifier)

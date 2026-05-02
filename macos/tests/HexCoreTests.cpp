@@ -1602,6 +1602,122 @@ void testDecodeRectPayloadRejectsAttacks()
     }
 }
 
+// =============================================================================
+// readPreviewBuffer (SCI buffer-read abstraction)
+// =============================================================================
+//
+// Why this exists: HexEditor.mm's readCurrentBuffer used to send 1,048,576
+// SCI_GETCHARAT messages for a 1 MiB read (10+ s). The bulk SCI_GETTEXTRANGEFULL
+// fix introduced a one-byte heap-buffer-overflow because Scintilla writes a
+// trailing NUL at lpstrText[cpMax - cpMin] and the buffer was sized to exactly
+// (cpMax - cpMin). The bug went undetected by the unit + smoke tiers (those
+// don't talk to Scintilla) and only surfaced via flaky failures in the 22-min
+// UI suite — by which point fixing it cost a full re-run.
+//
+// FakeScintilla obeys the SCI_GETTEXTRANGEFULL contract — including writing
+// the NUL exactly where the real Scintilla does. The unit tests below allocate
+// a destination, call readPreviewBuffer, and let ASan's heap-buffer-overflow
+// detector catch any off-by-one in the buffer-shape code at <1 ms. Without
+// the +1 in HexCore.cpp's readPreviewBuffer, ASan flags the NUL write and
+// the test crashes with a clear stack trace.
+
+class FakeScintilla : public hexedit::SciReader {
+public:
+    explicit FakeScintilla(std::vector<std::uint8_t> doc) : document_(std::move(doc)) {}
+
+    std::size_t documentLength() const override { return document_.size(); }
+
+    void readRange(std::size_t cpMin, std::size_t cpMax, char *dest) const override
+    {
+        // Match Scintilla docs: copy cpMax-cpMin bytes from doc, then write a
+        // NUL at dest[cpMax-cpMin]. Caller must size for cpMax-cpMin+1.
+        const std::size_t copyMax = (cpMin <= document_.size()) ? document_.size() - cpMin : 0;
+        const std::size_t want = (cpMax > cpMin) ? cpMax - cpMin : 0;
+        const std::size_t take = (want < copyMax) ? want : copyMax;
+        if (take > 0) {
+            std::memcpy(dest, document_.data() + cpMin, take);
+        }
+        dest[want] = '\0';   // The byte that overran into the next allocation pre-fix.
+    }
+
+private:
+    std::vector<std::uint8_t> document_;
+};
+
+void testReadPreviewBuffer()
+{
+    g_currentSuite = "readPreviewBuffer";
+
+    // Empty document — returns empty vector, totalLength = 0.
+    {
+        FakeScintilla fake({});
+        std::size_t total = 999;
+        auto bytes = hexedit::readPreviewBuffer(fake, 1024, &total);
+        HEX_EXPECT_EQ(bytes.size(), static_cast<std::size_t>(0));
+        HEX_EXPECT_EQ(total, static_cast<std::size_t>(0));
+    }
+
+    // Document smaller than previewLimit — returns whole document.
+    {
+        FakeScintilla fake({0x41, 0x42, 0x43, 0x44, 0x45});
+        std::size_t total = 0;
+        auto bytes = hexedit::readPreviewBuffer(fake, 1024, &total);
+        HEX_EXPECT_EQ(bytes.size(), static_cast<std::size_t>(5));
+        HEX_EXPECT_EQ(total, static_cast<std::size_t>(5));
+        HEX_EXPECT_EQ(bytes[0], static_cast<std::uint8_t>(0x41));
+        HEX_EXPECT_EQ(bytes[4], static_cast<std::uint8_t>(0x45));
+    }
+
+    // Document exactly previewLimit — returns the full doc, no truncation flag.
+    // This is the smallest size that exercises the +1 NUL-slot allocation: if
+    // the buffer were sized to bytesToRead exactly, the NUL would write past
+    // the end and ASan trips.
+    {
+        std::vector<std::uint8_t> doc(1024, 0xAA);
+        FakeScintilla fake(doc);
+        std::size_t total = 0;
+        auto bytes = hexedit::readPreviewBuffer(fake, 1024, &total);
+        HEX_EXPECT_EQ(bytes.size(), static_cast<std::size_t>(1024));
+        HEX_EXPECT_EQ(total, static_cast<std::size_t>(1024));
+        HEX_EXPECT_EQ(bytes[0], static_cast<std::uint8_t>(0xAA));
+        HEX_EXPECT_EQ(bytes[1023], static_cast<std::uint8_t>(0xAA));
+    }
+
+    // Document one byte larger than previewLimit — returns previewLimit bytes,
+    // total reflects the full size.
+    {
+        std::vector<std::uint8_t> doc(1025, 0xBB);
+        FakeScintilla fake(doc);
+        std::size_t total = 0;
+        auto bytes = hexedit::readPreviewBuffer(fake, 1024, &total);
+        HEX_EXPECT_EQ(bytes.size(), static_cast<std::size_t>(1024));
+        HEX_EXPECT_EQ(total, static_cast<std::size_t>(1025));
+    }
+
+    // Document much larger than previewLimit — exercises a realistic 1 MiB path.
+    {
+        std::vector<std::uint8_t> doc(2 * 1024 * 1024, 0xCC);
+        // Sentinel-fill the first byte so we can verify we read from offset 0.
+        doc[0] = 0xDE;
+        doc[1] = 0xAD;
+        FakeScintilla fake(doc);
+        std::size_t total = 0;
+        auto bytes = hexedit::readPreviewBuffer(fake, 1024 * 1024, &total);
+        HEX_EXPECT_EQ(bytes.size(), static_cast<std::size_t>(1024 * 1024));
+        HEX_EXPECT_EQ(total, static_cast<std::size_t>(2 * 1024 * 1024));
+        HEX_EXPECT_EQ(bytes[0], static_cast<std::uint8_t>(0xDE));
+        HEX_EXPECT_EQ(bytes[1], static_cast<std::uint8_t>(0xAD));
+        HEX_EXPECT_EQ(bytes[1024 * 1024 - 1], static_cast<std::uint8_t>(0xCC));
+    }
+
+    // outTotalLength == nullptr is allowed (caller doesn't always need it).
+    {
+        FakeScintilla fake({0x01, 0x02});
+        auto bytes = hexedit::readPreviewBuffer(fake, 1024, nullptr);
+        HEX_EXPECT_EQ(bytes.size(), static_cast<std::size_t>(2));
+    }
+}
+
 }
 
 int main()
@@ -1640,9 +1756,10 @@ int main()
     testStripHexDumpAddressAndAscii();
     testParseHexClipboardTextFromDebuggerOutput();
     testParseRectClipboardTextFromDebuggerOutput();
+    testReadPreviewBuffer();
 
     if (g_failures == 0) {
-        std::printf("PASS: %d assertions across 34 suites\n", g_assertions);
+        std::printf("PASS: %d assertions across 35 suites\n", g_assertions);
         return 0;
     }
     std::printf("FAIL: %d/%d assertions failed\n", g_failures, g_assertions);

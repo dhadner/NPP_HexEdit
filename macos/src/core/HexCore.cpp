@@ -1383,4 +1383,33 @@ bool decodeRectPayload(const std::uint8_t *bytes, std::size_t length, RectPayloa
     return true;
 }
 
+// =============================================================================
+// readPreviewBuffer — SCI buffer-read abstraction
+// =============================================================================
+
+std::vector<std::uint8_t> readPreviewBuffer(const SciReader &reader,
+                                            std::size_t previewLimit,
+                                            std::size_t *outTotalLength)
+{
+    const std::size_t total = reader.documentLength();
+    if (outTotalLength != nullptr) {
+        *outTotalLength = total;
+    }
+    if (total == 0) {
+        return {};
+    }
+    const std::size_t bytesToRead = (total < previewLimit) ? total : previewLimit;
+
+    // Scintilla's SCI_GETTEXTRANGEFULL writes a trailing NUL at
+    // lpstrText[cpMax - cpMin], so the destination buffer must have room for
+    // bytesToRead + 1. Allocating exactly bytesToRead corrupts the heap by
+    // one byte and was the bug that motivated this entire abstraction —
+    // verified end-to-end: HexCoreTests's testReadPreviewBuffer (under ASan)
+    // aborts on the NUL write if you remove the `+ 1` here.
+    std::vector<std::uint8_t> bytes(bytesToRead + 1);
+    reader.readRange(0, bytesToRead, reinterpret_cast<char *>(bytes.data()));
+    bytes.resize(bytesToRead);   // drop the NUL slot from the returned size
+    return bytes;
+}
+
 }

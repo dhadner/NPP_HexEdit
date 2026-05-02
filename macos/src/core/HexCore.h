@@ -341,6 +341,47 @@ bool findBytePattern(const std::uint8_t *haystack,
 std::vector<bool> computeByteDiffs(const std::uint8_t *a, std::size_t lenA,
                                     const std::uint8_t *b, std::size_t lenB);
 
+// =============================================================================
+// SCI buffer-read abstraction (testable without Scintilla)
+// =============================================================================
+//
+// readPreviewBuffer() consolidates the buffer-shape logic that used to live
+// inline in HexEditor.mm's readCurrentBuffer():
+//
+//   1. Compute bytesToRead = min(scintillaLength, previewLimit).
+//   2. Allocate bytesToRead + 1 (Scintilla writes a trailing NUL terminator
+//      at lpstrText[bytesToRead] — skipping the +1 caused a heap-buffer-overflow
+//      that ASan would have caught had we exercised this path under ASan).
+//   3. Send SCI_GETTEXTRANGEFULL via the abstract reader.
+//   4. Resize the result back to bytesToRead (drop the NUL slot).
+//
+// SciReader is the abstraction. The real implementation lives in HexEditor.mm
+// and forwards to sci(editor, ...). A FakeScintilla implementation in the unit
+// tests obeys the documented SCI_GETTEXTRANGEFULL contract — including writing
+// the NUL exactly where Scintilla does — so any heap-overrun in the buffer-shape
+// code is caught by ASan during the unit-test pass.
+class SciReader {
+public:
+    virtual ~SciReader() = default;
+
+    // Returns the document length in bytes (Scintilla's SCI_GETLENGTH).
+    virtual std::size_t documentLength() const = 0;
+
+    // Fills `dest` with bytes from [cpMin, cpMax). `dest` must have room for
+    // (cpMax - cpMin + 1) bytes — the trailing slot receives a NUL terminator
+    // per the SCI_GETTEXTRANGEFULL contract. Implementations MUST write that
+    // NUL so tests catch buffers sized without it.
+    virtual void readRange(std::size_t cpMin, std::size_t cpMax, char *dest) const = 0;
+};
+
+// Read up to `previewLimit` bytes from the start of the document via the
+// reader. Sets *outTotalLength to the document's full size (independent of
+// truncation). Returns the bytes; the returned vector's size is at most
+// previewLimit.
+std::vector<std::uint8_t> readPreviewBuffer(const SciReader &reader,
+                                            std::size_t previewLimit,
+                                            std::size_t *outTotalLength);
+
 }
 
 #endif  // NPP_HEXEDITOR_HEXCORE_H
