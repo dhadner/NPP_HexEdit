@@ -656,6 +656,7 @@ static void zoomHexFont(NSInteger delta);
 static void resetHexFontZoom();
 static void refreshVisibleHexTables();
 static NSFont *hexTableFont();
+static NSFont *hexHeaderFontFor(NSFont *gridFont);
 static CGFloat preciseTextWidth(NSString *text, NSFont *font);
 static CGFloat textWidth(NSString *text, NSFont *font);
 static CGFloat monospacedGlyphWidth(NSFont *font);
@@ -858,11 +859,41 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
             }
         }
     }
+    // Cell + header font sizes (points). Tests verify that when the user
+    // zooms in/out via Cmd+/Cmd-/pinch, the header tracks the cell — the
+    // headerFont is built off the cell font in hexHeaderFontFor() and any
+    // future regression that breaks that link will surface as headerFontPt
+    // staying constant while cellFontPt changes.
+    CGFloat cellFontPt = 0.0;
+    CGFloat headerFontPt = 0.0;
+    if (hexTableView != nil && hexTableView.tableColumns.count > 0) {
+        NSTableColumn *firstColumn = hexTableView.tableColumns.firstObject;
+        if (NSTextFieldCell *dataCell = static_cast<NSTextFieldCell *>(firstColumn.dataCell)) {
+            cellFontPt = dataCell.font.pointSize;
+        }
+        // Read from the attributed-string title's NSFontAttributeName, not
+        // headerCell.font directly: AppKit derives header rendering from
+        // attributedStringValue, and assigning attributedStringValue can
+        // reset the .font property to a system default — so .font is not a
+        // reliable proxy for what's actually being drawn.
+        NSAttributedString *headerAttr = firstColumn.headerCell.attributedStringValue;
+        if (headerAttr.length > 0) {
+            NSFont *renderingFont = [headerAttr attribute:NSFontAttributeName atIndex:0 effectiveRange:nil];
+            if (renderingFont != nil) {
+                headerFontPt = renderingFont.pointSize;
+            }
+        }
+        // Fall back to the .font property if no attributed title was set
+        // (e.g. a column built before configureTableColumn ran fully).
+        if (headerFontPt == 0.0 && firstColumn.headerCell.font != nil) {
+            headerFontPt = firstColumn.headerCell.font.pointSize;
+        }
+    }
     return [NSString stringWithFormat:
             @"offset=%zu;selStart=%zu;selEnd=%zu;hasSelection=%d;statusH=%.1f;statusFontH=%.1f"
             @";sciSelStart=%lld;sciSelEnd=%lld;sciCaret=%lld;preferredLanguages=%@;userPrefs=%@"
             @";rectActive=%d;rectOrigin=%zu;rectWidth=%zu;rectHeight=%zu;rectBpr=%zu;rectOriginPane=%@"
-            @";hdrAlignMatch=%d",
+            @";hdrAlignMatch=%d;cellFontPt=%.1f;headerFontPt=%.1f",
             activeByteOffset, selectedByteStart, selectedByteEnd,
             (selectedByteEnd > selectedByteStart) ? 1 : 0,
             statusFrameHeight, statusFontLineHeight,
@@ -877,7 +908,9 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
             g_rectSelection.height,
             g_rectSelection.bytesPerRow,
             rectOriginPane,
-            headerAlignsMatchData];
+            headerAlignsMatchData,
+            cellFontPt,
+            headerFontPt];
 }
 @end
 
@@ -1029,6 +1062,39 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
 @end
 
 static HexTableDataSource *hexTableDataSource = nil;
+
+// Header view that paints its background to match the table's data-row
+// background (windowBackgroundColor) instead of the system's default
+// header chrome (a darker control gray that doesn't match the surrounding
+// pane in light mode). We don't call super.drawRect because that draws
+// the chrome we're trying to avoid; instead we fill the column-occupied
+// span with the row colour and call drawInteriorWithFrame: on each
+// headerCell to render just the title text.
+@interface HexTableHeaderView : NSTableHeaderView
+@end
+
+@implementation HexTableHeaderView
+- (void)drawRect:(NSRect)dirtyRect
+{
+    NSColor *bg = self.tableView.backgroundColor ?: [NSColor windowBackgroundColor];
+    [bg set];
+    NSRectFill(dirtyRect);
+
+    const NSInteger numCols = self.tableView.numberOfColumns;
+    for (NSInteger i = 0; i < numCols; ++i) {
+        const NSRect cellRect = [self headerRectOfColumn:i];
+        if (!NSIntersectsRect(cellRect, dirtyRect)) {
+            continue;
+        }
+        NSTableColumn *col = [self.tableView.tableColumns objectAtIndex:i];
+        // drawInteriorWithFrame: renders the title text without the
+        // headerCell's own chrome (background + bottom rule). The bg
+        // fill above sits behind every column, so spacers paint as
+        // empty same-colour strips matching the data rows beneath.
+        [col.headerCell drawInteriorWithFrame:cellRect inView:self];
+    }
+}
+@end
 
 @interface HexTableView : NSTableView
 @end
@@ -4104,7 +4170,8 @@ static void configureTableColumn(NSTableView *tableView, NSString *identifier, N
     NSMutableParagraphStyle *headerParagraph = [[NSMutableParagraphStyle defaultParagraphStyle] mutableCopy];
     headerParagraph.alignment = alignment;
     headerParagraph.lineBreakMode = NSLineBreakByClipping;
-    NSFont *headerFont = column.headerCell.font ?: [NSFont systemFontOfSize:[NSFont smallSystemFontSize]];
+    NSFont *headerFont = hexHeaderFontFor(font);
+    column.headerCell.font = headerFont;
     column.headerCell.attributedStringValue = [[NSAttributedString alloc]
         initWithString:title
             attributes:@{
@@ -4257,6 +4324,15 @@ static NSFont *statusLabelFontFor(NSFont *gridFont)
     return [NSFont systemFontOfSize:std::max<CGFloat>(gridFont.pointSize - 2.0, 9.0)];
 }
 
+// Header font tracks the cell font so column titles (`00 01 02…`) scale
+// proportionately with the cells beneath them under zoom (Cmd+/Cmd-/pinch).
+// Sized 2 points smaller for visual hierarchy — matches the existing
+// status-label pattern. 9pt floor for legibility at minimum zoom.
+static NSFont *hexHeaderFontFor(NSFont *gridFont)
+{
+    return [NSFont systemFontOfSize:std::max<CGFloat>(gridFont.pointSize - 2.0, 9.0)];
+}
+
 static void applyHexTableLayout(NSTableView *table, NSTextField *statusLabel)
 {
     if (!table) {
@@ -4269,6 +4345,7 @@ static void applyHexTableLayout(NSTableView *table, NSTextField *statusLabel)
 
     const hexedit::ViewMode mode = currentViewMode();
     const CGFloat cellWidth = cellColumnWidth(font, mode);
+    NSFont *headerFont = hexHeaderFontFor(font);
     for (NSTableColumn *column in table.tableColumns) {
         NSString *identifier = column.identifier;
         CGFloat width = 0.0;
@@ -4289,6 +4366,37 @@ static void applyHexTableLayout(NSTableView *table, NSTextField *statusLabel)
         column.minWidth = width;
         NSTextFieldCell *cell = static_cast<NSTextFieldCell *>(column.dataCell);
         cell.font = font;
+
+        // Refresh header font + attributed title so the column-index headers
+        // (`00 01 02 …` and `Offset` / `ASCII`) scale with the cell font
+        // under zoom. Mutate the existing headerCell rather than replacing
+        // it: replacing column.headerCell during AppKit's draw cycle (which
+        // can call into this layout via setNeedsDisplay → live-resize
+        // chains) leaves the header view holding a freed pointer mid-draw
+        // and crashes NPP under XCUITest's rapid menu interactions.
+        const NSTextAlignment alignment = column.headerCell.alignment;
+        NSMutableParagraphStyle *headerParagraph = [[NSMutableParagraphStyle defaultParagraphStyle] mutableCopy];
+        headerParagraph.alignment = alignment;
+        headerParagraph.lineBreakMode = NSLineBreakByClipping;
+        column.headerCell.font = headerFont;
+        column.headerCell.attributedStringValue = [[NSAttributedString alloc]
+            initWithString:(column.title ?: @"")
+                attributes:@{
+                    NSFontAttributeName: headerFont,
+                    NSParagraphStyleAttributeName: headerParagraph,
+                }];
+    }
+    // Header row height tracks the scaled header font's metrics so big-zoom
+    // headers don't clip vertically. Note that the visual width of the
+    // header's background fill is constrained to the column span — see
+    // HexTableHeaderView's drawRect: — so growing the row height doesn't
+    // expose the empty area to the right of the ASCII pane.
+    if (NSTableHeaderView *headerView = table.headerView) {
+        const CGFloat headerRowHeight = ceil(headerFont.ascender - headerFont.descender + 6.0);
+        NSRect frame = headerView.frame;
+        frame.size.height = std::max(headerRowHeight, 17.0);
+        headerView.frame = frame;
+        [headerView setNeedsDisplay:YES];
     }
 
     if (statusLabel) {
@@ -4354,6 +4462,10 @@ static NSView *createHexTableView(NSTableView **tableView, NSTextField **statusL
     scrollView.hasVerticalScroller = YES;
     scrollView.hasHorizontalScroller = YES;
     scrollView.borderType = NSNoBorder;
+    // Same windowBackgroundColor as the table so any area the table doesn't
+    // cover (under the horizontal scroller, beneath the last row) blends in.
+    scrollView.drawsBackground = YES;
+    scrollView.backgroundColor = [NSColor windowBackgroundColor];
 
     NSTableView *table = [[HexTableView alloc] initWithFrame:scrollView.contentView.bounds];
     table.accessibilityIdentifier = kHexEditorTableAccessibilityID;
@@ -4367,6 +4479,21 @@ static NSView *createHexTableView(NSTableView **tableView, NSTextField **statusL
     table.allowsMultipleSelection = NO;
     table.allowsEmptySelection = YES;
     table.selectionHighlightStyle = NSTableViewSelectionHighlightStyleNone;
+    // Match the surrounding NPP editor pane's background instead of NSTableView's
+    // default controlBackgroundColor (a darker gray in light mode that reads as a
+    // mismatched panel). windowBackgroundColor is dynamic — light gray in light
+    // mode, dark gray in dark mode — so the hex view blends with the pane
+    // automatically. The HexTableHeaderView above paints the same colour for
+    // the header strip, keeping rows + header visually unified.
+    table.backgroundColor = [NSColor windowBackgroundColor];
+    // Replace the default header view with our column-span-clipped variant
+    // so growing the header row under zoom doesn't expose a wide empty fill
+    // to the right of the ASCII pane. Frame matches the default's so layout
+    // is unchanged.
+    if (NSTableHeaderView *defaultHeader = table.headerView) {
+        HexTableHeaderView *clippedHeader = [[HexTableHeaderView alloc] initWithFrame:defaultHeader.frame];
+        table.headerView = clippedHeader;
+    }
 
     if (!hexTableDataSource) {
         hexTableDataSource = [[HexTableDataSource alloc] init];

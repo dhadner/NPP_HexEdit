@@ -23,20 +23,39 @@
 #   ~/vm-local/NPP_HexEdit/macos/scripts/vm-test.sh -only-testing:...
 #   ~/vm-local/NPP_HexEdit/macos/scripts/vm-test.sh --clean      # wipe DerivedData
 #   ~/vm-local/NPP_HexEdit/macos/scripts/vm-test.sh --list       # enumerate; do not run
+#   ~/vm-local/NPP_HexEdit/macos/scripts/vm-test.sh --asan       # build + load ASan-instrumented plugin
 #
 # DerivedData is preserved by default. The runner's TCC Accessibility grant
 # is keyed by its ad-hoc-signed code hash; wiping DerivedData forces a fresh
 # hash and the user must re-grant Accessibility before the next run.
+#
+# --asan: build the plugin with -fsanitize=address,undefined and install the
+# instrumented dylib instead of the regular one. Any heap overrun /
+# use-after-free / signed-overflow inside our code path triggers a sanitizer
+# abort that fails the test. Uses a separate build dir
+# (~/build-NPP_HexEdit-asan) so the regular and instrumented builds don't
+# stomp each other's CMake caches.
+#
+# Critical wiring detail: a dlopen-loaded ASan-instrumented dylib aborts the
+# host with "Interceptors are not working" because ASan's runtime self-test
+# fails when dyld brings up the plugin after the host's first malloc. The
+# fix is to inject ASan into NPP at process launch via DYLD_INSERT_LIBRARIES
+# (the env var is set in the XCUITest helper's launchEnvironment so XCUI's
+# launch-services path forwards it). NPP-Mac is ad-hoc signed with no
+# entitlements, so SIP doesn't strip the variable. Runtime overhead measured
+# at ~15% on the Parallels VM (UI suite grows from ~22 min to ~25 min).
 
 set -euo pipefail
 
 WIPE_DERIVED=0
 LIST_ONLY=0
+ASAN_BUILD=0
 TEST_ARGS=()
 for arg in "$@"; do
     case "$arg" in
         --clean) WIPE_DERIVED=1 ;;
         --list)  LIST_ONLY=1 ;;
+        --asan)  ASAN_BUILD=1 ;;
         *)       TEST_ARGS+=("$arg") ;;
     esac
 done
@@ -46,7 +65,11 @@ done
 VM_HEXEDIT="$HOME/vm-local/NPP_HexEdit"
 VM_NPP_MACOS="$HOME/vm-local/notepad-plus-plus-macos"
 VM_APP="$HOME/vm-local/Notepad++.app"
-BUILD_DIR="$HOME/build-NPP_HexEdit"
+if [[ $ASAN_BUILD -eq 1 ]]; then
+    BUILD_DIR="$HOME/build-NPP_HexEdit-asan"
+else
+    BUILD_DIR="$HOME/build-NPP_HexEdit"
+fi
 
 # ---- Self-healing guard 1: VM-local mirror exists -------------------------
 
@@ -88,6 +111,42 @@ if [[ $LIST_ONLY -eq 1 ]]; then
     exit 0
 fi
 
+# ---- Self-healing guard 4: code-signing identity present ------------------
+#
+# project.yml's CODE_SIGN_IDENTITY references a self-signed cert that each
+# developer installs locally into a dedicated, always-unlocked keychain.
+# (Login keychain doesn't work — it's locked from this SSH session's
+# launchd domain perspective and codesign returns errSecInternalComponent.)
+# Without the cert, xcodebuild fails the test bundle's CodeSign phase
+# ~30 s into a run. Detect early and point at the install script.
+
+CERT_NAME="NPP-HexEdit Test Codesign"
+CODESIGN_KEYCHAIN="$HOME/Library/Keychains/NPP-HexEdit-Codesign.keychain-db"
+# Hardcoded password matches install-test-codesign-cert.sh; the keychain
+# only holds a self-signed local-test cert so leaking the password leaks
+# nothing useful.
+CODESIGN_KEYCHAIN_PASS="npp-hexedit-test"
+if [[ ! -f "$CODESIGN_KEYCHAIN" ]] || \
+   ! security find-identity -v -p codesigning "$CODESIGN_KEYCHAIN" 2>/dev/null \
+        | grep -q -F "$CERT_NAME"; then
+    echo "error: code-signing identity '$CERT_NAME' not found in dedicated keychain." >&2
+    echo "       Run: bash $VM_HEXEDIT/macos/scripts/install-test-codesign-cert.sh" >&2
+    echo "       (Run it directly in the VM's Terminal — the trust step needs GUI auth," >&2
+    echo "        which an SSH session can't supply.)" >&2
+    exit 2
+fi
+
+# Unlock the dedicated keychain for this SSH session. Keychain unlock state
+# is per launchd domain on macOS — the unlock done in the GUI install
+# script doesn't propagate to the SSH session that vm-test.sh runs under,
+# so codesign would fail with errSecInternalComponent ("can't access private
+# key") even though the cert is visible. unlock-keychain is fast (~100 ms)
+# and idempotent, so we just do it on every run.
+if ! security unlock-keychain -p "$CODESIGN_KEYCHAIN_PASS" "$CODESIGN_KEYCHAIN" 2>/dev/null; then
+    echo "error: failed to unlock $CODESIGN_KEYCHAIN — was the install script run with the expected password?" >&2
+    exit 2
+fi
+
 # ---- Self-healing guard 3: CMake cache matches source path ----------------
 
 CACHE_FILE="$BUILD_DIR/CMakeCache.txt"
@@ -105,15 +164,27 @@ elif ! grep -qF "CMAKE_HOME_DIRECTORY:INTERNAL=$VM_HEXEDIT/macos" "$CACHE_FILE";
     rm -rf "$BUILD_DIR"
 fi
 if [[ $NEED_CONFIGURE -eq 1 ]]; then
-    echo "==> Configuring CMake build"
-    cmake -S "$VM_HEXEDIT/macos" -B "$BUILD_DIR" \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DNPP_MACOS_DIR="$VM_NPP_MACOS" >/dev/null
+    if [[ $ASAN_BUILD -eq 1 ]]; then
+        echo "==> Configuring CMake build (ASan + UBSan, Debug)"
+        cmake -S "$VM_HEXEDIT/macos" -B "$BUILD_DIR" \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DENABLE_SANITIZERS=ON \
+            -DNPP_MACOS_DIR="$VM_NPP_MACOS" >/dev/null
+    else
+        echo "==> Configuring CMake build"
+        cmake -S "$VM_HEXEDIT/macos" -B "$BUILD_DIR" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DNPP_MACOS_DIR="$VM_NPP_MACOS" >/dev/null
+    fi
 fi
 
 # ---- Build + install plugin ----------------------------------------------
 
-echo "==> Rebuilding plugin (incremental)"
+if [[ $ASAN_BUILD -eq 1 ]]; then
+    echo "==> Rebuilding plugin (incremental, ASan-instrumented)"
+else
+    echo "==> Rebuilding plugin (incremental)"
+fi
 cmake --build "$BUILD_DIR"
 
 echo "==> Reinstalling to ~/.notepad++/plugins/HexEditor/"
@@ -140,10 +211,55 @@ echo "==> Launching XCUITest from $LOCAL_TESTS"
 # before delivery). Without this, the Swift tests would skip with
 # "Set NPP_MACOS_APP=...".
 export TEST_RUNNER_NPP_MACOS_APP="$VM_APP"
+if [[ $ASAN_BUILD -eq 1 ]]; then
+    # Tell the Swift test harness to scale long-poll timeouts; menu construction
+    # is somewhat slower with ASan inserted into NPP itself, though far less
+    # dramatic than feared (~2× rather than 10×).
+    export TEST_RUNNER_NPP_HEXEDIT_ASAN=1
+    # ASan-runtime tuning forwarded to NPP via the helper's launchEnvironment:
+    # - malloc_context_size=0 — drop per-allocation stack traces; NPP makes
+    #   many small allocations during AppKit interaction and recording each
+    #   stack dominates runtime overhead.
+    # - quarantine_size_mb=4 — keep some use-after-free detection but cap
+    #   memory pressure (default 256 MiB stresses the VM).
+    # - detect_leaks=0 — LSan-on-exit isn't useful here and slows shutdown.
+    # - abort_on_error=1 — fail loud, don't continue past the first report.
+    export TEST_RUNNER_NPP_HEXEDIT_ASAN_OPTIONS="malloc_context_size=0:quarantine_size_mb=4:detect_leaks=0:abort_on_error=1"
+
+    # Critical: the ASan-instrumented plugin can't be loaded into a non-ASan
+    # host via dlopen. ASan's own self-test fails with
+    #   "Interceptors are not working. ... Please launch the executable with:
+    #    DYLD_INSERT_LIBRARIES=.../libclang_rt.asan_osx_dynamic.dylib"
+    # because NPP's mallocs already happened by the time dyld brings up our
+    # dylib. We force ASan into NPP at process launch via DYLD_INSERT_LIBRARIES.
+    # NPP-Mac is ad-hoc signed with no entitlements, so SIP doesn't strip the
+    # var. Resolve the dylib at run time so we don't bake a Xcode version
+    # number into the script.
+    ASAN_DYLIB=$(clang -print-file-name=libclang_rt.asan_osx_dynamic.dylib 2>/dev/null)
+    if [[ ! -f "$ASAN_DYLIB" ]]; then
+        echo "error: couldn't resolve libclang_rt.asan_osx_dynamic.dylib via clang -print-file-name; ASan UI tier requires it." >&2
+        exit 2
+    fi
+    echo "==> ASan runtime: $ASAN_DYLIB"
+    export TEST_RUNNER_NPP_HEXEDIT_ASAN_DYLIB="$ASAN_DYLIB"
+fi
 TEST_EXIT=0
 "$LOCAL_TESTS/run-tests.sh" ${TEST_ARGS[@]+"${TEST_ARGS[@]}"} || TEST_EXIT=$?
 
 # ---- Update dashboard (best-effort, never masks the test exit) -----------
+#
+# Tag the run as "full" or "partial" based on whether any -only-testing:
+# args were passed. The dashboard's headline is the latest *full* run so a
+# subsequent debug subset run (testFoo passed in 5s) doesn't paper over an
+# earlier full-suite failure.
+
+RUN_KIND="full"
+for arg in ${TEST_ARGS[@]+"${TEST_ARGS[@]}"}; do
+    if [[ "$arg" == -only-testing:* ]]; then
+        RUN_KIND="partial"
+        break
+    fi
+done
 
 DASHBOARD_HELPER="$LOCAL_TESTS/update-dashboard.py"
 SHARED_BUILD="$LOCAL_TESTS/build"
@@ -154,6 +270,7 @@ if [[ -f "$DASHBOARD_HELPER" ]]; then
         --history "$SHARED_BUILD/run-history.json" \
         --md "$SHARED_BUILD/dashboard.md" \
         --html "$SHARED_BUILD/dashboard.html" \
+        --kind "$RUN_KIND" \
         --screenshots-dir "$SHARED_BUILD/screenshots" 2>&1; then
         echo "==> Dashboard updated: $SHARED_BUILD/dashboard.html"
     fi

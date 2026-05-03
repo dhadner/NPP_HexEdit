@@ -20,6 +20,7 @@
 #   test-ui.sh --list                   # enumerate test names; do not run
 #   test-ui.sh --failed                 # re-run last run's failures
 #   test-ui.sh --clean                  # forward --clean to vm-test.sh (wipe DerivedData)
+#   test-ui.sh --asan                   # build + load ASan-instrumented plugin (slower run, catches plugin-side memory bugs)
 #   test-ui.sh --re-bootstrap           # re-run vm-bootstrap.sh on the VM
 #   test-ui.sh --dashboard              # open the latest dashboard.html in browser
 #   test-ui.sh -h | --help              # this message
@@ -27,6 +28,17 @@
 # Test names match the function names in HexEditorUITests.swift. The full
 # -only-testing prefix (HexEditorUITests/HexEditorUITests/...) is added
 # automatically.
+#
+# --asan: builds the plugin under -fsanitize=address,undefined and installs
+# the instrumented dylib. The ASan runtime is force-loaded into NPP at
+# process launch via DYLD_INSERT_LIBRARIES (set in the XCUITest helper's
+# launchEnvironment) — see vm-test.sh for the rationale. Any heap overrun /
+# use-after-free / signed-overflow inside our plugin's runtime path aborts
+# with an ASan stack trace and fails the test. UI suite measured at ~25 min
+# under ASan vs. ~22 min baseline. Use this as a periodic gate — the
+# unit-tier tests catch buffer-shape bugs at < 1 ms feedback; the ASan UI
+# run is the broader net for runtime-only paths the unit suite doesn't
+# reach.
 
 set -euo pipefail
 
@@ -61,6 +73,7 @@ DO_FAILED=0
 DO_REBOOTSTRAP=0
 DO_DASHBOARD=0
 WIPE_DERIVED=0
+ASAN_BUILD=0
 TEST_NAMES=()
 
 while [[ $# -gt 0 ]]; do
@@ -71,6 +84,7 @@ while [[ $# -gt 0 ]]; do
         --re-bootstrap)    DO_REBOOTSTRAP=1 ;;
         --dashboard)       DO_DASHBOARD=1 ;;
         --clean)           WIPE_DERIVED=1 ;;
+        --asan)            ASAN_BUILD=1 ;;
         --)                shift; TEST_NAMES+=("$@"); break ;;
         -*)
             red "unknown flag: $1"
@@ -213,6 +227,7 @@ done
 
 EXTRA_FLAGS=()
 [[ $WIPE_DERIVED -eq 1 ]] && EXTRA_FLAGS+=("--clean")
+[[ $ASAN_BUILD -eq 1 ]] && EXTRA_FLAGS+=("--asan")
 
 # ---- Run tests on VM ------------------------------------------------------
 
@@ -257,7 +272,12 @@ rsync -a --delete -e ssh \
 # Rebuild + install on the host so that what the user sees in their own
 # Notepad++ matches what the VM just tested. ~3-5s on an incremental build.
 HOST_BUILD_DIR="$REPO_ROOT/macos/build"
-if [[ -f "$HOST_BUILD_DIR/CMakeCache.txt" ]]; then
+if [[ $ASAN_BUILD -eq 1 ]]; then
+    # Skip host install for ASan runs — we don't want to replace the user's
+    # day-to-day plugin with the 2× slower instrumented build. ASan runs are
+    # CI-style verification only; the regular host plugin is left alone.
+    yellow "==> Skipping host plugin sync (--asan run; user's regular plugin preserved)"
+elif [[ -f "$HOST_BUILD_DIR/CMakeCache.txt" ]]; then
     cyan "==> Syncing host plugin to match tested version"
     if cmake --build "$HOST_BUILD_DIR" --target HexEditor >/tmp/test-ui-host-build.log 2>&1 \
        && cmake --install "$HOST_BUILD_DIR" >>/tmp/test-ui-host-build.log 2>&1; then

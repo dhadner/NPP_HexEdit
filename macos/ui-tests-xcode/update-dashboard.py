@@ -196,6 +196,48 @@ def fmt_timestamp(iso: str | None) -> str:
     return local.strftime("%Y-%m-%d %H:%M")
 
 
+def _entry_kind(entry: dict, max_total_in_history: int) -> str:
+    """
+    Return "full" / "partial" / "unknown" for a history entry.
+
+    Backwards compat: pre-2026-05-02 entries don't carry a `kind` field.
+    Derive from total: full-suite runs are always at least half the size of
+    the largest run we've ever seen. Below that, mark "unknown" — old short
+    runs were a mix of partial and full, and we can't tell apart, so we
+    refuse to attribute commit-readiness to them.
+    """
+    explicit = entry.get("kind")
+    if explicit in ("full", "partial"):
+        return explicit
+    total = int(entry.get("total", 0))
+    if max_total_in_history > 0 and total >= max_total_in_history * 0.5:
+        return "full"
+    return "unknown"
+
+
+def _latest_full_entry(history: list[dict]) -> dict | None:
+    """Most recent history entry tagged kind=full (or derived as full for old entries)."""
+    if not history:
+        return None
+    max_total = max((int(h.get("total", 0)) for h in history), default=0)
+    for entry in reversed(history):
+        if _entry_kind(entry, max_total) == "full":
+            return entry
+    return None
+
+
+def _format_run_summary(entry: dict) -> str:
+    """One-line `<icon> N passed · M failed · ...` summary used for headlines."""
+    passed = entry.get("passed", 0)
+    failed = entry.get("failed", 0)
+    skipped = entry.get("skipped", 0)
+    total = entry.get("total", passed + failed + skipped)
+    icon = "✅" if failed == 0 and passed > 0 else ("❌" if failed > 0 else "❓")
+    return (f"{icon} {passed} passed · {failed} failed · {skipped} skipped · "
+            f"{total} total — {fmt_duration(entry.get('duration_seconds'))} "
+            f"at {fmt_timestamp(entry.get('timestamp'))}")
+
+
 def render_markdown(per_test: list[dict], history: list[dict], screenshots: list[dict]) -> str:
     lines: list[str] = []
     lines.append("# HexEditor UI Test Dashboard")
@@ -205,17 +247,27 @@ def render_markdown(per_test: list[dict], history: list[dict], screenshots: list
 
     if history:
         latest = history[-1]
-        passed = latest.get("passed", 0)
-        failed = latest.get("failed", 0)
-        skipped = latest.get("skipped", 0)
-        total = latest.get("total", passed + failed + skipped)
-        result_icon = "✅" if failed == 0 and passed > 0 else ("❌" if failed > 0 else "❓")
-        lines.append(
-            f"**Latest run:** {result_icon} {passed} passed · {failed} failed · "
-            f"{skipped} skipped · {total} total — {fmt_duration(latest.get('duration_seconds'))} "
-            f"at {fmt_timestamp(latest.get('timestamp'))}"
-        )
+        max_total = max((int(h.get("total", 0)) for h in history), default=0)
+        latest_kind = _entry_kind(latest, max_total)
+        latest_full = _latest_full_entry(history)
+
+        # Headline anchors to the latest *full* run — that's the canonical
+        # commit-readiness signal. A debug `test-ui.sh testFoo` run that
+        # happens to pass after a failing full-suite run must NOT become the
+        # green headline that hides the earlier failure.
+        if latest_full is not None:
+            lines.append(f"**Latest full-suite run:** {_format_run_summary(latest_full)}")
+        else:
+            lines.append("**Latest full-suite run:** _no full-suite run on record yet._")
         lines.append("")
+
+        # If the most recent entry is a partial / debug run distinct from
+        # the latest full run, surface it on its own line so it's visible
+        # without claiming commit-readiness.
+        if latest_kind != "full" and latest is not latest_full:
+            label = "Latest partial run" if latest_kind == "partial" else "Latest run (kind unknown)"
+            lines.append(f"**{label}:** {_format_run_summary(latest)}")
+            lines.append("")
 
     lines.append(f"## All tests ({len(per_test)})")
     lines.append("")
@@ -251,8 +303,9 @@ def render_markdown(per_test: list[dict], history: list[dict], screenshots: list
         lines.append("_No runs yet._")
         lines.append("")
     else:
-        lines.append("| When | Duration | Result | Failures |")
-        lines.append("|------|---------:|--------|----------|")
+        max_total = max((int(h.get("total", 0)) for h in history), default=0)
+        lines.append("| When | Kind | Duration | Result | Failures |")
+        lines.append("|------|------|---------:|--------|----------|")
         for entry in reversed(history):
             failed = entry.get("failed", 0)
             passed = entry.get("passed", 0)
@@ -260,8 +313,11 @@ def render_markdown(per_test: list[dict], history: list[dict], screenshots: list
             res = "✅ all pass" if failed == 0 else f"❌ {failed} of {total} failed"
             fail_names = entry.get("failed_tests", [])
             fails_md = ", ".join(f"`{n}`" for n in fail_names) if fail_names else "—"
+            kind = _entry_kind(entry, max_total)
+            kind_label = {"full": "full", "partial": "subset", "unknown": "—"}[kind]
             lines.append(
                 f"| {fmt_timestamp(entry.get('timestamp'))} "
+                f"| {kind_label} "
                 f"| {fmt_duration(entry.get('duration_seconds'))} "
                 f"| {res} "
                 f"| {fails_md} |"
@@ -331,18 +387,52 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; background: #f
 
     if history:
         latest = history[-1]
-        passed = latest.get("passed", 0)
-        failed = latest.get("failed", 0)
-        skipped = latest.get("skipped", 0)
-        total = latest.get("total", passed + failed + skipped)
-        banner = "pass" if failed == 0 and passed > 0 else ("fail" if failed > 0 else "empty")
-        out.append(f'<div class="banner {banner}">')
-        out.append(
-            f"<b>Latest run:</b> {passed} passed · {failed} failed · {skipped} skipped · "
-            f"{total} total — {fmt_duration(latest.get('duration_seconds'))} "
-            f"at {fmt_timestamp(latest.get('timestamp'))}"
-        )
-        out.append("</div>")
+        max_total = max((int(h.get("total", 0)) for h in history), default=0)
+        latest_kind = _entry_kind(latest, max_total)
+        latest_full = _latest_full_entry(history)
+
+        # Same logic as the markdown headline: anchor commit-readiness to
+        # the latest *full* run, not the latest run of any size, so a debug
+        # subset run can't paint over a real failure.
+        def _banner_class(entry: dict | None) -> str:
+            if entry is None:
+                return "empty"
+            f = entry.get("failed", 0)
+            p = entry.get("passed", 0)
+            return "pass" if f == 0 and p > 0 else ("fail" if f > 0 else "empty")
+
+        if latest_full is not None:
+            out.append(f'<div class="banner {_banner_class(latest_full)}">')
+            f = latest_full.get("failed", 0)
+            p = latest_full.get("passed", 0)
+            s = latest_full.get("skipped", 0)
+            tot = latest_full.get("total", p + f + s)
+            icon = "✅" if f == 0 and p > 0 else ("❌" if f > 0 else "❓")
+            out.append(
+                f"<b>Latest full-suite run:</b> {icon} {p} passed · {f} failed · "
+                f"{s} skipped · {tot} total — {fmt_duration(latest_full.get('duration_seconds'))} "
+                f"at {fmt_timestamp(latest_full.get('timestamp'))}"
+            )
+            out.append("</div>")
+        else:
+            out.append('<div class="banner empty"><b>Latest full-suite run:</b> none on record yet.</div>')
+
+        # Surface a partial / debug run separately so it's visible without
+        # being mistaken for the canonical status.
+        if latest_kind != "full" and latest is not latest_full:
+            label = "Latest partial run" if latest_kind == "partial" else "Latest run (kind unknown)"
+            f = latest.get("failed", 0)
+            p = latest.get("passed", 0)
+            s = latest.get("skipped", 0)
+            tot = latest.get("total", p + f + s)
+            icon = "✅" if f == 0 and p > 0 else ("❌" if f > 0 else "❓")
+            out.append(f'<div class="banner {_banner_class(latest)}">')
+            out.append(
+                f"<b>{label}:</b> {icon} {p} passed · {f} failed · "
+                f"{s} skipped · {tot} total — {fmt_duration(latest.get('duration_seconds'))} "
+                f"at {fmt_timestamp(latest.get('timestamp'))}"
+            )
+            out.append("</div>")
     else:
         out.append('<div class="banner empty"><b>No runs recorded yet.</b></div>')
 
@@ -385,8 +475,9 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; background: #f
     if not history:
         out.append("<p class='subtle'>No runs yet.</p>")
     else:
+        max_total = max((int(h.get("total", 0)) for h in history), default=0)
         out.append("<table>")
-        out.append("<tr><th>When</th><th>Duration</th><th>Result</th><th>Failures</th></tr>")
+        out.append("<tr><th>When</th><th>Kind</th><th>Duration</th><th>Result</th><th>Failures</th></tr>")
         for entry in reversed(history):
             failed = entry.get("failed", 0)
             passed = entry.get("passed", 0)
@@ -397,9 +488,12 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; background: #f
                 res_html = f"<span class='fail'>❌ {failed} of {total} failed</span>"
             fail_names = entry.get("failed_tests", []) or []
             fails_html = ", ".join(f"<code>{n}</code>" for n in fail_names) or "—"
+            kind = _entry_kind(entry, max_total)
+            kind_label = {"full": "full", "partial": "subset", "unknown": "—"}[kind]
             out.append(
                 "<tr>"
                 f"<td class='mono'>{fmt_timestamp(entry.get('timestamp'))}</td>"
+                f"<td>{kind_label}</td>"
                 f"<td>{fmt_duration(entry.get('duration_seconds'))}</td>"
                 f"<td>{res_html}</td>"
                 f"<td>{fails_html}</td>"
@@ -421,6 +515,8 @@ def main() -> int:
     p.add_argument("--html", required=True)
     p.add_argument("--screenshots-dir", default=None,
                    help="Optional directory containing PNGs written by captureToDashboard(). When set, screenshots are embedded in dashboard.html and listed in dashboard.md.")
+    p.add_argument("--kind", choices=["full", "partial"], default="full",
+                   help="Whether this run executed the full UI suite or a -only-testing: subset. The dashboard's headline status reflects the latest *full* run, so a debug subset run can't mask an earlier full-suite failure.")
     args = p.parse_args()
 
     history = load_history(args.history)
@@ -452,7 +548,7 @@ def main() -> int:
             }
         failed_names = [c["name"] for c in cases if c.get("result") == "Failed"]
 
-        history.append({
+        new_entry = {
             "timestamp": ts,
             "passed": passed,
             "failed": failed,
@@ -461,7 +557,20 @@ def main() -> int:
             "duration_seconds": duration,
             "tests": per_test_map,
             "failed_tests": failed_names,
-        })
+            "kind": args.kind,
+        }
+        # Idempotence: if the most recent entry has the same start timestamp
+        # AND identical pass/fail/total counts, this is a re-render of the
+        # same xcresult bundle (e.g. running update-dashboard.py twice during
+        # development). Don't double-record — replace the previous entry so
+        # any new fields (like the new `kind` tag on a re-run) land cleanly.
+        if history and history[-1].get("timestamp") == ts and \
+           history[-1].get("total") == total and \
+           history[-1].get("passed") == passed and \
+           history[-1].get("failed") == failed:
+            history[-1] = new_entry
+        else:
+            history.append(new_entry)
         history = history[-HISTORY_LIMIT:]
         save_history(args.history, history)
     else:

@@ -41,6 +41,13 @@ private struct HexCursorState {
     /// 0 means at least one column will look visually unbalanced — header text
     /// left-justified above centered data, or vice versa.
     let hdrAlignMatch: Int?
+    /// Current cell font point size (the `00 01 …` values + ASCII pane font).
+    /// Tracked alongside headerFontPt so tests can verify the header tracks
+    /// the cell under zoom (Cmd+/Cmd-/pinch).
+    let cellFontPt: Double?
+    /// Current header font point size (the `00 01 02 …` column titles +
+    /// `Offset` / `ASCII`). Always `cellFontPt - 2` (with 9pt floor).
+    let headerFontPt: Double?
 
     /// Compact dump of all fields for failure messages.
     var debugDescription: String {
@@ -84,7 +91,9 @@ private struct HexCursorState {
             rectHeight: fields["rectHeight"].flatMap({ Int($0) }),
             rectBpr: fields["rectBpr"].flatMap({ Int($0) }),
             rectOriginPane: fields["rectOriginPane"],
-            hdrAlignMatch: fields["hdrAlignMatch"].flatMap({ Int($0) })
+            hdrAlignMatch: fields["hdrAlignMatch"].flatMap({ Int($0) }),
+            cellFontPt: fields["cellFontPt"].flatMap({ Double($0) }),
+            headerFontPt: fields["headerFontPt"].flatMap({ Double($0) })
         )
     }
 }
@@ -212,12 +221,13 @@ final class HexEditorUITests: XCTestCase {
         let app = try launchNotepad()
         defer { app.terminate() }
 
+        let menuTimeout = 5.0 * Self.asanTimeoutScale
         let pluginsMenu = app.menuBars.menuBarItems["Plugins"]
-        XCTAssertTrue(pluginsMenu.waitForExistence(timeout: 5), "The Plugins menu is not visible.")
+        XCTAssertTrue(pluginsMenu.waitForExistence(timeout: menuTimeout), "The Plugins menu is not visible.")
         pluginsMenu.click()
 
         let hexEditorItem = app.menuBars.menuItems["HexEditor"]
-        XCTAssertTrue(hexEditorItem.waitForExistence(timeout: 5), "The HexEditor plugin menu is not visible under Plugins. Install the plugin first with cmake --install macos/build-universal.")
+        XCTAssertTrue(hexEditorItem.waitForExistence(timeout: menuTimeout), "The HexEditor plugin menu is not visible under Plugins. Install the plugin first with cmake --install macos/build-universal.")
     }
 
     func testOptionsDialogOpensAndCancelsCleanly() throws {
@@ -1045,14 +1055,15 @@ func testContextMenuCommands() throws {
     }
 
     func testCompareHexHighlightsDifferingBytes() throws {
-        // Write a fixture file that differs from the buffer at known positions.
-        let fixturePath = NSTemporaryDirectory() + "hex-compare-fixture-\(UUID().uuidString).bin"
-        // Buffer "ABCD" → 0x41 0x42 0x43 0x44
-        // Fixture            0x41 0x42 0xFF 0x44 → byte 2 differs.
-        let fixtureBytes: [UInt8] = [0x41, 0x42, 0xFF, 0x44]
-        let fixtureData = Data(fixtureBytes)
-        try fixtureData.write(to: URL(fileURLWithPath: fixturePath))
-        defer { try? FileManager.default.removeItem(atPath: fixturePath) }
+        // Use a checked-in 4-byte fixture (0x41 0x42 0xFF 0x44) that differs
+        // from buffer "ABCD" (0x41 0x42 0x43 0x44) at byte 2. Don't write a
+        // dynamic fixture to NSTemporaryDirectory() / /tmp: the XCTRunner is
+        // sandboxed with read-only filesystem access (NSPOSIXErrorDomain Code=1
+        // when writing to /tmp), and NPP triggers a TCC "Files and Folders"
+        // approval when reading from the runner's per-app tmp dir which hangs
+        // the test for ~3 minutes. The fixtures directory is path-readable by
+        // both the runner and NPP without permission gates.
+        let fixturePath = try fixturePath("compare-fixture-1byte-diff.bin")
 
         // Pass the fixture path through --test-compare-with so the plugin bypasses the
         // NSOpenPanel (XCUI cannot drive system panels reliably).
@@ -1550,6 +1561,81 @@ func testContextMenuCommands() throws {
         XCTAssertGreaterThanOrEqual(frameH, fontH,
             "Status label frame (\(frameH)pt) must be at least as tall as its font's line-height (\(fontH)pt) so descenders don't clip.")
         captureToDashboard("diag-statusLabel-glyphs")
+    }
+
+    func testHeaderFontTracksCellFontUnderZoom() throws {
+        // The column-index headers (`00 01 02 …`, plus `Offset` / `ASCII`)
+        // should scale proportionately with the cell font when the user zooms
+        // via Cmd+/Cmd-/pinch. Earlier the header font was set once at
+        // smallSystemFontSize and never refreshed, so zoomed cells towered
+        // over a fixed-size header. Guard: assert headerFontPt = cellFontPt-2
+        // (or the 9pt floor), and that both grow on Zoom In and reset on
+        // Restore Default Zoom.
+        let app = try launchNotepad()
+        defer { app.terminate() }
+        try createBufferWithText(app: app, text: "ABCD")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        // Baseline: read the default-zoom font sizes.
+        guard let baseline = HexCursorState.read(from: app),
+              let baseCell = baseline.cellFontPt,
+              let baseHeader = baseline.headerFontPt else {
+            XCTFail("Could not read cellFontPt / headerFontPt from diagnostic.")
+            return
+        }
+        XCTAssertGreaterThan(baseCell, 0, "Cell font size should be positive.")
+        // Header tracks cell-2 with a 9pt floor.
+        let expectedBase = max(baseCell - 2, 9)
+        XCTAssertEqual(baseHeader, expectedBase, accuracy: 0.5,
+            "Default zoom: header font (\(baseHeader)pt) should be cellFont-2 (\(expectedBase)pt).")
+
+        // Zoom in 5 times so cell font grows enough to escape the 9pt
+        // header-font floor (default cell is ~10pt → header floored at 9pt;
+        // we need cell ≥ 12pt for the cell-2 formula to produce a value
+        // above 9). .firstMatch disambiguates from NPP's main-menu View >
+        // Zoom > Zoom In which shares the title.
+        for _ in 0..<5 {
+            hexTable.rightClick()
+            let zoomInItem = app.menuItems["Zoom In"].firstMatch
+            XCTAssertTrue(zoomInItem.waitForExistence(timeout: 3))
+            zoomInItem.click()
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+
+        guard let zoomed = HexCursorState.read(from: app),
+              let zCell = zoomed.cellFontPt,
+              let zHeader = zoomed.headerFontPt else {
+            XCTFail("Could not read post-zoom diagnostic.")
+            return
+        }
+        XCTAssertGreaterThan(zCell, baseCell,
+            "Zoom In should grow cell font (\(baseCell) → \(zCell)).")
+        XCTAssertGreaterThan(zHeader, baseHeader,
+            "Zoom In should also grow header font (cell \(baseCell) → \(zCell), header \(baseHeader) → \(zHeader)) — headers were stuck at smallSystemFontSize before.")
+        let expectedZoomed = max(zCell - 2, 9)
+        XCTAssertEqual(zHeader, expectedZoomed, accuracy: 0.5,
+            "After zoom: header font (\(zHeader)pt) should be cellFont-2 (\(expectedZoomed)pt; cell \(zCell)pt).")
+
+        // Restore Default Zoom → both should snap back to baseline.
+        hexTable.rightClick()
+        let resetItem = app.menuItems["Restore Default Zoom"].firstMatch
+        XCTAssertTrue(resetItem.waitForExistence(timeout: 3))
+        resetItem.click()
+        Thread.sleep(forTimeInterval: 0.3)
+
+        guard let restored = HexCursorState.read(from: app),
+              let rCell = restored.cellFontPt,
+              let rHeader = restored.headerFontPt else {
+            XCTFail("Could not read post-reset diagnostic.")
+            return
+        }
+        XCTAssertEqual(rCell, baseCell, accuracy: 0.5,
+            "Restore should return cell font to baseline (\(baseCell)pt; got \(rCell)pt).")
+        XCTAssertEqual(rHeader, baseHeader, accuracy: 0.5,
+            "Restore should return header font to baseline (\(baseHeader)pt; got \(rHeader)pt).")
     }
 
     func testCanReachRow0AfterDeepCursorOpen() throws {
@@ -2204,9 +2290,10 @@ func testContextMenuCommands() throws {
         let path = try fixturePath(name)
         let app = XCUIApplication(url: try notepadAppURL())
         app.launchArguments = ["-nosession", "--reset-hex-prefs", path]
-        app.launchEnvironment = ["HEX_EDITOR_LANG_OVERRIDE": language]
+        app.launchEnvironment = Self.nppLaunchEnvironment(language: language)
         app.launch()
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30),
+        let foregroundTimeout = 30.0 * Self.asanTimeoutScale
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: foregroundTimeout),
                       "Notepad++ macOS did not launch with fixture \(name).")
         return app
     }
@@ -2508,6 +2595,42 @@ func testContextMenuCommands() throws {
 
     // MARK: - Helpers
 
+    /// True when the test bundle was launched with TEST_RUNNER_NPP_HEXEDIT_ASAN=1
+    /// (set by vm-test.sh's --asan path). Tests use this to scale long-poll
+    /// timeouts and to force the ASan runtime into NPP at process launch via
+    /// DYLD_INSERT_LIBRARIES.
+    static var isAsanRun: Bool {
+        return ProcessInfo.processInfo.environment["NPP_HEXEDIT_ASAN"] == "1"
+    }
+
+    /// Multiplier for any timeout that depends on NPP's responsiveness. 1× in
+    /// the regular build; 3× under ASan. NPP under DYLD_INSERT_LIBRARIES'd ASan
+    /// runs at roughly 2× speed for AppKit work, so 3× gives a safety margin
+    /// without masking real hangs.
+    static var asanTimeoutScale: Double {
+        return isAsanRun ? 3.0 : 1.0
+    }
+
+    /// Builds the launchEnvironment for an XCUIApplication, layering ASan
+    /// injection on top of the locale override. When isAsanRun is true and the
+    /// runner has been told the resolved ASan dylib path
+    /// (TEST_RUNNER_NPP_HEXEDIT_ASAN_DYLIB → NPP_HEXEDIT_ASAN_DYLIB), we set
+    /// DYLD_INSERT_LIBRARIES to force the ASan runtime into NPP at dyld init —
+    /// a dlopen'd ASan-instrumented plugin otherwise aborts NPP at launch with
+    /// "Interceptors are not working" because NPP's mallocs already happened
+    /// before our dylib loaded.
+    private static func nppLaunchEnvironment(language: String) -> [String: String] {
+        var env = ["HEX_EDITOR_LANG_OVERRIDE": language]
+        let processEnv = ProcessInfo.processInfo.environment
+        if let asanOpts = processEnv["NPP_HEXEDIT_ASAN_OPTIONS"], !asanOpts.isEmpty {
+            env["ASAN_OPTIONS"] = asanOpts
+        }
+        if let asanDylib = processEnv["NPP_HEXEDIT_ASAN_DYLIB"], !asanDylib.isEmpty {
+            env["DYLD_INSERT_LIBRARIES"] = asanDylib
+        }
+        return env
+    }
+
     private func launchNotepad(language: String = "en", extraArguments: [String] = []) throws -> XCUIApplication {
         let app = XCUIApplication(url: try notepadAppURL())
         // -nosession suppresses session restore so each test starts with a single empty,
@@ -2525,9 +2648,10 @@ func testContextMenuCommands() throws {
         // write goes to the runner's container, not the user defaults NPP Mac
         // reads. The env var path bypasses both: the plugin checks
         // HEX_EDITOR_LANG_OVERRIDE first in hexUserPreferredLanguages().
-        app.launchEnvironment = ["HEX_EDITOR_LANG_OVERRIDE": language]
+        app.launchEnvironment = Self.nppLaunchEnvironment(language: language)
         app.launch()
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "Notepad++ macOS did not launch.")
+        let foregroundTimeout = 10.0 * Self.asanTimeoutScale
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: foregroundTimeout), "Notepad++ macOS did not launch.")
         return app
     }
 
@@ -2597,17 +2721,19 @@ func testContextMenuCommands() throws {
         // menu clicks queue up but don't expand a submenu until the load finishes.
         // 30 s of patience is overkill for the typical 32-byte test (which sees the
         // menu surface in <100 ms) but keeps the helper general-purpose without a
-        // separate "slow" variant.
-        XCTAssertTrue(pluginsMenu.waitForExistence(timeout: 30))
+        // separate "slow" variant. Under ASan-injected NPP the budget scales
+        // by Self.asanTimeoutScale to absorb the slower menu construction.
+        let menuTimeout = 30.0 * Self.asanTimeoutScale
+        XCTAssertTrue(pluginsMenu.waitForExistence(timeout: menuTimeout))
         pluginsMenu.click()
 
         let hexEditorItem = app.menuBars.menuItems["HexEditor"]
-        XCTAssertTrue(hexEditorItem.waitForExistence(timeout: 30),
-                      "HexEditor submenu didn't appear within 30 s — host may still be loading a large file.")
+        XCTAssertTrue(hexEditorItem.waitForExistence(timeout: menuTimeout),
+                      "HexEditor submenu didn't appear within \(menuTimeout) s — host may still be loading a large file.")
         hexEditorItem.hover()
 
         let leafItem = app.menuBars.menuItems[leaf]
-        XCTAssertTrue(leafItem.waitForExistence(timeout: 30), "Plugins > HexEditor > \(leaf) is not visible.")
+        XCTAssertTrue(leafItem.waitForExistence(timeout: menuTimeout), "Plugins > HexEditor > \(leaf) is not visible.")
         leafItem.click()
     }
 

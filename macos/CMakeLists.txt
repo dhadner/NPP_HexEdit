@@ -71,7 +71,10 @@ endif()
 if(ENABLE_SANITIZERS)
     # ASan + UBSan + frame-pointer for readable stack traces. -O1 keeps inlining
     # under control while still being faster than -O0; the sanitizer slowdown
-    # dominates either way.
+    # dominates either way. clang automatically embeds an LC_RPATH pointing
+    # at the toolchain's libclang_rt.asan_osx_dynamic.dylib when
+    # -fsanitize=address is on the link line, for both executables and dylibs,
+    # so dyld can resolve the runtime when NPP loads our plugin.
     add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g)
     add_link_options(-fsanitize=address,undefined)
     message(STATUS "Sanitizers enabled: ASan + UBSan")
