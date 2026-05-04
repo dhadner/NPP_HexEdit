@@ -22,6 +22,10 @@ struct ViewMode {
     int bytesPerCell = 1;
     CellNotation notation = CellNotation::Hex;
     bool littleEndian = false;
+    // When true, formatCell emits A–F as uppercase ('A'…'F'). When false
+    // (the default — preserves the historical render), digits are
+    // lowercase. Has no effect when notation is Binary (0/1 only).
+    bool uppercase = false;
 };
 
 struct CursorState {

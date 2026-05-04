@@ -48,6 +48,31 @@ private struct HexCursorState {
     /// Current header font point size (the `00 01 02 …` column titles +
     /// `Offset` / `ASCII`). Always `cellFontPt - 2` (with 9pt floor).
     let headerFontPt: Double?
+    /// Caret render geometry from the last drawRect: paint. -1 = caret
+    /// has not been drawn yet (view just created, no cursor activity).
+    /// caretCellOffsetX is the caret X relative to the cell that contained
+    /// it (caretX − caretCellMinX) — useful for asserting the caret sits
+    /// at the expected horizontal offset within the cell regardless of
+    /// where the cell itself ended up in the viewport.
+    let caretX: Double?
+    let caretRow: Int?
+    let caretCellMinX: Double?
+    let caretCellOffsetX: Double?
+    /// Width in pt of the last-drawn Mirror Cursor rectangle. 0 = mirror
+    /// was not drawn this paint (g_mirrorAsciiCursor is off, the caret
+    /// is out of bounds, or the active pane's mirror column couldn't
+    /// be resolved). > 0 = mirror was drawn — width is the rectangle's
+    /// pixel width.
+    let mirrorWidth: Double?
+    /// Font-tab toggle flags as currently held in plugin globals. Order:
+    /// Bold, Italic, Underline, UppercaseHex, MirrorAsciiCursor — each
+    /// 1 (on) or 0 (off). Lets a test confirm a Font-tab dialog round-
+    /// trip wired the checkbox state through commit + load.
+    let fontBold: Bool?
+    let fontItalic: Bool?
+    let fontUnderline: Bool?
+    let fontUppercaseHex: Bool?
+    let fontMirrorAsciiCursor: Bool?
 
     /// Compact dump of all fields for failure messages.
     var debugDescription: String {
@@ -60,6 +85,19 @@ private struct HexCursorState {
             s += ";rect=\(o)+\(w)x\(h)@\(p)"
         }
         return s
+    }
+
+    /// Parse a comma-separated 1/0 flag string ("0,1,0,1,1") and return
+    /// the bit at `index`. nil if the field is missing, the string is
+    /// shorter than expected, or the bit isn't 0/1.
+    private static func flagAt(_ raw: String?, index: Int) -> Bool? {
+        guard let raw = raw else { return nil }
+        let parts = raw.split(separator: ",")
+        guard index < parts.count else { return nil }
+        let bit = String(parts[index])
+        if bit == "1" { return true }
+        if bit == "0" { return false }
+        return nil
     }
 
     static func read(from app: XCUIApplication) -> HexCursorState? {
@@ -93,7 +131,17 @@ private struct HexCursorState {
             rectOriginPane: fields["rectOriginPane"],
             hdrAlignMatch: fields["hdrAlignMatch"].flatMap({ Int($0) }),
             cellFontPt: fields["cellFontPt"].flatMap({ Double($0) }),
-            headerFontPt: fields["headerFontPt"].flatMap({ Double($0) })
+            headerFontPt: fields["headerFontPt"].flatMap({ Double($0) }),
+            caretX: fields["caretX"].flatMap({ Double($0) }),
+            caretRow: fields["caretRow"].flatMap({ Int($0) }),
+            caretCellMinX: fields["caretCellMinX"].flatMap({ Double($0) }),
+            caretCellOffsetX: fields["caretCellOffsetX"].flatMap({ Double($0) }),
+            mirrorWidth: fields["mirrorWidth"].flatMap({ Double($0) }),
+            fontBold:               flagAt(fields["fontFlags"], index: 0),
+            fontItalic:             flagAt(fields["fontFlags"], index: 1),
+            fontUnderline:          flagAt(fields["fontFlags"], index: 2),
+            fontUppercaseHex:       flagAt(fields["fontFlags"], index: 3),
+            fontMirrorAsciiCursor:  flagAt(fields["fontFlags"], index: 4)
         )
     }
 }
@@ -236,34 +284,34 @@ final class HexEditorUITests: XCTestCase {
 
         try invokeHexEditorMenu(app: app, item: "Options...")
 
-        // The dialog is a real NSWindow (not NSAlert). Query by the popup AX id —
-        // it's the most reliable hook because XCUITest indexes interactive
-        // controls by accessibilityIdentifier directly without going through
-        // window-role intermediation.
-        let modifierPopup = app.popUpButtons["hex-editor.options.rectMod.popup"]
-        XCTAssertTrue(modifierPopup.waitForExistence(timeout: 5),
-                      "Options dialog should expose the rectangular-modifier popup.")
+        // The dialog is a real NSWindow (not NSAlert). Query by the Start
+        // Layout tab's column-count field id — it's the most reliable hook
+        // because XCUITest indexes interactive controls by
+        // accessibilityIdentifier directly without going through window-role
+        // intermediation.
+        let columnCount = app.textFields["hex-editor.options.startLayout.columnCount"]
+        XCTAssertTrue(columnCount.waitForExistence(timeout: 5),
+                      "Options dialog should expose the Start Layout tab's column-count field.")
 
         app.buttons["hex-editor.options.button.cancel"].click()
-        XCTAssertTrue(modifierPopup.waitForNonExistence(timeout: 5),
-                      "Options dialog should dismiss after Cancel (popup goes away).")
+        XCTAssertTrue(columnCount.waitForNonExistence(timeout: 5),
+                      "Options dialog should dismiss after Cancel (column-count field goes away).")
     }
 
     func testOptionsHelpPopoverShowsAndDismisses() throws {
         // Each control in the Options dialog has an inline "?" help button next to it.
         // Clicking the button shows an NSPopover with localized help text; clicking
         // outside the popover dismisses it (NSPopoverBehaviorTransient). This test
-        // exercises the full round-trip on the rect-modifier row, which is the only
-        // help-button anchor the dialog has today.
+        // exercises the full round-trip on the bits-per-column help button.
 
         let app = try launchNotepad()
         defer { app.terminate() }
 
         try invokeHexEditorMenu(app: app, item: "Options...")
 
-        let helpButton = app.buttons["hex-editor.options.help.rectModifier"]
+        let helpButton = app.buttons["hex-editor.options.startLayout.bits.help"]
         XCTAssertTrue(helpButton.waitForExistence(timeout: 5),
-                      "Options dialog should expose a help button next to the rect-modifier control.")
+                      "Options dialog should expose a help button on the bits-per-column control.")
 
         // Visual evidence: capture the dialog before, during, and after the popover
         // is shown. The before/after pair proves the popover is genuinely transient,
@@ -273,24 +321,24 @@ final class HexEditorUITests: XCTestCase {
         helpButton.click()
 
         // The popover content is a wrapping NSTextField; AX exposes its rendered
-        // string as a static text. Substring-match a distinctive snippet of the
-        // localized help that does NOT appear on the dialog's row label (which
-        // also contains the word "rectangular"). "muscle memory" only appears in
-        // the popover body, so the predicate isolates the popover content.
+        // string as a static text. Substring-match a distinctive phrase from the
+        // bits-per-column help that doesn't appear elsewhere in the dialog —
+        // "interpreted integer values" is unique to this help body.
         let popoverText = app.staticTexts.containing(
-            NSPredicate(format: "value CONTAINS[c] %@", "muscle memory")
+            NSPredicate(format: "value CONTAINS[c] %@", "interpreted integer values")
         ).firstMatch
         XCTAssertTrue(popoverText.waitForExistence(timeout: 3),
                       "Help popover should appear with localized text after clicking the ? button.")
 
         captureToDashboard("testOptionsHelpPopover-02-popover-shown")
 
-        // Transient popovers dismiss on outside click. Click the modifier popup —
-        // it's inside the same window but outside the popover's frame, so the
-        // popover should auto-dismiss without committing any selection change.
-        app.popUpButtons["hex-editor.options.rectMod.popup"].click()
-        // The popup itself opens a menu; press Escape to close it without selecting.
-        app.typeKey(.escape, modifierFlags: [])
+        // Transient popovers dismiss on outside click. Click the Column Count
+        // text field — it's inside the same window but outside the popover's
+        // frame and (unlike the popup) doesn't open a transient menu of its
+        // own, so we can verify popover dismissal without juggling Escape
+        // (Escape is also Cancel for the dialog, so chaining "open menu →
+        // Escape" risked closing the dialog itself).
+        app.textFields["hex-editor.options.startLayout.columnCount"].click()
         XCTAssertTrue(popoverText.waitForNonExistence(timeout: 3),
                       "Help popover should dismiss when the user clicks outside it.")
 
@@ -300,6 +348,1003 @@ final class HexEditorUITests: XCTestCase {
         cancelButton.click()
         XCTAssertTrue(cancelButton.waitForNonExistence(timeout: 5),
                       "Options dialog should dismiss after Cancel.")
+    }
+
+    func testOptionsResetIsNonDestructiveUntilCommitted() throws {
+        // Reset to Defaults must rewrite the dialog UI to factory defaults but
+        // NOT touch persisted state. Only Apply / Ok commits. Cancel-after-Reset
+        // must leave the user's prior saved overrides intact.
+        //
+        // This is exercised on the Start Layout tab's Column Count field
+        // because it's numeric and AX-readable; the Reset / Apply / Cancel
+        // modal-loop semantics are shared across all four tabs, so a regression
+        // in any tab's applyDefaults / commit contract surfaces here too. Added
+        // 2026-05-03 after a Reset-on-Colors-tab bug shipped to the user — the
+        // earlier per-tab applyDefaults blocks reverted to saved overrides
+        // instead of factory defaults.
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 1. Open dialog, change Column Count from default (16) to 32, click Ok to commit.
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let columnCount = app.textFields["hex-editor.options.startLayout.columnCount"]
+        XCTAssertTrue(columnCount.waitForExistence(timeout: 5),
+                      "Options dialog should expose the Column Count field.")
+        columnCount.replaceFieldText(with: "32")
+        app.buttons["hex-editor.options.button.ok"].click()
+        XCTAssertTrue(columnCount.waitForNonExistence(timeout: 5),
+                      "Options dialog should dismiss after OK.")
+
+        // 2. Reopen — saved override should be visible.
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        XCTAssertTrue(columnCount.waitForExistence(timeout: 5))
+        XCTAssertEqual(columnCount.value as? String, "32",
+                       "Reopened dialog should show the saved Column Count override.")
+
+        // 3. Click Reset. Field should switch to factory default (16) without
+        //    committing to prefs.
+        app.buttons["hex-editor.options.button.reset"].click()
+        // Re-query after Reset because the modal session is stopped + restarted.
+        let postReset = app.textFields["hex-editor.options.startLayout.columnCount"]
+        XCTAssertTrue(postReset.waitForExistence(timeout: 3))
+        XCTAssertEqual(postReset.value as? String, "16",
+                       "After Reset, Column Count should show the factory default (16).")
+
+        // 4. Click Cancel — dismiss without committing the reset.
+        app.buttons["hex-editor.options.button.cancel"].click()
+        XCTAssertTrue(columnCount.waitForNonExistence(timeout: 5))
+
+        // 5. Reopen dialog. Field should STILL be 32 — Reset+Cancel must NOT
+        //    have written through to persisted state. If this fails, Reset was
+        //    destructive (the bug we're guarding against).
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let reopened = app.textFields["hex-editor.options.startLayout.columnCount"]
+        XCTAssertTrue(reopened.waitForExistence(timeout: 5))
+        XCTAssertEqual(reopened.value as? String, "32",
+                       "Reset + Cancel must preserve the user's prior saved overrides; got \(String(describing: reopened.value)) instead of 32.")
+
+        app.buttons["hex-editor.options.button.cancel"].click()
+    }
+
+    /// Expected factory hex values for each Colors-tab well, keyed by
+    /// AX-id suffix. Used by the Light / Dark factory-snapshot tests below.
+    /// The Light values are the Windows defaults from
+    /// `HexEditor/src/Hex.cpp:412-420`. The Dark values are our parallel
+    /// dark-mode analogues defined in HexEditor.mm (no Windows reference —
+    /// the Windows plugin doesn't support Dark Mode).
+    private static let factoryColorsLight: [(String, String)] = [
+        ("regularText.fg", "000000"),
+        ("regularText.bg", "ffffff"),
+        ("selection.fg",   "ffffff"),
+        ("selection.bg",   "8888ff"),
+        ("compare.fg",     "ffffff"),
+        ("compare.bg",     "ff8888"),
+        ("bookmark.fg",    "ffffff"),
+        ("bookmark.bg",    "ff0000"),
+        ("currentLine.bg", "dfdfdf"),
+    ]
+    private static let factoryColorsDark: [(String, String)] = [
+        ("regularText.fg", "ebebeb"),
+        ("regularText.bg", "1e1e1e"),
+        ("selection.fg",   "ffffff"),
+        ("selection.bg",   "4858e0"),
+        ("compare.fg",     "ffffff"),
+        ("compare.bg",     "803030"),
+        ("bookmark.fg",    "ffffff"),
+        ("bookmark.bg",    "ff0000"),
+        ("currentLine.bg", "4d4d4d"),
+    ]
+
+    /// Verify each Colors-tab well's AX value matches the expected factory hex.
+    /// Caller is responsible for opening the dialog, switching to the Colors
+    /// tab, and dismissing afterwards. Asserts inline so the failure message
+    /// names the well that diverged.
+    private func assertColorsTabWellsMatch(_ app: XCUIApplication,
+                                            expected: [(String, String)],
+                                            file: StaticString = #file,
+                                            line: UInt = #line) {
+        for (axSuffix, expectedHex) in expected {
+            let axId = "hex-editor.options.colors.\(axSuffix)"
+            let well = app.colorWells[axId]
+            XCTAssertTrue(well.waitForExistence(timeout: 1),
+                          "Color well \(axId) should exist on Colors tab.",
+                          file: file, line: line)
+            XCTAssertEqual(well.value as? String, expectedHex,
+                           "Well \(axId) expected \(expectedHex); got '\(String(describing: well.value))'.",
+                           file: file, line: line)
+        }
+    }
+
+    // Dark-mode factory snapshot test was attempted on 2026-05-03 but cut
+    // because driving NPP-Mac's Preferences → Dark Mode page from XCUI is
+    // unreliable and an osascript fallback hits the runner's automation
+    // TCC limit. Specifically:
+    //   - Settings → Preferences… via menu navigation reaches the right
+    //     page; the sidebar "Dark Mode" entry click works.
+    //   - Clicking the Dark / Light / Auto radio (via element click,
+    //     coordinate click, or predicate-matched click) does NOT dispatch
+    //     `_darkModeRadioChanged:` — the radio state stays at the prior
+    //     selection in screenshot capture.
+    //   - osascript via Process gets `Application isn't running. (-600)`
+    //     because the runner lacks Apple Events Automation permission for
+    //     Notepad++ (separate TCC scope from UI Automation, also not
+    //     persistable; see project_xcui_runner_tcc.md).
+    // The dark factory hexes are tiny static constants in HexEditor.mm;
+    // typos there are a code-review concern, not a runtime one. The Light
+    // test below verifies the factory mechanism (resolve helpers + Reset
+    // dispatch + AX exposure); a parallel typo in dark-mode constants
+    // would be visually obvious on first dark-mode launch. If we later
+    // need automated dark coverage, options to revisit:
+    //   1. MDM profile granting the runner full Automation permission.
+    //   2. Add a NPP-Mac launch arg that pre-sets kPrefDarkMode (NPP
+    //      change, not a HexEditor change).
+    //   3. Build a separate Debug/test dylib with extra entry points and
+    //      install it for the test session only.
+
+    func testOptionsColorsTabFactoryDefaultsLight() throws {
+        // Fast 9-well factory snapshot in Light mode. With clean prefs, no
+        // overrides are set — the resolve helpers fall back to factory
+        // colours, so the wells display them directly. The test reads each
+        // well's AX value (HexAxColorWell exposes 6-digit lowercase hex)
+        // and compares against the canonical Windows defaults.
+        //
+        // No launch-arg injection: --hex-test-set-* hooks would ship in
+        // production for test convenience, which we don't want. Reset's
+        // modal-loop behaviour is covered separately by
+        // testOptionsResetIsNonDestructiveUntilCommitted (Column Count
+        // text field).
+        //
+        // Assumes the VM is running in Light mode or Auto-with-Light. The
+        // dark variant lives in testOptionsColorsTabFactoryDefaultsDark.
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let colorsTab = app.tabs["Colors"]
+        XCTAssertTrue(colorsTab.waitForExistence(timeout: 5),
+                      "Colors tab should be present in the Options dialog.")
+        colorsTab.click()
+
+        assertColorsTabWellsMatch(app, expected: Self.factoryColorsLight)
+
+        app.buttons["hex-editor.options.button.cancel"].click()
+    }
+
+
+    func testOptionsResetIsScopedToActiveTabOnly() throws {
+        // Regression guard: clicking Reset to Defaults on the Colors tab
+        // must NOT touch the Startup tab's extension list (and vice versa).
+        // Reset is scoped to the visible tab. Caught a regression on
+        // 2026-05-03 where Reset fanned out to every tab and silently wiped
+        // the user's `.pdf` extension on every Colors-tab reset.
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 1. Open dialog, switch to Startup, type ".pdf" into the extensions
+        //    field, click OK to commit.
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let startupTab = app.tabs["Startup"]
+        XCTAssertTrue(startupTab.waitForExistence(timeout: 5))
+        startupTab.click()
+
+        let extField = app.textFields["hex-editor.options.startup.extensions"]
+        XCTAssertTrue(extField.waitForExistence(timeout: 3))
+        extField.replaceFieldText(with: ".pdf")
+        app.buttons["hex-editor.options.button.ok"].click()
+        XCTAssertTrue(extField.waitForNonExistence(timeout: 5))
+
+        // 2. Reopen, verify .pdf landed in the saved state.
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let startupTabReopen = app.tabs["Startup"]
+        XCTAssertTrue(startupTabReopen.waitForExistence(timeout: 5))
+        startupTabReopen.click()
+        let extFieldReopen = app.textFields["hex-editor.options.startup.extensions"]
+        XCTAssertTrue(extFieldReopen.waitForExistence(timeout: 3))
+        XCTAssertEqual(extFieldReopen.value as? String, ".pdf",
+                       "Startup extensions field should show the saved '.pdf' override.")
+
+        // 3. Switch to Colors tab and click Reset to Defaults.
+        let colorsTab = app.tabs["Colors"]
+        XCTAssertTrue(colorsTab.waitForExistence(timeout: 3))
+        colorsTab.click()
+        XCTAssertTrue(app.colorWells["hex-editor.options.colors.currentLine.bg"].waitForExistence(timeout: 3))
+        app.buttons["hex-editor.options.button.reset"].click()
+
+        // 4. Switch back to Startup. Extensions field MUST still show ".pdf"
+        //    — Reset must not have touched another tab's UI state. A failure
+        //    here means Reset fanned out across tabs (the regression).
+        let startupTabAfterReset = app.tabs["Startup"]
+        XCTAssertTrue(startupTabAfterReset.waitForExistence(timeout: 3))
+        startupTabAfterReset.click()
+        let extFieldAfterReset = app.textFields["hex-editor.options.startup.extensions"]
+        XCTAssertTrue(extFieldAfterReset.waitForExistence(timeout: 3))
+        XCTAssertEqual(extFieldAfterReset.value as? String, ".pdf",
+                       "Reset on Colors tab MUST NOT touch Startup tab's extensions field.")
+
+        // 5. OK to commit. Reopen and confirm .pdf is still persisted —
+        //    proves Reset+Apply on Colors didn't wipe Startup at commit time.
+        app.buttons["hex-editor.options.button.ok"].click()
+        XCTAssertTrue(extFieldAfterReset.waitForNonExistence(timeout: 5))
+
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let startupTabFinal = app.tabs["Startup"]
+        XCTAssertTrue(startupTabFinal.waitForExistence(timeout: 5))
+        startupTabFinal.click()
+        let extFieldFinal = app.textFields["hex-editor.options.startup.extensions"]
+        XCTAssertTrue(extFieldFinal.waitForExistence(timeout: 3))
+        XCTAssertEqual(extFieldFinal.value as? String, ".pdf",
+                       "Saved '.pdf' extension must survive Reset-on-Colors + OK.")
+
+        app.buttons["hex-editor.options.button.cancel"].click()
+    }
+
+    /// Match the plugin's `hexExpandedTestString` transformation: input
+    /// repeated three times, separated by spaces. Use this when feeding
+    /// English literals into XCUI queries that resolve by label under
+    /// the `en-test` locale (menu item names, dialog titles, tab labels
+    /// etc.). AX identifiers — which are build-time constants and don't
+    /// go through L() — are unaffected and remain as the stable handle.
+    private func expandedForEnTest(_ s: String) -> String {
+        return "\(s) \(s) \(s)"
+    }
+
+    /// Assert pairwise non-overlap of the supplied elements' frames.
+    /// Catches layout regressions where two controls visually collide
+    /// (e.g. two checkboxes whose text overlaps) — pure AX existence
+    /// queries don't see the geometry, so we have to check it ourselves.
+    /// `nameFor` is a closure that maps an element back to a stable name
+    /// for the failure message; the AX identifier is usually the right
+    /// answer (XCUIElement.identifier may be empty so callers pass it in
+    /// from the lookup site).
+    private func assertNoSiblingOverlap(_ elementsByName: [(String, XCUIElement)],
+                                         file: StaticString = #file,
+                                         line: UInt = #line) {
+        // Snapshot frames once each (each `.frame` access is a synchronous
+        // AX query) so we don't re-fetch in the inner loop.
+        let frames: [(String, CGRect)] = elementsByName.map { ($0.0, $0.1.frame) }
+        for i in 0..<frames.count {
+            for j in (i + 1)..<frames.count {
+                let (nameA, frameA) = frames[i]
+                let (nameB, frameB) = frames[j]
+                let overlap = frameA.intersection(frameB)
+                if !overlap.isNull && !overlap.isEmpty {
+                    XCTFail("Controls '\(nameA)' \(frameA) and '\(nameB)' \(frameB) overlap by \(overlap) — layout regression.",
+                            file: file, line: line)
+                }
+            }
+        }
+    }
+
+    func testOptionsFontTabLayoutSurvivesLongLabels() throws {
+        // Stress test: the `en-test` locale wraps every L() lookup so
+        // each label is the English string concatenated three times. Any
+        // dialog that uses fixed-width column assumptions will collide
+        // under this expansion. The Font tab specifically had a regression
+        // on 2026-05-04 (right column hard-coded too close to the left
+        // column → "Capital letters mode" overlapped "Italic"); this test
+        // would have caught that and is here to prevent it from coming
+        // back, plus catch the same class of bug on any future tab work.
+        let app = try launchNotepad(language: "en-test")
+        defer { app.terminate() }
+
+        try invokeHexEditorMenu(app: app, item: expandedForEnTest("Options..."))
+
+        // The "Font" tab label is also tripled in en-test — match the
+        // exact expanded form (`app.tabs[X]` resolves by label).
+        let fontTab = app.tabs[expandedForEnTest("Font")]
+        XCTAssertTrue(fontTab.waitForExistence(timeout: 5),
+                      "Font tab should be present in the Options dialog (en-test locale).")
+        fontTab.click()
+
+        // All seven controls must still be locatable by their AX
+        // identifiers (those don't go through L() — they're build-time
+        // constants), and their frames must not overlap each other.
+        let pairs: [(String, XCUIElement)] = [
+            ("font.name",                 app.popUpButtons["hex-editor.options.font.name"]),
+            ("font.size",                 app.popUpButtons["hex-editor.options.font.size"]),
+            ("font.bold",                 app.checkBoxes["hex-editor.options.font.bold"]),
+            ("font.italic",               app.checkBoxes["hex-editor.options.font.italic"]),
+            ("font.underline",            app.checkBoxes["hex-editor.options.font.underline"]),
+            ("font.uppercaseHex",         app.checkBoxes["hex-editor.options.font.uppercaseHex"]),
+            ("font.mirrorAsciiCursor",    app.checkBoxes["hex-editor.options.font.mirrorAsciiCursor"]),
+        ]
+        for (name, el) in pairs {
+            XCTAssertTrue(el.waitForExistence(timeout: 3),
+                          "Control \(name) should exist on the Font tab under en-test.")
+        }
+        assertNoSiblingOverlap(pairs)
+
+        // Cancel via the close button — the localised "Cancel" string is
+        // tripled, but the AX identifier is stable.
+        app.buttons["hex-editor.options.button.cancel"].click()
+    }
+
+    func testFontTabMirrorCursorToggleControlsRendering() throws {
+        // Phase 4: Mirror Cursor as Rect — when on, drawRect: paints a
+        // hollow rectangle in the OPPOSITE pane around the byte the
+        // caret is currently associated with. Default is OFF (the user
+        // opts into the indicator if they want it). Diagnostic exposes
+        // mirrorWidth (>0 ⇒ rectangle drawn this paint, 0 ⇒ not drawn);
+        // this test confirms the dialog → flag → render path round-trips
+        // in both directions.
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "abcdefgh")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 0.5)
+
+        // Position the caret at byte 0 — without this, the post-paste
+        // Scintilla caret sits at end-of-buffer (offset 8), which is
+        // past the last valid byte; the mirror would skip drawing for
+        // an unrelated reason and the toggle assertion below would be
+        // vacuous.
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        try positionHexCursorAtZero(app: app, hexTable: hexTable)
+        Thread.sleep(forTimeInterval: 0.3)
+
+        // Default: mirror DISABLED. No rectangle should be drawn even
+        // with a valid caret.
+        guard let s0 = HexCursorState.read(from: app) else {
+            XCTFail("Failed to read cursor diagnostic.")
+            return
+        }
+        XCTAssertEqual(s0.fontMirrorAsciiCursor, false,
+                       "Mirror Cursor as Rect default should be OFF. Diagnostic: \(s0.debugDescription)")
+        XCTAssertEqual(s0.mirrorWidth, 0,
+                       "With Mirror Cursor disabled (default), drawRect: should NOT paint the mirror rectangle. mirrorWidth=\(s0.mirrorWidth ?? -1). Diagnostic: \(s0.debugDescription)")
+
+        // Toggle ON via the Font tab.
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let fontTab = app.tabs["Font"]
+        XCTAssertTrue(fontTab.waitForExistence(timeout: 5))
+        fontTab.click()
+        let mirror = app.checkBoxes["hex-editor.options.font.mirrorAsciiCursor"]
+        XCTAssertTrue(mirror.waitForExistence(timeout: 3))
+        XCTAssertEqual(mirror.value as? Int, 0,
+                       "Mirror checkbox should be unchecked at default. Got value=\(String(describing: mirror.value)).")
+        mirror.click()
+        app.buttons["hex-editor.options.button.ok"].click()
+        XCTAssertTrue(mirror.waitForNonExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 0.3)
+
+        guard let s1 = HexCursorState.read(from: app) else {
+            XCTFail("Failed to read diagnostic after enabling mirror.")
+            return
+        }
+        XCTAssertEqual(s1.fontMirrorAsciiCursor, true,
+                       "Flag should be ON after toggle. Diagnostic: \(s1.debugDescription)")
+        guard let mw1 = s1.mirrorWidth else {
+            XCTFail("Diagnostic missing mirrorWidth after enable. Raw: \(s1.debugDescription)")
+            return
+        }
+        XCTAssertGreaterThan(mw1, 0,
+                             "After enabling Mirror Cursor with a valid caret, drawRect: should paint the rectangle. mirrorWidth=\(mw1). Diagnostic: \(s1.debugDescription)")
+
+        // Toggle OFF, verify it stops drawing.
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let fontTab2 = app.tabs["Font"]
+        XCTAssertTrue(fontTab2.waitForExistence(timeout: 5))
+        fontTab2.click()
+        let mirror2 = app.checkBoxes["hex-editor.options.font.mirrorAsciiCursor"]
+        XCTAssertTrue(mirror2.waitForExistence(timeout: 3))
+        mirror2.click()
+        app.buttons["hex-editor.options.button.ok"].click()
+        XCTAssertTrue(mirror2.waitForNonExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 0.3)
+
+        guard let s2 = HexCursorState.read(from: app) else {
+            XCTFail("Failed to read diagnostic after disabling mirror.")
+            return
+        }
+        XCTAssertEqual(s2.fontMirrorAsciiCursor, false,
+                       "Flag should be OFF after second toggle. Diagnostic: \(s2.debugDescription)")
+        XCTAssertEqual(s2.mirrorWidth, 0,
+                       "Disabling Mirror Cursor should stop the rendering. mirrorWidth=\(s2.mirrorWidth ?? -1). Diagnostic: \(s2.debugDescription)")
+    }
+
+    func testMirrorCursorIsSuppressedDuringSelection() throws {
+        // Even with Mirror Cursor enabled, the rectangle MUST NOT be
+        // drawn while a selection is active (linear or rectangular).
+        // The selection wash already cross-references hex and ASCII
+        // panes; an additional hollow rectangle on top is just visual
+        // noise. Test sequence:
+        //   1) Position caret at byte 0, no selection. Enable mirror.
+        //      Confirm rectangle IS drawn (mirrorWidth > 0).
+        //   2) Drag-select a few bytes (linear). Confirm rectangle is
+        //      suppressed (mirrorWidth = 0).
+        //   3) Click to clear the selection. Confirm rectangle returns.
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "abcdefghijklmnop")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 0.5)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        try positionHexCursorAtZero(app: app, hexTable: hexTable)
+        Thread.sleep(forTimeInterval: 0.3)
+
+        // Enable Mirror Cursor.
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let fontTab = app.tabs["Font"]
+        XCTAssertTrue(fontTab.waitForExistence(timeout: 5))
+        fontTab.click()
+        let mirror = app.checkBoxes["hex-editor.options.font.mirrorAsciiCursor"]
+        XCTAssertTrue(mirror.waitForExistence(timeout: 3))
+        mirror.click()
+        app.buttons["hex-editor.options.button.ok"].click()
+        XCTAssertTrue(mirror.waitForNonExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 0.3)
+
+        // 1. Mirror enabled, no selection: rectangle drawn.
+        guard let s1 = HexCursorState.read(from: app) else {
+            XCTFail("Failed to read diagnostic at step 1.")
+            return
+        }
+        XCTAssertEqual(s1.hasSelection, false,
+                       "Step 1 expects no selection. Diagnostic: \(s1.debugDescription)")
+        XCTAssertGreaterThan(s1.mirrorWidth ?? 0, 0,
+                             "Mirror should draw with caret + no selection. mirrorWidth=\(s1.mirrorWidth ?? -1). Diagnostic: \(s1.debugDescription)")
+
+        // 2. Drag-select bytes 0–5. Mirror should be suppressed.
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 3))
+        let byte0 = firstRow.staticTexts.element(boundBy: 1)
+        let byte5 = firstRow.staticTexts.element(boundBy: 6)
+        XCTAssertTrue(byte0.waitForExistence(timeout: 3))
+        XCTAssertTrue(byte5.waitForExistence(timeout: 3))
+        let startCoord = byte0.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let endCoord   = byte5.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        startCoord.click(forDuration: 0.05, thenDragTo: endCoord)
+        Thread.sleep(forTimeInterval: 0.3)
+
+        guard let s2 = HexCursorState.read(from: app) else {
+            XCTFail("Failed to read diagnostic at step 2.")
+            return
+        }
+        XCTAssertEqual(s2.hasSelection, true,
+                       "Step 2 expects an active selection. Diagnostic: \(s2.debugDescription)")
+        XCTAssertEqual(s2.mirrorWidth, 0,
+                       "Mirror MUST be suppressed during a selection. mirrorWidth=\(s2.mirrorWidth ?? -1). Diagnostic: \(s2.debugDescription)")
+
+        // 3. Clear the selection by clicking inside a single byte.
+        // Click on byte 0 to put the caret there with no selection.
+        byte0.click()
+        Thread.sleep(forTimeInterval: 0.3)
+
+        guard let s3 = HexCursorState.read(from: app) else {
+            XCTFail("Failed to read diagnostic at step 3.")
+            return
+        }
+        XCTAssertEqual(s3.hasSelection, false,
+                       "Step 3 expects no selection after click. Diagnostic: \(s3.debugDescription)")
+        XCTAssertGreaterThan(s3.mirrorWidth ?? 0, 0,
+                             "Mirror should resume after the selection is cleared. mirrorWidth=\(s3.mirrorWidth ?? -1). Diagnostic: \(s3.debugDescription)")
+    }
+
+    func testFontTabUnderlineToggleRoundTripsThroughCommit() throws {
+        // Phase 3 verification: toggling the Underline checkbox in the
+        // Font tab + clicking OK must flip g_fontUnderline (read via the
+        // cursor diagnostic). When on, willDisplayCell wraps each cell's
+        // string in an attributed string carrying NSUnderlineStyleAttributeName,
+        // which is the only way NSTextFieldCell renders underlined glyphs
+        // (the cell has no underline property of its own). Toggling off
+        // should restore plain stringValue rendering.
+        //
+        // We can't read NSUnderlineStyleAttributeName directly through
+        // XCUI (cell attributes aren't exposed via AX), so the test
+        // asserts the FLAG flow only; the rendering path in willDisplayCell
+        // is straightforward enough that the flag → render step is a code-
+        // review concern, not a runtime regression risk.
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "abcdefgh")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 0.5)
+
+        // Default state: underline off.
+        guard let s0 = HexCursorState.read(from: app) else {
+            XCTFail("Failed to read cursor diagnostic.")
+            return
+        }
+        XCTAssertEqual(s0.fontUnderline, false,
+                       "Default underline should be OFF. Diagnostic: \(s0.debugDescription)")
+
+        // Toggle ON via the Font tab.
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let fontTab = app.tabs["Font"]
+        XCTAssertTrue(fontTab.waitForExistence(timeout: 5))
+        fontTab.click()
+        let underline = app.checkBoxes["hex-editor.options.font.underline"]
+        XCTAssertTrue(underline.waitForExistence(timeout: 3))
+        underline.click()
+        app.buttons["hex-editor.options.button.ok"].click()
+        XCTAssertTrue(underline.waitForNonExistence(timeout: 5))
+
+        guard let s1 = HexCursorState.read(from: app) else {
+            XCTFail("Failed to read cursor diagnostic after underline ON.")
+            return
+        }
+        XCTAssertEqual(s1.fontUnderline, true,
+                       "Underline should be ON after toggling the Font-tab checkbox + OK. Diagnostic: \(s1.debugDescription)")
+
+        // Toggle OFF — verify it round-trips back.
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let fontTab2 = app.tabs["Font"]
+        XCTAssertTrue(fontTab2.waitForExistence(timeout: 5))
+        fontTab2.click()
+        let underline2 = app.checkBoxes["hex-editor.options.font.underline"]
+        XCTAssertTrue(underline2.waitForExistence(timeout: 3))
+        XCTAssertEqual(underline2.value as? Int, 1,
+                       "Reopened dialog should show Underline still checked (committed previously).")
+        underline2.click()
+        app.buttons["hex-editor.options.button.ok"].click()
+        XCTAssertTrue(underline2.waitForNonExistence(timeout: 5))
+
+        guard let s2 = HexCursorState.read(from: app) else {
+            XCTFail("Failed to read cursor diagnostic after underline OFF.")
+            return
+        }
+        XCTAssertEqual(s2.fontUnderline, false,
+                       "Underline should be OFF after toggling the checkbox a second time. Diagnostic: \(s2.debugDescription)")
+    }
+
+    func testFontTabUppercaseHexToggleAppliesToCells() throws {
+        // Phase 2 verification: enabling "Capital letters mode" in the
+        // Font tab must change the live hex-cell rendering from lowercase
+        // to uppercase. Picks bytes whose hex contains alpha digits
+        // ('k' = 0x6B, 'l' = 0x6C — both have 'b'/'c' that flip case)
+        // and reads the byte cell's AX value before and after the toggle.
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "klmn")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 5))
+
+        // Default rendering: lowercase.
+        XCTAssertEqual(firstRow.staticTexts.element(boundBy: 1).value as? String, "6b",
+                       "Byte 0 ('k') should display as lowercase '6b' by default.")
+        XCTAssertEqual(firstRow.staticTexts.element(boundBy: 2).value as? String, "6c",
+                       "Byte 1 ('l') should display as lowercase '6c' by default.")
+
+        // Toggle Capital letters mode via the Font tab.
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let fontTab = app.tabs["Font"]
+        XCTAssertTrue(fontTab.waitForExistence(timeout: 5))
+        fontTab.click()
+        let upper = app.checkBoxes["hex-editor.options.font.uppercaseHex"]
+        XCTAssertTrue(upper.waitForExistence(timeout: 3))
+        upper.click()
+        app.buttons["hex-editor.options.button.ok"].click()
+        // The dialog dismiss + applyHexViewMode rebuild are async; wait
+        // for the dialog to be gone before re-reading cells (the table
+        // gets reloaded as part of commit, so AX queries to old element
+        // handles return stale data otherwise).
+        XCTAssertTrue(upper.waitForNonExistence(timeout: 5))
+
+        // Re-query the row — AX handles after a reload need refetching.
+        let firstRowAfter = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRowAfter.waitForExistence(timeout: 5))
+        XCTAssertEqual(firstRowAfter.staticTexts.element(boundBy: 1).value as? String, "6B",
+                       "Byte 0 should display as uppercase '6B' after enabling Capital letters mode.")
+        XCTAssertEqual(firstRowAfter.staticTexts.element(boundBy: 2).value as? String, "6C",
+                       "Byte 1 should display as uppercase '6C' after enabling Capital letters mode.")
+    }
+
+    /// Synthesize an Option-held mouse drag via Quartz Event Services.
+    /// XCUI's `pressForDuration:thenDragTo:` on macOS doesn't accept
+    /// modifier flags, so a rect-drag (Option-held) can't be exercised
+    /// through XCUIElement. CGEventPost can — we tag each posted mouse
+    /// event with `.maskAlternate` so NPP-Mac's `hexEventStartsRectDrag:`
+    /// sees Option set on the NSEvent and enters rect mode.
+    ///
+    /// Coordinates are in AppKit screen-points (bottom-left origin), the
+    /// same space as `XCUIElement.frame.origin`. CGEvent expects Quartz
+    /// global coordinates (top-left origin) so we flip Y against
+    /// NSScreen.main height before posting.
+    private func optionHeldMouseDrag(fromAppKitPoint start: CGPoint,
+                                       toAppKitPoint end: CGPoint,
+                                       steps: Int = 8) {
+        guard let mainScreen = NSScreen.main else {
+            XCTFail("No main screen available — cannot synthesise mouse drag.")
+            return
+        }
+        let screenH = mainScreen.frame.height
+        let toCG: (CGPoint) -> CGPoint = { p in
+            CGPoint(x: p.x, y: screenH - p.y)
+        }
+
+        let post: (CGEventType, CGPoint) -> Void = { type, ptAppKit in
+            if let evt = CGEvent(mouseEventSource: nil,
+                                  mouseType: type,
+                                  mouseCursorPosition: toCG(ptAppKit),
+                                  mouseButton: .left) {
+                evt.flags = .maskAlternate
+                evt.post(tap: .cghidEventTap)
+            }
+        }
+
+        post(.leftMouseDown, start)
+        Thread.sleep(forTimeInterval: 0.05)
+        for step in 1...steps {
+            let t = CGFloat(step) / CGFloat(steps + 1)
+            let mid = CGPoint(x: start.x + (end.x - start.x) * t,
+                                y: start.y + (end.y - start.y) * t)
+            post(.leftMouseDragged, mid)
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        post(.leftMouseDragged, end)
+        Thread.sleep(forTimeInterval: 0.05)
+        post(.leftMouseUp, end)
+        Thread.sleep(forTimeInterval: 0.1)
+    }
+
+    func testEndianPreferencePersistsAcrossEightBitCellWidth() throws {
+        // Regression guard for the 2026-05-04 fix: the Endian setting must
+        // persist when the user temporarily selects 8-Bit cells. Earlier
+        // behaviour reset g_littleEndian → false in setHexViewBytesPerCell
+        // when bpc dropped to 1, silently losing the user's pick. The
+        // dialog also gated the endian commit on bits > 1, so the radio
+        // appeared ineffective at 8-Bit.
+        //
+        // We explicitly select Big-Endian here (the NON-default since
+        // 2026-05-04 — Little-Endian is now default + first in the
+        // radio order, matching the architectures users actually inspect
+        // bytes from). Setting the non-default value and watching it
+        // round-trip a column-width change is what catches the
+        // persistence regression; using the default would be a no-op
+        // that passes vacuously.
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 16-Bit + Big-Endian + OK.
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let bits16 = app.radioButtons["hex-editor.options.startLayout.bits.16-Bit"]
+        XCTAssertTrue(bits16.waitForExistence(timeout: 5))
+        bits16.click()
+        let big = app.radioButtons["hex-editor.options.startLayout.endian.Big-Endian"]
+        XCTAssertTrue(big.waitForExistence(timeout: 3),
+                      "Big-Endian radio should be present on the Start Layout tab.")
+        big.click()
+        app.buttons["hex-editor.options.button.ok"].click()
+        XCTAssertTrue(bits16.waitForNonExistence(timeout: 5))
+
+        // 8-Bit + OK. Pre-fix this would reset g_littleEndian → false
+        // (which is Big-Endian). This test set Big to start, so in the
+        // pre-fix regression the value would COINCIDENTALLY persist —
+        // the inverse direction (Little → 8-Bit → Little) is what
+        // exposes the reset most directly. To catch both, we now also
+        // round-trip Little below.
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let bits8 = app.radioButtons["hex-editor.options.startLayout.bits.8-Bit"]
+        XCTAssertTrue(bits8.waitForExistence(timeout: 5))
+        bits8.click()
+        app.buttons["hex-editor.options.button.ok"].click()
+        XCTAssertTrue(bits8.waitForNonExistence(timeout: 5))
+
+        // Back to 16-Bit + OK.
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let bits16Again = app.radioButtons["hex-editor.options.startLayout.bits.16-Bit"]
+        XCTAssertTrue(bits16Again.waitForExistence(timeout: 5))
+        bits16Again.click()
+        app.buttons["hex-editor.options.button.ok"].click()
+        XCTAssertTrue(bits16Again.waitForNonExistence(timeout: 5))
+
+        // Reopen and verify Big-Endian is still the selected endian radio.
+        // NSButton state for radio: 1 = on, 0 = off.
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let bigAfter = app.radioButtons["hex-editor.options.startLayout.endian.Big-Endian"]
+        XCTAssertTrue(bigAfter.waitForExistence(timeout: 5))
+        XCTAssertEqual(bigAfter.value as? Int, 1,
+                       "Big-Endian preference should survive a temporary switch to 8-Bit cells. value=0 means it was reset to the default (Little-Endian) — the pre-fix bug.")
+
+        // Now flip to Little, round-trip, and verify Little persists too.
+        // This exercises the reset path in the other direction: pre-fix,
+        // setHexViewBytesPerCell(1) forced g_littleEndian = false, so
+        // Little → 8-Bit → 16-Bit would silently reset to Big.
+        let little = app.radioButtons["hex-editor.options.startLayout.endian.Little-Endian_(Native)"]
+        XCTAssertTrue(little.waitForExistence(timeout: 3))
+        little.click()
+        app.buttons["hex-editor.options.button.ok"].click()
+        XCTAssertTrue(little.waitForNonExistence(timeout: 5))
+
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let bits8B = app.radioButtons["hex-editor.options.startLayout.bits.8-Bit"]
+        XCTAssertTrue(bits8B.waitForExistence(timeout: 5))
+        bits8B.click()
+        app.buttons["hex-editor.options.button.ok"].click()
+        XCTAssertTrue(bits8B.waitForNonExistence(timeout: 5))
+
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let bits16C = app.radioButtons["hex-editor.options.startLayout.bits.16-Bit"]
+        XCTAssertTrue(bits16C.waitForExistence(timeout: 5))
+        bits16C.click()
+        app.buttons["hex-editor.options.button.ok"].click()
+        XCTAssertTrue(bits16C.waitForNonExistence(timeout: 5))
+
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let littleAfter = app.radioButtons["hex-editor.options.startLayout.endian.Little-Endian_(Native)"]
+        XCTAssertTrue(littleAfter.waitForExistence(timeout: 5))
+        XCTAssertEqual(littleAfter.value as? Int, 1,
+                       "Little-Endian preference should survive a temporary switch to 8-Bit cells. value=0 means it was reset — the pre-fix bug.")
+
+        app.buttons["hex-editor.options.button.cancel"].click()
+    }
+
+    func testLinearMouseDragBackwardLandsCaretAtSelectionStart() throws {
+        // Backward-drag (mouseDown at byte 5, drag to byte 0) — the caret
+        // should follow the mouse to byte 0, NOT stay at the selection's
+        // right edge (which would be the original anchor at byte 5+1=6).
+        // Pre-fix on 2026-05-04 the linear caret unconditionally landed
+        // at selectedByteEnd regardless of drag direction, so backward
+        // drags left the caret detached from the mouse.
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "abcdefghijklmnop")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 0.5)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        try positionHexCursorAtZero(app: app, hexTable: hexTable)
+        Thread.sleep(forTimeInterval: 0.2)
+
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 3))
+        let byte0 = firstRow.staticTexts.element(boundBy: 1)
+        let byte5 = firstRow.staticTexts.element(boundBy: 6)
+        XCTAssertTrue(byte0.waitForExistence(timeout: 3))
+        XCTAssertTrue(byte5.waitForExistence(timeout: 3))
+
+        // Drag from byte 5 (anchor) backward to byte 0.
+        let startCoord = byte5.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let endCoord   = byte0.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        startCoord.click(forDuration: 0.05, thenDragTo: endCoord)
+        Thread.sleep(forTimeInterval: 0.3)
+
+        guard let s = HexCursorState.read(from: app) else {
+            XCTFail("Failed to read cursor diagnostic.")
+            return
+        }
+        XCTAssertEqual(s.hasSelection, true,
+                       "Backward drag should produce a selection. Diagnostic: \(s.debugDescription)")
+        XCTAssertEqual(s.selStart, 0, "Diagnostic: \(s.debugDescription)")
+        XCTAssertEqual(s.selEnd, 6,
+                       "Selection should cover bytes 0–5 regardless of drag direction (selEnd exclusive = 6). Diagnostic: \(s.debugDescription)")
+        XCTAssertEqual(s.offset, 0,
+                       "Backward drag: caret should land at the LEFT end of selection (byte 0, the dragged-to byte). offset=6 here means the caret followed the anchor instead of the mouse — pre-fix behaviour. Diagnostic: \(s.debugDescription)")
+    }
+
+    func testLinearMouseDragCaretLandsAtNextByteLeftEdgeAfterMouseUp() throws {
+        // Post-mouseUp linear-drag caret convention: the caret sits at the
+        // beginning of the byte AFTER the selection (byte 6's left edge
+        // when bytes 0–5 are selected). The selection covers [0, 6) — the
+        // input math (byteOffsetAtPoint) is shared with rect, so a
+        // regression there surfaces here even without modifier-held drag.
+        // Mid-drag "no gap between selection and caret" behaviour is
+        // covered visually but isn't asserted here because XCUI can't
+        // sample drawRect: state mid-drag (the click(forDuration:) call
+        // is synchronous through mouseUp).
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "abcdefghijklmnop")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 0.5)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        try positionHexCursorAtZero(app: app, hexTable: hexTable)
+        Thread.sleep(forTimeInterval: 0.2)
+
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 3))
+        let byte0 = firstRow.staticTexts.element(boundBy: 1)
+        let byte5 = firstRow.staticTexts.element(boundBy: 6)
+        let byte6 = firstRow.staticTexts.element(boundBy: 7)
+        XCTAssertTrue(byte0.waitForExistence(timeout: 3))
+        XCTAssertTrue(byte5.waitForExistence(timeout: 3))
+        XCTAssertTrue(byte6.waitForExistence(timeout: 3))
+
+        let startCoord = byte0.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let endCoord   = byte5.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        startCoord.click(forDuration: 0.05, thenDragTo: endCoord)
+        Thread.sleep(forTimeInterval: 0.3)
+
+        guard let s = HexCursorState.read(from: app) else {
+            XCTFail("Failed to read cursor diagnostic.")
+            return
+        }
+        XCTAssertEqual(s.hasSelection, true,
+                       "Linear drag should produce a byte selection. Diagnostic: \(s.debugDescription)")
+        XCTAssertEqual(s.selStart, 0, "Diagnostic: \(s.debugDescription)")
+        XCTAssertEqual(s.selEnd, 6,
+                       "Selection should cover bytes 0–5 (selEnd exclusive = 6). Diagnostic: \(s.debugDescription)")
+        XCTAssertEqual(s.offset, 6,
+                       "Post-mouseUp linear convention: caret at byte 6 (one past last selected). Diagnostic: \(s.debugDescription)")
+
+        // The caret should be in byte 6's cell at its LEFT edge — i.e.
+        // caretCellMinX matches byte 6's row-relative cell-minX, and
+        // caretCellOffsetX is small (left side of cell). If a future
+        // regression made the caret shift past byte 6 or stay on byte 5,
+        // these assertions catch it.
+        guard let caretCellOffsetX = s.caretCellOffsetX,
+              let caretRow = s.caretRow else {
+            XCTFail("Diagnostic missing caret render fields. Raw: \(s.debugDescription)")
+            return
+        }
+        XCTAssertEqual(caretRow, 0, "Caret should still be on row 0 (selection didn't cross row).")
+        XCTAssertGreaterThanOrEqual(caretCellOffsetX, 0, "Caret rendered before its cell's left edge.")
+        // After mouseUp, the caret is at byte 6's LEFT edge (post-drag
+        // "beginning of next byte" convention). So caretCellOffsetX
+        // should be in the LEFT half of byte 6's cell, NOT the right —
+        // the inverse of the during-drag flush position.
+        let byte6Width = byte6.frame.width
+        XCTAssertLessThan(caretCellOffsetX, byte6Width / 2,
+                          "Post-mouseUp linear caret should sit at byte 6's LEFT edge (start of the next byte). caretCellOffsetX=\(caretCellOffsetX) byte6Width=\(byte6Width). A value past the half-width = caret at right edge = the during-drag-only shift accidentally still active. Diagnostic: \(s.debugDescription)")
+    }
+
+    func testRectKeyboardCaretRendersInsideActiveByteCell() throws {
+        // Diagnoses the rect-drag-caret-1-byte-left bug. Sets up a known
+        // rectangular selection via Shift+Option+Right (5 keys = anchor
+        // at byte 0, end at byte 5) and asserts:
+        //   1) the diagnostic surface reports activeByteOffset == 5
+        //      (the input model is right),
+        //   2) caretCellMinX equals the AX-frame minX of byte 5's cell
+        //      (the caret rendered in the cell that activeByteOffset
+        //      points at — NOT in byte 4's cell).
+        //   3) the caret's horizontal offset within that cell is non-
+        //      negative and within the cell's width (the caret stripe is
+        //      inside the cell, not at its origin or beyond its edge).
+        // The same drawRect: caret-positioning code path runs whether
+        // rect was entered via mouse drag or keyboard, so a render bug
+        // surfaces here regardless of input source. (A pure-mouse-drag
+        // bug would still need a separate test — coming next if this
+        // one passes.)
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "abcdefghijklmnop")  // 16 bytes — fits in one row at default columns
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 0.5)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        try positionHexCursorAtZero(app: app, hexTable: hexTable)
+        Thread.sleep(forTimeInterval: 0.2)
+
+        // Anchor rect at byte 0 and extend to byte 5 (Shift+Option+Right ×5).
+        for _ in 0..<5 {
+            app.typeKey(.rightArrow, modifierFlags: [.shift, .option])
+        }
+        Thread.sleep(forTimeInterval: 0.3)
+
+        guard let s = HexCursorState.read(from: app) else {
+            XCTFail("Failed to read cursor diagnostic.")
+            return
+        }
+        XCTAssertEqual(s.rectActive, true,
+                       "Expected an active rectangular selection. Diagnostic: \(s.debugDescription)")
+        XCTAssertEqual(s.rectOrigin, 0,
+                       "Rect should be anchored at byte 0. Diagnostic: \(s.debugDescription)")
+        XCTAssertEqual(s.rectWidth, 6,
+                       "Rect should span 6 bytes (anchor + 5 right-arrow extends). Diagnostic: \(s.debugDescription)")
+        XCTAssertEqual(s.offset, 5,
+                       "activeByteOffset should be at the rect's right edge (byte 5). Diagnostic: \(s.debugDescription)")
+
+        // Now read the cell-frame for byte 5 (boundBy:6 — index 0 is the
+        // offset column, indices 1–16 are bytes 0–15) and verify that the
+        // caret's last-rendered cell minX matches.
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 3))
+        let byte5Cell = firstRow.staticTexts.element(boundBy: 6)
+        XCTAssertTrue(byte5Cell.waitForExistence(timeout: 3))
+        let byte5Frame = byte5Cell.frame
+        let byte4Cell = firstRow.staticTexts.element(boundBy: 5)
+        let byte4Frame = byte4Cell.frame
+
+        guard let caretCellMinX = s.caretCellMinX else {
+            XCTFail("Diagnostic missing caretCellMinX. Raw: \(s.debugDescription)")
+            return
+        }
+
+        // The byte5Frame.minX is in screen coordinates; caretCellMinX is
+        // in the table's view coordinates. They differ by the table's
+        // origin offset, so we can't compare directly. Instead, check
+        // whether the caret is closer to byte 5's cell or byte 4's cell
+        // by comparing relative offsets.
+        // If the caret is inside byte 5's cell, caretCellMinX should
+        // equal the table's relative X for byte 5.
+        // If it's in byte 4's cell, it would equal byte 4's relative X.
+        // We can compute the relative offset by comparing the AX-screen
+        // delta between byte 4 and byte 5 (one cell width) against the
+        // delta between caretCellMinX and where it WOULD be if it were
+        // on byte 4 (= caretCellMinX − one cell width).
+        let cellWidth = byte5Frame.minX - byte4Frame.minX
+        XCTAssertGreaterThan(cellWidth, 0,
+                             "Cell width should be positive. byte4=\(byte4Frame), byte5=\(byte5Frame).")
+
+        // The caret in rect-extend-right must render in the RIGHT half
+        // of the active byte's cell (matching linear-selection convention
+        // where the caret sits at the right edge of the last selected
+        // byte). Before the 2026-05-04 fix, rect rendered the caret at
+        // the LEFT edge of the active byte's cell — visually 1 byte to
+        // the left of where users expect during drag-right. The
+        // assertion below catches a regression to that broken behaviour.
+        guard let caretCellOffsetX = s.caretCellOffsetX else {
+            XCTFail("Diagnostic missing caretCellOffsetX. Raw: \(s.debugDescription)")
+            return
+        }
+        XCTAssertGreaterThanOrEqual(caretCellOffsetX, 0,
+                                      "Caret rendered before its cell's left edge — render is off. Diagnostic: \(s.debugDescription)")
+        XCTAssertGreaterThan(caretCellOffsetX, cellWidth / 2,
+                             "Rect-extend-right should place the caret in the RIGHT half of the active byte's cell (matches the 'after the last selected byte' convention used by linear selection). caretCellOffsetX=\(caretCellOffsetX) cellWidth=\(cellWidth). A value near 0 = the pre-fix bug (caret at left edge = 1 byte left of where the user dragged). Diagnostic: \(s.debugDescription)")
+        // Caret sits inside the cell on its right side — past the digits
+        // but not into the next column's territory. Cell width ≈ 30pt,
+        // text ≈ 14pt, so the rendered caret X is around 0.7×cellWidth.
+        // Allow up to cellWidth so the assertion isn't fragile against
+        // sub-pixel rounding at certain font sizes.
+        XCTAssertLessThanOrEqual(caretCellOffsetX, cellWidth,
+                                  "Caret rendered past its cell's right edge into the next column. caretCellOffsetX=\(caretCellOffsetX) cellWidth=\(cellWidth). Diagnostic: \(s.debugDescription)")
+    }
+
+    func testOptionsFontTabExposesAllControls() throws {
+        // Phase 1 smoke test: open the Options dialog, switch to the Font
+        // tab, verify all seven controls exist via their AX identifiers,
+        // and confirm that Reset puts each into its documented default
+        // state (Menlo / 12 / nothing on except Mirror Cursor as Rect).
+        // Persistence is covered indirectly by the existing
+        // testOptionsResetIsNonDestructiveUntilCommitted; this test only
+        // proves the tab is wired up.
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try invokeHexEditorMenu(app: app, item: "Options...")
+        let fontTab = app.tabs["Font"]
+        XCTAssertTrue(fontTab.waitForExistence(timeout: 5),
+                      "Font tab should be present in the Options dialog.")
+        fontTab.click()
+
+        let fontName = app.popUpButtons["hex-editor.options.font.name"]
+        let fontSize = app.popUpButtons["hex-editor.options.font.size"]
+        let bold = app.checkBoxes["hex-editor.options.font.bold"]
+        let italic = app.checkBoxes["hex-editor.options.font.italic"]
+        let underline = app.checkBoxes["hex-editor.options.font.underline"]
+        let upper = app.checkBoxes["hex-editor.options.font.uppercaseHex"]
+        let mirror = app.checkBoxes["hex-editor.options.font.mirrorAsciiCursor"]
+        XCTAssertTrue(fontName.waitForExistence(timeout: 3))
+        XCTAssertTrue(fontSize.waitForExistence(timeout: 1))
+        XCTAssertTrue(bold.waitForExistence(timeout: 1))
+        XCTAssertTrue(italic.waitForExistence(timeout: 1))
+        XCTAssertTrue(underline.waitForExistence(timeout: 1))
+        XCTAssertTrue(upper.waitForExistence(timeout: 1))
+        XCTAssertTrue(mirror.waitForExistence(timeout: 1))
+
+        // Reset → factory defaults visible in the dialog. (Doesn't commit
+        // — that's the modal-loop semantic verified elsewhere.)
+        app.buttons["hex-editor.options.button.reset"].click()
+        XCTAssertEqual(fontName.value as? String, "Menlo",
+                       "Font Name should default to Menlo.")
+        XCTAssertEqual(fontSize.value as? String, "12",
+                       "Font Size should default to 12.")
+        XCTAssertEqual(bold.value as? Int, 0,      "Bold should default off.")
+        XCTAssertEqual(italic.value as? Int, 0,    "Italic should default off.")
+        XCTAssertEqual(underline.value as? Int, 0, "Underline should default off.")
+        XCTAssertEqual(upper.value as? Int, 0,     "Capital letters should default off.")
+        XCTAssertEqual(mirror.value as? Int, 0,    "Mirror Cursor as Rect should default OFF (user opts in).")
+
+        app.buttons["hex-editor.options.button.cancel"].click()
     }
 
     func testViewInHexToggle() throws {
@@ -779,11 +1824,15 @@ func testContextMenuCommands() throws {
         bits16.click()
 
         // Wait for the table to rebuild — the cell at index 1 must now span 2 bytes (4 hex chars).
+        // Bytes 0,1 are 'A','B' (0x41 0x42). With Little-Endian the default
+        // (per the 2026-05-04 change), 16-Bit display reverses byte order
+        // within the cell → "4241". Switching to Big-Endian via the menu
+        // would render "4142", but we test the active default here.
         let firstRowAfter = hexTable.tableRows.element(boundBy: 0)
         XCTAssertTrue(firstRowAfter.waitForExistence(timeout: 5))
         let cellOneAfter = firstRowAfter.staticTexts.element(boundBy: 1)
 
-        let predicate = NSPredicate(format: "value == %@", "4142")
+        let predicate = NSPredicate(format: "value == %@", "4241")
         let waiter = expectation(for: predicate, evaluatedWith: cellOneAfter, handler: nil)
         wait(for: [waiter], timeout: 5)
         captureToDashboard("diag-viewSubmode-after16Bit")

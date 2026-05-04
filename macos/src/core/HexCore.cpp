@@ -1013,7 +1013,9 @@ std::string formatCell(const std::uint8_t *cellBytes, std::size_t available, con
         return std::string();
     }
 
-    static const char hexDigits[] = "0123456789abcdef";
+    static const char hexDigitsLower[] = "0123456789abcdef";
+    static const char hexDigitsUpper[] = "0123456789ABCDEF";
+    const char *hexDigits = mode.uppercase ? hexDigitsUpper : hexDigitsLower;
     const int bpc = mode.bytesPerCell;
     const int totalDigits = digitsPerCell(mode);
 
