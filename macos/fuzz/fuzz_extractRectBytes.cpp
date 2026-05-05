@@ -57,7 +57,8 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
     const std::size_t totalLength = static_cast<std::size_t>(readLE64(data + 32)) % (bufferLen + 1);
     const std::uint8_t *buffer = data + kHeaderSize;
 
+    hexedit::SpanByteSource source(buffer, totalLength);
     std::vector<std::uint8_t> out;
-    (void)hexedit::extractRectBytes(buffer, totalLength, rect, out);
+    (void)hexedit::extractRectBytes(source, rect, out);
     return 0;
 }

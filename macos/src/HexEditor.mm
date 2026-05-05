@@ -3763,12 +3763,10 @@ static bool copyRectToPasteboard()
         ? HexRectClipboardKind::Ascii
         : HexRectClipboardKind::Bytes;
 
+    hexedit::SpanByteSource bufferSource(hexBufferData(), hexBufferLength());
     std::vector<std::uint8_t> payloadBytes;
-    hexedit::extractRectBytes(hexBufferData(), hexBufferLength(),
-                               g_rectSelection, payloadBytes);
-    const std::string text = hexedit::formatRectClipboardHex(hexBufferData(),
-                                                              g_rectSelection,
-                                                              hexBufferLength());
+    hexedit::extractRectBytes(bufferSource, g_rectSelection, payloadBytes);
+    const std::string text = hexedit::formatRectClipboardHex(bufferSource, g_rectSelection);
 
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
     [pasteboard clearContents];
@@ -3829,9 +3827,9 @@ static bool copyHexSelectionAsBinary()
         if (!copyRectToPasteboard()) {
             return false;
         }
+        hexedit::SpanByteSource bufferSource(hexBufferData(), hexBufferLength());
         std::vector<std::uint8_t> rectBytes;
-        if (hexedit::extractRectBytes(hexBufferData(), hexBufferLength(),
-                                       g_rectSelection, rectBytes) && !rectBytes.empty()) {
+        if (hexedit::extractRectBytes(bufferSource, g_rectSelection, rectBytes) && !rectBytes.empty()) {
             NSData *raw = [NSData dataWithBytes:rectBytes.data() length:rectBytes.size()];
             NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
             [pasteboard setData:raw forType:@"public.data"];
@@ -4393,8 +4391,9 @@ static bool executeHexFindNext(hexedit::SearchDirection direction, NSString **er
         startOffset = hasByteSelection() ? selectedByteStart : activeByteOffset;
     }
 
+    hexedit::SpanByteSource bufferSource(hexBufferData(), hexBufferLength());
     std::size_t found = 0;
-    if (!hexedit::findBytePattern(hexBufferData(), hexBufferLength(), pattern,
+    if (!hexedit::findBytePattern(bufferSource, pattern,
                                    startOffset, direction, g_findWrap, found)) {
         if (errorMessage) *errorMessage = L(@"find.errorNotFound");
         return false;
@@ -4444,11 +4443,12 @@ static int executeHexReplaceAll(NSString *findText, NSString *replaceText, bool 
     }
 
     // Collect all non-overlapping match offsets, forward, no wrap.
+    hexedit::SpanByteSource bufferSource(hexBufferData(), hexBufferLength());
     std::vector<std::size_t> matches;
     std::size_t cursor = 0;
     while (cursor + findPattern.bytes.size() <= hexBufferLength()) {
         std::size_t at = 0;
-        if (!hexedit::findBytePattern(hexBufferData(), hexBufferLength(), findPattern,
+        if (!hexedit::findBytePattern(bufferSource, findPattern,
                                        cursor, hexedit::SearchDirection::Forward, false, at)) {
             break;
         }
@@ -4669,8 +4669,9 @@ static int executeHexCompareWithFile(NSString *otherFilePath, NSString **errorMe
     const std::uint8_t *otherBytes = static_cast<const std::uint8_t *>(otherData.bytes);
     const std::size_t otherLen = otherData.length;
 
-    g_compareDiffs = hexedit::computeByteDiffs(hexBufferData(), hexBufferLength(),
-                                                otherBytes, otherLen);
+    hexedit::SpanByteSource mySource(hexBufferData(), hexBufferLength());
+    hexedit::SpanByteSource otherSource(otherBytes, otherLen);
+    g_compareDiffs = hexedit::computeByteDiffs(mySource, otherSource);
     g_compareOtherPath = [otherFilePath copy];
 
     if (hexTableView) {

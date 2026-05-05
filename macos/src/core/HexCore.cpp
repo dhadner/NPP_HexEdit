@@ -900,15 +900,103 @@ bool parseSearchPattern(const std::string &text, bool matchCase, SearchPattern &
     return true;
 }
 
-bool findBytePattern(const std::uint8_t *haystack,
-                     std::size_t haystackLength,
+namespace {
+
+// Search-engine chunk size for streaming finds against a ByteSource. 64 KB
+// keeps plugin RAM bounded regardless of file size, while being large enough
+// that per-chunk overhead (one virtual call + the needleLen-1 byte overlap)
+// is negligible compared to the byte-by-byte search cost.
+constexpr std::size_t kSearchChunkSize = 64 * 1024;
+
+// Streaming variant of searchInRange that reads chunks from a ByteSource
+// instead of a raw pointer. Each chunk covers [chunkStart, chunkStart +
+// kSearchChunkSize + needleLen - 1) so a needle straddling a chunk boundary
+// is found exactly once, in the chunk that begins before it.
+bool searchInRangeStreamed(const ByteSource &source,
+                           std::size_t rangeStart,
+                           std::size_t rangeEnd,
+                           const std::uint8_t *needle,
+                           std::size_t needleLength,
+                           bool matchCase,
+                           bool isHex,
+                           SearchDirection direction,
+                           std::size_t &outOffset)
+{
+    if (needleLength == 0 || rangeEnd < rangeStart || rangeEnd - rangeStart < needleLength) {
+        return false;
+    }
+
+    std::vector<std::uint8_t> buffer(kSearchChunkSize + needleLength - 1);
+
+    if (direction == SearchDirection::Forward) {
+        std::size_t pos = rangeStart;
+        while (pos + needleLength <= rangeEnd) {
+            const std::size_t want = std::min(buffer.size(), rangeEnd - pos);
+            const std::size_t got = source.read(pos, buffer.data(), want);
+            if (got < needleLength) {
+                return false;
+            }
+            // Last position in this chunk where a needle could still start AND
+            // still fit fully inside the chunk we just read.
+            const std::size_t lastStartInChunk = got - needleLength;
+            std::size_t hit = 0;
+            if (searchInRange(buffer.data(), 0, lastStartInChunk + needleLength,
+                              needle, needleLength, matchCase, isHex, direction, hit)) {
+                outOffset = pos + hit;
+                return true;
+            }
+            // Advance by kSearchChunkSize (NOT got) so the overlap region is
+            // re-read at the start of the next chunk — that overlap exists so
+            // matches straddling the kSearchChunkSize boundary are caught.
+            if (got <= needleLength - 1) {
+                return false;
+            }
+            pos += kSearchChunkSize;
+        }
+        return false;
+    }
+
+    // Backward: walk chunks in descending order. Each chunk covers
+    // [chunkStart, chunkStart + kSearchChunkSize + needleLength - 1) and
+    // we ratchet chunkStart down by kSearchChunkSize per iteration.
+    if (rangeEnd < rangeStart + needleLength) {
+        return false;
+    }
+    std::size_t chunkEnd = rangeEnd;
+    while (chunkEnd >= rangeStart + needleLength) {
+        const std::size_t chunkStart = (chunkEnd >= rangeStart + buffer.size())
+            ? (chunkEnd - buffer.size())
+            : rangeStart;
+        const std::size_t want = chunkEnd - chunkStart;
+        const std::size_t got = source.read(chunkStart, buffer.data(), want);
+        if (got < needleLength) {
+            return false;
+        }
+        std::size_t hit = 0;
+        if (searchInRange(buffer.data(), 0, got, needle, needleLength,
+                          matchCase, isHex, direction, hit)) {
+            outOffset = chunkStart + hit;
+            return true;
+        }
+        if (chunkStart == rangeStart) {
+            return false;
+        }
+        chunkEnd = chunkStart + (needleLength - 1);
+    }
+    return false;
+}
+
+}  // namespace
+
+bool findBytePattern(const ByteSource &haystack,
                      const SearchPattern &pattern,
                      std::size_t startOffset,
                      SearchDirection direction,
                      bool wrap,
                      std::size_t &outOffset)
 {
-    if (haystack == nullptr || pattern.bytes.empty() || pattern.bytes.size() > haystackLength) {
+    const std::size_t haystackLength = haystack.length();
+    if (pattern.bytes.empty() || pattern.bytes.size() > haystackLength) {
         return false;
     }
     if (startOffset > haystackLength) {
@@ -920,62 +1008,71 @@ bool findBytePattern(const std::uint8_t *haystack,
     const std::size_t needleLen = pattern.bytes.size();
 
     if (direction == SearchDirection::Forward) {
-        // Primary range: [startOffset, haystackLength)
-        if (searchInRange(haystack, startOffset, haystackLength, needle, needleLen,
-                          pattern.matchCase, isHex, direction, outOffset)) {
+        if (searchInRangeStreamed(haystack, startOffset, haystackLength, needle, needleLen,
+                                  pattern.matchCase, isHex, direction, outOffset)) {
             return true;
         }
         if (!wrap) {
             return false;
         }
-        // Wrap range: [0, min(startOffset + needleLen - 1, haystackLength))
         const std::size_t wrapEnd = std::min(startOffset + needleLen - 1, haystackLength);
-        return searchInRange(haystack, 0, wrapEnd, needle, needleLen,
-                             pattern.matchCase, isHex, direction, outOffset);
+        return searchInRangeStreamed(haystack, 0, wrapEnd, needle, needleLen,
+                                     pattern.matchCase, isHex, direction, outOffset);
     }
 
     // Backward
-    // Primary range: [0, startOffset)
     if (startOffset >= needleLen) {
-        if (searchInRange(haystack, 0, startOffset, needle, needleLen,
-                          pattern.matchCase, isHex, direction, outOffset)) {
+        if (searchInRangeStreamed(haystack, 0, startOffset, needle, needleLen,
+                                  pattern.matchCase, isHex, direction, outOffset)) {
             return true;
         }
     }
     if (!wrap) {
         return false;
     }
-    // Wrap range: [max(startOffset, 1) - 0, haystackLength). Approximation: search whole tail.
     const std::size_t wrapStart = (startOffset >= needleLen - 1) ? (startOffset - (needleLen - 1)) : 0;
     if (wrapStart >= haystackLength) {
         return false;
     }
-    return searchInRange(haystack, wrapStart, haystackLength, needle, needleLen,
-                         pattern.matchCase, isHex, direction, outOffset);
+    return searchInRangeStreamed(haystack, wrapStart, haystackLength, needle, needleLen,
+                                 pattern.matchCase, isHex, direction, outOffset);
 }
 
-std::vector<bool> computeByteDiffs(const std::uint8_t *a, std::size_t lenA,
-                                    const std::uint8_t *b, std::size_t lenB)
+std::vector<bool> computeByteDiffs(const ByteSource &a, const ByteSource &b)
 {
+    const std::size_t lenA = a.length();
+    const std::size_t lenB = b.length();
     std::vector<bool> mask;
-    if (lenA == lenB && (a == nullptr || b == nullptr || std::memcmp(a, b, lenA) == 0)) {
-        return mask;  // empty = identical
-    }
+
+    constexpr std::size_t kCompareChunkSize = 64 * 1024;
+    std::vector<std::uint8_t> bufA(kCompareChunkSize);
+    std::vector<std::uint8_t> bufB(kCompareChunkSize);
 
     const std::size_t maxLen = std::max(lenA, lenB);
+    const std::size_t minLen = std::min(lenA, lenB);
     mask.assign(maxLen, false);
     bool anyDiff = false;
 
-    const std::size_t minLen = std::min(lenA, lenB);
-    if (a != nullptr && b != nullptr) {
-        for (std::size_t i = 0; i < minLen; ++i) {
-            if (a[i] != b[i]) {
-                mask[i] = true;
+    // Lock-step chunked compare across the overlapping prefix.
+    for (std::size_t pos = 0; pos < minLen; pos += kCompareChunkSize) {
+        const std::size_t want = std::min(kCompareChunkSize, minLen - pos);
+        const std::size_t gotA = a.read(pos, bufA.data(), want);
+        const std::size_t gotB = b.read(pos, bufB.data(), want);
+        const std::size_t cmp = std::min(gotA, gotB);
+        for (std::size_t i = 0; i < cmp; ++i) {
+            if (bufA[i] != bufB[i]) {
+                mask[pos + i] = true;
                 anyDiff = true;
             }
         }
+        if (gotA < want || gotB < want) {
+            // A short read indicates the source ran out earlier than its
+            // declared length — bail rather than mark false-diffs we can't
+            // verify.
+            break;
+        }
     }
-    // Bytes only present in one buffer count as "differing" (matches Windows DoCompare).
+    // Bytes only present in one source count as "differing" (matches Windows DoCompare).
     for (std::size_t i = minLen; i < maxLen; ++i) {
         mask[i] = true;
         anyDiff = true;
@@ -1108,8 +1205,7 @@ std::vector<ByteRange> rectToRanges(const RectSelection &rect, std::size_t total
     return ranges;
 }
 
-bool extractRectBytes(const std::uint8_t *bytes,
-                      std::size_t totalLength,
+bool extractRectBytes(const ByteSource &source,
                       const RectSelection &rect,
                       std::vector<std::uint8_t> &out)
 {
@@ -1117,18 +1213,14 @@ bool extractRectBytes(const std::uint8_t *bytes,
         return false;
     }
     // Defend against width × height overflowing size_t. In normal plugin use
-    // the rect comes from makeRectSelection on a < 1 MB buffer so this can't
-    // happen, but a malformed custom-UTI payload that survives upstream
+    // the rect comes from makeRectSelection on a bounded selection so this
+    // can't happen, but a malformed custom-UTI payload that survives upstream
     // checks could otherwise allocate gigabytes. Reject up front.
     if (rect.width != 0 && rect.height > std::numeric_limits<std::size_t>::max() / rect.width) {
         return false;
     }
     out.assign(rect.totalBytes(), 0);
-    if (bytes == nullptr) {
-        // No source data — out is already zero-filled, which is the right answer
-        // for an empty file plus an active rectangle (degenerate but valid).
-        return true;
-    }
+    const std::size_t totalLength = source.length();
     for (std::size_t r = 0; r < rect.height; ++r) {
         const std::size_t rowStartOffset = rect.originOffset + r * rect.bytesPerRow;
         if (rowStartOffset >= totalLength) {
@@ -1137,8 +1229,9 @@ bool extractRectBytes(const std::uint8_t *bytes,
         }
         const std::size_t available = totalLength - rowStartOffset;
         const std::size_t take = std::min(rect.width, available);
-        std::memcpy(&out[r * rect.width], bytes + rowStartOffset, take);
-        // Bytes [take .. rect.width) of this row are past EOF and stay zero.
+        // ByteSource::read fills exactly `got` bytes (not necessarily all of `take`)
+        // so we leave any unfilled tail zero (out was zero-initialised).
+        source.read(rowStartOffset, &out[r * rect.width], take);
     }
     return true;
 }
@@ -1147,9 +1240,8 @@ static const char kHexUpper[16] = {
     '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'
 };
 
-std::string formatRectClipboardHex(const std::uint8_t *bytes,
-                                   const RectSelection &rect,
-                                   std::size_t totalLength)
+std::string formatRectClipboardHex(const ByteSource &source,
+                                   const RectSelection &rect)
 {
     std::string out;
     if (!rect.active()) {
@@ -1157,19 +1249,23 @@ std::string formatRectClipboardHex(const std::uint8_t *bytes,
     }
     // Each row: width * 2 hex chars + (width - 1) spaces. Plus '\n' between rows.
     out.reserve(rect.height * (rect.width * 3 + 1));
+    // Read each row in one go into a small scratch buffer rather than calling
+    // source.read() per byte — for a typical 16-byte rect that's one virtual
+    // call per row instead of 16, and for a wide rect (e.g. 64-byte cells) it
+    // matters more.
+    std::vector<std::uint8_t> rowBuf(rect.width);
     for (std::size_t r = 0; r < rect.height; ++r) {
         if (r > 0) {
             out.push_back('\n');
         }
         const std::size_t rowStartOffset = rect.originOffset + r * rect.bytesPerRow;
+        std::fill(rowBuf.begin(), rowBuf.end(), static_cast<std::uint8_t>(0));
+        source.read(rowStartOffset, rowBuf.data(), rect.width);
         for (std::size_t c = 0; c < rect.width; ++c) {
             if (c > 0) {
                 out.push_back(' ');
             }
-            const std::size_t srcOffset = rowStartOffset + c;
-            const std::uint8_t value = (bytes != nullptr && srcOffset < totalLength)
-                ? bytes[srcOffset]
-                : static_cast<std::uint8_t>(0);
+            const std::uint8_t value = rowBuf[c];
             out.push_back(kHexUpper[(value >> 4) & 0x0F]);
             out.push_back(kHexUpper[value & 0x0F]);
         }

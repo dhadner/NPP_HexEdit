@@ -783,69 +783,95 @@ void testFindBytePattern()
     std::vector<std::uint8_t> hay = {
         'A','B','C','D','E','F','G','H','A','B','C','D','E','F','G','H'
     };
+    SpanByteSource haySrc(hay.data(), hay.size());
     std::size_t at = 0;
 
     SearchPattern needle;
     HEX_EXPECT(parseSearchPattern("CD", true, needle));
 
     // Forward from 0 finds first occurrence at offset 2.
-    HEX_EXPECT(findBytePattern(hay.data(), hay.size(), needle, 0,
+    HEX_EXPECT(findBytePattern(haySrc, needle, 0,
                                 SearchDirection::Forward, true, at));
     HEX_EXPECT_EQ(at, static_cast<std::size_t>(2));
 
     // Forward from 3 finds the second at offset 10.
-    HEX_EXPECT(findBytePattern(hay.data(), hay.size(), needle, 3,
+    HEX_EXPECT(findBytePattern(haySrc, needle, 3,
                                 SearchDirection::Forward, true, at));
     HEX_EXPECT_EQ(at, static_cast<std::size_t>(10));
 
     // Forward from 11 with wrap → wraps to offset 2.
-    HEX_EXPECT(findBytePattern(hay.data(), hay.size(), needle, 11,
+    HEX_EXPECT(findBytePattern(haySrc, needle, 11,
                                 SearchDirection::Forward, true, at));
     HEX_EXPECT_EQ(at, static_cast<std::size_t>(2));
 
     // Forward from 11 without wrap → no match.
-    HEX_EXPECT(!findBytePattern(hay.data(), hay.size(), needle, 11,
+    HEX_EXPECT(!findBytePattern(haySrc, needle, 11,
                                  SearchDirection::Forward, false, at));
 
     // Backward from end (16) finds the second at offset 10.
-    HEX_EXPECT(findBytePattern(hay.data(), hay.size(), needle, 16,
+    HEX_EXPECT(findBytePattern(haySrc, needle, 16,
                                 SearchDirection::Backward, true, at));
     HEX_EXPECT_EQ(at, static_cast<std::size_t>(10));
 
     // Backward from offset 5 finds the first at offset 2.
-    HEX_EXPECT(findBytePattern(hay.data(), hay.size(), needle, 5,
+    HEX_EXPECT(findBytePattern(haySrc, needle, 5,
                                 SearchDirection::Backward, true, at));
     HEX_EXPECT_EQ(at, static_cast<std::size_t>(2));
 
     // Backward from 1 with wrap → wraps to offset 10 (last in document).
-    HEX_EXPECT(findBytePattern(hay.data(), hay.size(), needle, 1,
+    HEX_EXPECT(findBytePattern(haySrc, needle, 1,
                                 SearchDirection::Backward, true, at));
     HEX_EXPECT_EQ(at, static_cast<std::size_t>(10));
 
     // Backward from 1 without wrap → no match.
-    HEX_EXPECT(!findBytePattern(hay.data(), hay.size(), needle, 1,
+    HEX_EXPECT(!findBytePattern(haySrc, needle, 1,
                                  SearchDirection::Backward, false, at));
 
     // Hex pattern search.
     std::vector<std::uint8_t> blob = { 0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0x00 };
+    SpanByteSource blobSrc(blob.data(), blob.size());
     SearchPattern hexNeedle;
     HEX_EXPECT(parseSearchPattern("0xDEADBEEF", true, hexNeedle));
-    HEX_EXPECT(findBytePattern(blob.data(), blob.size(), hexNeedle, 0,
+    HEX_EXPECT(findBytePattern(blobSrc, hexNeedle, 0,
                                 SearchDirection::Forward, true, at));
     HEX_EXPECT_EQ(at, static_cast<std::size_t>(1));
 
     // Match case off finds 'CD' regardless of case.
     SearchPattern caseLess;
     HEX_EXPECT(parseSearchPattern("cd", false, caseLess));
-    HEX_EXPECT(findBytePattern(hay.data(), hay.size(), caseLess, 0,
+    HEX_EXPECT(findBytePattern(haySrc, caseLess, 0,
                                 SearchDirection::Forward, true, at));
     HEX_EXPECT_EQ(at, static_cast<std::size_t>(2));
 
     // Pattern longer than haystack → no match.
     SearchPattern bigNeedle;
     bigNeedle.bytes = std::vector<std::uint8_t>(100, 0x00);
-    HEX_EXPECT(!findBytePattern(hay.data(), hay.size(), bigNeedle, 0,
+    HEX_EXPECT(!findBytePattern(haySrc, bigNeedle, 0,
                                  SearchDirection::Forward, true, at));
+
+    // Streaming-search regression: pattern lives at a chunk boundary.
+    // kSearchChunkSize is 64 KB; build a haystack with the needle straddling
+    // offset 64 KB - 2 to verify the overlap region catches it.
+    {
+        constexpr std::size_t kChunk = 64 * 1024;
+        std::vector<std::uint8_t> bigHay(kChunk + 16, 0x00);
+        const std::vector<std::uint8_t> longNeedle = { 0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD };
+        const std::size_t plantOffset = kChunk - 2;
+        std::copy(longNeedle.begin(), longNeedle.end(), bigHay.begin() + plantOffset);
+        SpanByteSource bigSrc(bigHay.data(), bigHay.size());
+        SearchPattern straddler;
+        straddler.bytes = longNeedle;
+        straddler.kind = SearchPatternKind::Hex;
+        HEX_EXPECT(findBytePattern(bigSrc, straddler, 0,
+                                    SearchDirection::Forward, false, at));
+        HEX_EXPECT_EQ(at, plantOffset);
+
+        // Same haystack, backward search starting from end — should find the
+        // same plant via the backward chunked walk.
+        HEX_EXPECT(findBytePattern(bigSrc, straddler, bigHay.size(),
+                                    SearchDirection::Backward, false, at));
+        HEX_EXPECT_EQ(at, plantOffset);
+    }
 }
 
 void testClampCursorMode()
@@ -1025,16 +1051,20 @@ void testComputeByteDiffs()
 {
     g_currentSuite = "computeByteDiffs";
 
+    auto src = [](const std::vector<std::uint8_t> &v) {
+        return SpanByteSource(v.data(), v.size());
+    };
+
     // Identical buffers → empty mask.
     std::vector<std::uint8_t> same1 = { 0x01, 0x02, 0x03 };
     std::vector<std::uint8_t> same2 = { 0x01, 0x02, 0x03 };
-    auto mask = computeByteDiffs(same1.data(), same1.size(), same2.data(), same2.size());
+    auto mask = computeByteDiffs(src(same1), src(same2));
     HEX_EXPECT(mask.empty());
 
     // Single byte differs.
     std::vector<std::uint8_t> a = { 0x01, 0x02, 0x03, 0x04 };
     std::vector<std::uint8_t> b = { 0x01, 0x02, 0xFF, 0x04 };
-    mask = computeByteDiffs(a.data(), a.size(), b.data(), b.size());
+    mask = computeByteDiffs(src(a), src(b));
     HEX_EXPECT_EQ(mask.size(), static_cast<std::size_t>(4));
     HEX_EXPECT(!mask[0]);
     HEX_EXPECT(!mask[1]);
@@ -1044,7 +1074,7 @@ void testComputeByteDiffs()
     // Different lengths — extra bytes count as differing.
     std::vector<std::uint8_t> shorter = { 0x01, 0x02 };
     std::vector<std::uint8_t> longer  = { 0x01, 0x02, 0x03, 0x04 };
-    mask = computeByteDiffs(shorter.data(), shorter.size(), longer.data(), longer.size());
+    mask = computeByteDiffs(src(shorter), src(longer));
     HEX_EXPECT_EQ(mask.size(), static_cast<std::size_t>(4));
     HEX_EXPECT(!mask[0]);
     HEX_EXPECT(!mask[1]);
@@ -1052,18 +1082,19 @@ void testComputeByteDiffs()
     HEX_EXPECT(mask[3]);
 
     // Reverse order of args yields the same mask.
-    mask = computeByteDiffs(longer.data(), longer.size(), shorter.data(), shorter.size());
+    mask = computeByteDiffs(src(longer), src(shorter));
     HEX_EXPECT_EQ(mask.size(), static_cast<std::size_t>(4));
     HEX_EXPECT(!mask[0]);
     HEX_EXPECT(mask[2]);
     HEX_EXPECT(mask[3]);
 
-    // Empty buffers.
-    mask = computeByteDiffs(nullptr, 0, nullptr, 0);
+    // Empty sources.
+    SpanByteSource empty(nullptr, 0);
+    mask = computeByteDiffs(empty, empty);
     HEX_EXPECT(mask.empty());
 
     // One side empty, other has content → all bytes differ.
-    mask = computeByteDiffs(nullptr, 0, longer.data(), longer.size());
+    mask = computeByteDiffs(empty, src(longer));
     HEX_EXPECT_EQ(mask.size(), static_cast<std::size_t>(4));
     for (std::size_t i = 0; i < mask.size(); ++i) {
         HEX_EXPECT(mask[i]);
@@ -1072,7 +1103,7 @@ void testComputeByteDiffs()
     // Same length, all bytes differ.
     std::vector<std::uint8_t> p = { 0x00, 0x00, 0x00 };
     std::vector<std::uint8_t> q = { 0xFF, 0xFF, 0xFF };
-    mask = computeByteDiffs(p.data(), p.size(), q.data(), q.size());
+    mask = computeByteDiffs(src(p), src(q));
     HEX_EXPECT_EQ(mask.size(), static_cast<std::size_t>(3));
     for (std::size_t i = 0; i < mask.size(); ++i) {
         HEX_EXPECT(mask[i]);
@@ -1197,13 +1228,14 @@ void testExtractRectBytes()
     {
         std::vector<std::uint8_t> src(16);
         for (std::size_t i = 0; i < 16; ++i) src[i] = static_cast<std::uint8_t>(0x10 + i);
+        SpanByteSource srcS(src.data(), src.size());
         RectSelection rect;
         rect.originOffset = 2;     // row 0 col 2
         rect.width = 4;
         rect.height = 3;
         rect.bytesPerRow = 8;
         std::vector<std::uint8_t> out;
-        HEX_EXPECT(extractRectBytes(src.data(), src.size(), rect, out));
+        HEX_EXPECT(extractRectBytes(srcS, rect, out));
         // Row 0 cols 2..5 → 0x12 0x13 0x14 0x15
         HEX_EXPECT_EQ(out.size(), static_cast<std::size_t>(12));
         HEX_EXPECT_EQ(out[0], static_cast<std::uint8_t>(0x12));
@@ -1219,7 +1251,8 @@ void testExtractRectBytes()
     // Inactive rect → returns false, out untouched.
     {
         std::vector<std::uint8_t> out{0xAA, 0xBB};
-        HEX_EXPECT(!extractRectBytes(nullptr, 0, RectSelection{}, out));
+        SpanByteSource emptySrc(nullptr, 0);
+        HEX_EXPECT(!extractRectBytes(emptySrc, RectSelection{}, out));
         HEX_EXPECT_EQ(out.size(), static_cast<std::size_t>(2));
     }
 }
@@ -1231,24 +1264,26 @@ void testFormatRectClipboardHex()
     // 2x2 rect of {DE AD, BE EF} → "DE AD\nBE EF"
     {
         std::vector<std::uint8_t> src = {0xDE, 0xAD, 0x00, 0x00, 0xBE, 0xEF};
+        SpanByteSource srcS(src.data(), src.size());
         RectSelection rect;
         rect.originOffset = 0;
         rect.width = 2;
         rect.height = 2;
         rect.bytesPerRow = 4;
-        const std::string text = formatRectClipboardHex(src.data(), rect, src.size());
+        const std::string text = formatRectClipboardHex(srcS, rect);
         HEX_EXPECT(text == "DE AD\nBE EF");
     }
 
     // Past-EOF row pads with zeros.
     {
         std::vector<std::uint8_t> src = {0xDE, 0xAD};
+        SpanByteSource srcS(src.data(), src.size());
         RectSelection rect;
         rect.originOffset = 0;
         rect.width = 2;
         rect.height = 2;
         rect.bytesPerRow = 2;
-        const std::string text = formatRectClipboardHex(src.data(), rect, src.size());
+        const std::string text = formatRectClipboardHex(srcS, rect);
         HEX_EXPECT(text == "DE AD\n00 00");
     }
 }
@@ -1718,6 +1753,79 @@ void testReadPreviewBuffer()
     }
 }
 
+void testSpanByteSource()
+{
+    g_currentSuite = "SpanByteSource";
+
+    // Round-trip read of a full buffer.
+    {
+        const std::vector<std::uint8_t> src = {0x10, 0x20, 0x30, 0x40, 0x50};
+        SpanByteSource source(src.data(), src.size());
+        HEX_EXPECT_EQ(source.length(), src.size());
+
+        std::uint8_t dest[8] = {};
+        std::size_t got = source.read(0, dest, sizeof(dest));
+        HEX_EXPECT_EQ(got, src.size());
+        for (std::size_t i = 0; i < src.size(); ++i) {
+            HEX_EXPECT_EQ(dest[i], src[i]);
+        }
+        // dest beyond src.size() is untouched (still 0).
+        HEX_EXPECT_EQ(dest[src.size()], static_cast<std::uint8_t>(0));
+    }
+
+    // Partial read mid-buffer.
+    {
+        const std::vector<std::uint8_t> src = {0x10, 0x20, 0x30, 0x40, 0x50};
+        SpanByteSource source(src.data(), src.size());
+        std::uint8_t dest[3] = {};
+        HEX_EXPECT_EQ(source.read(2, dest, 3), static_cast<std::size_t>(3));
+        HEX_EXPECT_EQ(dest[0], static_cast<std::uint8_t>(0x30));
+        HEX_EXPECT_EQ(dest[1], static_cast<std::uint8_t>(0x40));
+        HEX_EXPECT_EQ(dest[2], static_cast<std::uint8_t>(0x50));
+    }
+
+    // Read clamped to remaining bytes when count > length - offset.
+    {
+        const std::vector<std::uint8_t> src = {0xAA, 0xBB, 0xCC};
+        SpanByteSource source(src.data(), src.size());
+        std::uint8_t dest[10] = {};
+        HEX_EXPECT_EQ(source.read(1, dest, 10), static_cast<std::size_t>(2));
+        HEX_EXPECT_EQ(dest[0], static_cast<std::uint8_t>(0xBB));
+        HEX_EXPECT_EQ(dest[1], static_cast<std::uint8_t>(0xCC));
+        // Bytes past the available range stay zero (not written by read()).
+        HEX_EXPECT_EQ(dest[2], static_cast<std::uint8_t>(0x00));
+    }
+
+    // Reads past EOF return 0 without touching dest. ASan would catch a
+    // bad-write here so this also doubles as an out-of-bounds guard test.
+    {
+        const std::vector<std::uint8_t> src = {0x01, 0x02};
+        SpanByteSource source(src.data(), src.size());
+        std::uint8_t dest[4] = {0xEE, 0xEE, 0xEE, 0xEE};
+        HEX_EXPECT_EQ(source.read(2, dest, 4), static_cast<std::size_t>(0));
+        HEX_EXPECT_EQ(source.read(99, dest, 4), static_cast<std::size_t>(0));
+        HEX_EXPECT_EQ(dest[0], static_cast<std::uint8_t>(0xEE));
+    }
+
+    // Empty source — length() = 0, every read returns 0. nullptr data is OK
+    // when length is 0; SpanByteSource never dereferences in that case.
+    {
+        SpanByteSource source(nullptr, 0);
+        HEX_EXPECT_EQ(source.length(), static_cast<std::size_t>(0));
+        std::uint8_t dest[1] = {};
+        HEX_EXPECT_EQ(source.read(0, dest, 1), static_cast<std::size_t>(0));
+    }
+
+    // count = 0 short-circuits regardless of offset.
+    {
+        const std::vector<std::uint8_t> src = {0x42};
+        SpanByteSource source(src.data(), src.size());
+        std::uint8_t dest[1] = {};
+        HEX_EXPECT_EQ(source.read(0, dest, 0), static_cast<std::size_t>(0));
+        HEX_EXPECT_EQ(dest[0], static_cast<std::uint8_t>(0));
+    }
+}
+
 }
 
 int main()
@@ -1757,9 +1865,10 @@ int main()
     testParseHexClipboardTextFromDebuggerOutput();
     testParseRectClipboardTextFromDebuggerOutput();
     testReadPreviewBuffer();
+    testSpanByteSource();
 
     if (g_failures == 0) {
-        std::printf("PASS: %d assertions across 35 suites\n", g_assertions);
+        std::printf("PASS: %d assertions across 36 suites\n", g_assertions);
         return 0;
     }
     std::printf("FAIL: %d/%d assertions failed\n", g_failures, g_assertions);

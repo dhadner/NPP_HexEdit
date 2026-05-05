@@ -1,8 +1,10 @@
 #ifndef NPP_HEXEDITOR_HEXCORE_H
 #define NPP_HEXEDITOR_HEXCORE_H
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -50,6 +52,55 @@ struct DocumentView {
     std::size_t maxEditableOffset() const { return fullyLoaded() ? totalLength : visibleByteCount; }
 };
 
+// Random-access byte stream abstraction. Decouples byte-consuming code (search,
+// compare, rect extraction) from the storage backing those bytes — today an
+// in-RAM previewBytes vector, eventually a windowed reader against Scintilla
+// so a 20 GB file doesn't require a 20 GB plugin allocation.
+//
+// Two implementations are expected:
+//   1. SpanByteSource (defined below) — wraps a contiguous in-RAM buffer.
+//      Used by tests and during the migration while previewBytes is still
+//      a full-RAM copy.
+//   2. WindowedScintillaByteSource (TBD, step 2c) — page-cache backed by
+//      SCI_GETTEXTRANGEFULL with bounded RAM regardless of file size.
+//
+// Contract for read(): writes up to `count` bytes from logical offset
+// `offset` into `dest`. Returns the number of bytes actually written —
+// always min(count, length() - offset), or 0 if offset >= length(). Never
+// reads past the end (no NUL terminator, unlike SciReader::readRange which
+// inherits Scintilla's quirk).
+class ByteSource {
+public:
+    virtual ~ByteSource() = default;
+    virtual std::size_t length() const = 0;
+    virtual std::size_t read(std::size_t offset, std::uint8_t *dest, std::size_t count) const = 0;
+};
+
+// Trivial ByteSource backed by a caller-owned contiguous span. The span must
+// remain valid for the source's lifetime. Common use: wrap a std::vector<uint8_t>
+// or a const std::uint8_t* + size pair to feed legacy in-RAM byte buffers
+// through the new ByteSource-taking APIs without copying.
+class SpanByteSource final : public ByteSource {
+public:
+    SpanByteSource(const std::uint8_t *data, std::size_t length)
+        : data_(data), length_(length) {}
+
+    std::size_t length() const override { return length_; }
+
+    std::size_t read(std::size_t offset, std::uint8_t *dest, std::size_t count) const override {
+        if (offset >= length_) return 0;
+        const std::size_t toCopy = std::min(count, length_ - offset);
+        if (toCopy > 0 && data_ != nullptr) {
+            std::memcpy(dest, data_ + offset, toCopy);
+        }
+        return toCopy;
+    }
+
+private:
+    const std::uint8_t *data_;
+    std::size_t length_;
+};
+
 struct ByteRange {
     std::size_t offset = 0;
     std::size_t byteCount = 0;
@@ -90,19 +141,20 @@ std::vector<ByteRange> rectToRanges(const RectSelection &rect, std::size_t total
 // fall past EOF are zero-filled so the returned buffer always has rect.totalBytes()
 // elements — this keeps the clipboard payload's shape stable even for rectangles
 // that overhang the end of the file. Returns false (and leaves out untouched) for
-// an inactive rectangle.
-bool extractRectBytes(const std::uint8_t *bytes,
-                      std::size_t totalLength,
+// an inactive rectangle. Reads at most rect.width bytes per row from the source,
+// so the temporary memory cost stays bounded by the rect's geometry regardless of
+// the underlying file size.
+bool extractRectBytes(const ByteSource &source,
                       const RectSelection &rect,
                       std::vector<std::uint8_t> &out);
 
 // Hex-text rendering of a rectangle: each row's bytes formatted as space-separated
 // 2-digit uppercase hex pairs, rows joined by '\n'. Used for the public-text fallback
 // on the pasteboard so external apps see something usable, and for the parse-text
-// paste path (Q2.b) on incoming clipboards from external apps.
-std::string formatRectClipboardHex(const std::uint8_t *bytes,
-                                   const RectSelection &rect,
-                                   std::size_t totalLength);
+// paste path (Q2.b) on incoming clipboards from external apps. Bytes that fall past
+// EOF render as "00" so the rect's shape stays stable.
+std::string formatRectClipboardHex(const ByteSource &source,
+                                   const RectSelection &rect);
 
 // Parse a `\n`-separated text clipboard back into a rectangular byte buffer. Each
 // non-empty line is treated as one row; the parser accepts either hex byte tokens
@@ -330,8 +382,13 @@ bool parseSearchPattern(const std::string &text, bool matchCase, SearchPattern &
 // = before). When wrap is true and no match is found in the primary range, the search
 // continues from the opposite end up to startOffset (exclusive) — Windows wrap semantics.
 // matchCase = false is honoured only for SearchPatternKind::Ascii.
-bool findBytePattern(const std::uint8_t *haystack,
-                     std::size_t haystackLength,
+//
+// Implementation reads the haystack in 64 KB chunks (with needleLen-1 byte overlap so
+// matches straddling chunk boundaries are caught), so plugin RAM stays bounded by the
+// chunk size regardless of the underlying file size. SpanByteSource consumers see the
+// same memory cost as the previous raw-pointer API plus one chunk-sized memcpy per
+// 64 KB of haystack.
+bool findBytePattern(const ByteSource &haystack,
                      const SearchPattern &pattern,
                      std::size_t startOffset,
                      SearchDirection direction,
@@ -339,11 +396,15 @@ bool findBytePattern(const std::uint8_t *haystack,
                      std::size_t &outOffset);
 
 // Byte-level compare for the Compare HEX feature. Returns a bool-per-offset mask of
-// length max(lenA, lenB): mask[i] = true when the byte at offset i differs between the
-// two buffers (or when one buffer is shorter, so byte i is "missing"). Returns an empty
-// vector if both buffers are identical (i.e. lenA == lenB and all bytes match).
-std::vector<bool> computeByteDiffs(const std::uint8_t *a, std::size_t lenA,
-                                    const std::uint8_t *b, std::size_t lenB);
+// length max(a.length(), b.length()): mask[i] = true when the byte at offset i differs
+// between the two sources (or when one source is shorter, so byte i is "missing").
+// Returns an empty vector if both sources are identical (same length, same bytes).
+//
+// Implementation reads both sources in lock-stepped 64 KB chunks, so RAM stays bounded
+// by the chunk size during the compute path. The returned mask itself is unbounded
+// (length proportional to the larger source) — for very large files the mask may need
+// a separate streaming representation.
+std::vector<bool> computeByteDiffs(const ByteSource &a, const ByteSource &b);
 
 // =============================================================================
 // SCI buffer-read abstraction (testable without Scintilla)
