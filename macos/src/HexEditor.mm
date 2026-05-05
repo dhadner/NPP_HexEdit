@@ -361,6 +361,15 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             // any shipped tag so the cascade XCTest can detect this state.
             @"about.localeTag":                  @"Strings: (embedded)",
 
+            // Quit-time clipboard prompt (Office/Word pattern). Shown when
+            // we hold an outstanding pasteboard promise larger than the
+            // silent-materialize threshold and HEX-Editor is about to quit.
+            // %1$@ is a human-readable size like "2.0 GB" or "150.0 MB".
+            @"clipboard.saveOnQuit.title":         @"Keep clipboard contents?",
+            @"clipboard.saveOnQuit.body":          @"You copied %1$@ from the HEX view. Keep it on the clipboard so other apps can paste it after HEX-Editor closes? Discarding releases the memory immediately.",
+            @"clipboard.saveOnQuit.keepButton":    @"Keep",
+            @"clipboard.saveOnQuit.discardButton": @"Discard",
+
             // Generic error path used when toggling between Scintilla / hex view
             @"editor.noActiveBuffer":            @"No active editor buffer is available.",
             @"editor.noActiveView":              @"Could not find the active editor view to replace.",
@@ -3804,6 +3813,234 @@ static BOOL rectPayloadDecode(NSData *data,
     return YES;
 }
 
+// Promised-type pasteboard owner for hex-view cut/copy. Replaces the old
+// eager `[pasteboard setData:forType:]` path: instead of materializing every
+// representation (raw bytes, hex-text, rect-UTI) at copy time, we declare
+// the supported types and stash one byte snapshot inside the owner. When
+// some consumer (this plugin, another HexEditor instance, TextEdit, anything
+// reading the pasteboard) actually pastes, AppKit's pasteboard server calls
+// back to `pasteboard:provideDataForType:` and we synthesize the requested
+// representation lazily. Cross-process consumers get the callback via pbs
+// IPC for free.
+//
+// Lifetime: a single static owner instance lives for the plugin's lifetime;
+// `snapshotLinear:` / `snapshotRect:...` reassign its held bytes on each
+// new cut/copy, replacing whatever was there. AppKit notifies us via
+// `pasteboardChangedOwner:` when another app takes the pasteboard, at
+// which point we drop the snapshot — there's no consumer left to deliver
+// to.
+//
+// hex-text caps: rendering an N-byte selection as space-separated hex
+// expands to ~3N bytes of UTF-8. For a multi-GB cut that's a multi-GB
+// allocation just to hand to a text-paste consumer that probably can't
+// handle it anyway. Above kHexClipboardTextRawCap we substitute a short
+// human-readable placeholder so a stray paste into TextEdit shows
+// "<2.0 GB hex-editor selection> Paste in HEX view to receive." instead
+// of a multi-GB string allocation.
+constexpr NSUInteger kHexClipboardTextRawCap = 16 * 1024 * 1024;
+
+@interface HexClipboardOwner : NSObject <NSPasteboardTypeOwner>
+- (void)snapshotLinear:(NSData *)bytes;
+- (void)snapshotRect:(NSData *)bytes
+                kind:(HexRectClipboardKind)kind
+               width:(std::uint32_t)width
+              height:(std::uint32_t)height;
+- (void)clearSnapshot;
+- (BOOL)hasSnapshot;
+- (NSUInteger)snapshotByteCount;
+@end
+
+@implementation HexClipboardOwner {
+    NSData *_bytes;
+    BOOL _isRect;
+    HexRectClipboardKind _rectKind;
+    std::uint32_t _rectWidth;
+    std::uint32_t _rectHeight;
+}
+
+- (void)snapshotLinear:(NSData *)bytes
+{
+    _bytes = [bytes copy];
+    _isRect = NO;
+    _rectKind = HexRectClipboardKind::Bytes;
+    _rectWidth = 0;
+    _rectHeight = 0;
+}
+
+- (void)snapshotRect:(NSData *)bytes
+                kind:(HexRectClipboardKind)kind
+               width:(std::uint32_t)width
+              height:(std::uint32_t)height
+{
+    _bytes = [bytes copy];
+    _isRect = YES;
+    _rectKind = kind;
+    _rectWidth = width;
+    _rectHeight = height;
+}
+
+- (void)clearSnapshot
+{
+    _bytes = nil;
+    _isRect = NO;
+    _rectKind = HexRectClipboardKind::Bytes;
+    _rectWidth = 0;
+    _rectHeight = 0;
+}
+
+- (BOOL)hasSnapshot
+{
+    return _bytes != nil;
+}
+
+- (NSUInteger)snapshotByteCount
+{
+    return _bytes.length;
+}
+
+// AppKit calls this once per requested type per paste, possibly cross-
+// process via pbs IPC. We synthesize the rendering on demand from the
+// held snapshot — no upfront materialization, no duplicate copies.
+- (void)pasteboard:(NSPasteboard *)pasteboard provideDataForType:(NSPasteboardType)type
+{
+    if (_bytes == nil) {
+        return;
+    }
+
+    if ([type isEqualToString:NSPasteboardTypeString]) {
+        if (_bytes.length > kHexClipboardTextRawCap) {
+            // Above the hex-text cap: emit a placeholder so a text-paste
+            // consumer sees a clear "this came from HEX-Editor — paste in
+            // HEX view to receive" sentence rather than a multi-GB string.
+            NSString *placeholder = [NSString stringWithFormat:
+                @"<%.1f MB hex-editor selection> Paste into HEX view to receive.",
+                (double)_bytes.length / (1024.0 * 1024.0)];
+            [pasteboard setString:placeholder forType:type];
+            return;
+        }
+        std::string text;
+        if (_isRect && _rectWidth > 0 && _rectHeight > 0) {
+            // Rect: row-separated hex via the existing core formatter.
+            // The snapshot is densely packed (bytesPerRow == width).
+            hexedit::SpanByteSource source(
+                static_cast<const std::uint8_t *>(_bytes.bytes), _bytes.length);
+            hexedit::RectSelection rect;
+            rect.originOffset = 0;
+            rect.width = _rectWidth;
+            rect.height = _rectHeight;
+            rect.bytesPerRow = _rectWidth;
+            text = hexedit::formatRectClipboardHex(source, rect);
+        } else {
+            text = hexedit::formatHexClipboardText(
+                static_cast<const std::uint8_t *>(_bytes.bytes), _bytes.length);
+        }
+        NSString *string = [NSString stringWithUTF8String:text.c_str()];
+        if (string != nil) {
+            [pasteboard setString:string forType:type];
+        }
+        return;
+    }
+
+    if ([type isEqualToString:@"public.data"]) {
+        [pasteboard setData:_bytes forType:type];
+        return;
+    }
+
+    if ([type isEqualToString:kHexRectPasteboardType] && _isRect) {
+        NSData *encoded = rectPayloadEncode(_rectKind, _rectWidth, _rectHeight,
+            static_cast<const std::uint8_t *>(_bytes.bytes),
+            static_cast<std::uint32_t>(_bytes.length));
+        if (encoded != nil) {
+            [pasteboard setData:encoded forType:type];
+        }
+        return;
+    }
+}
+
+// AppKit notifies us when ownership lapses (some other app declared types).
+// Drop the snapshot — there's no consumer left to deliver to.
+- (void)pasteboardChangedOwner:(NSPasteboard *)sender
+{
+    (void)sender;
+    [self clearSnapshot];
+}
+@end
+
+// Single static instance, lazily created on first cut/copy. Rebuilt only
+// across plugin loads, never per-cut.
+static HexClipboardOwner *g_hexClipboardOwner = nil;
+
+static HexClipboardOwner *sharedHexClipboardOwner()
+{
+    if (g_hexClipboardOwner == nil) {
+        g_hexClipboardOwner = [[HexClipboardOwner alloc] init];
+    }
+    return g_hexClipboardOwner;
+}
+
+// Office/Word pattern: when we hold an outstanding pasteboard promise at
+// process quit, the bytes vanish unless we materialize them onto the
+// pasteboard before exit. For small snapshots (≤ this threshold) we
+// materialize silently — no user friction. For larger snapshots, we ask
+// the user whether to keep them on the clipboard or let them go.
+constexpr NSUInteger kHexClipboardSilentMaterializeCap = 16 * 1024 * 1024;
+
+// Iterate the declared types and resolve each by calling the owner's
+// provideDataForType:. After this returns, the pasteboard holds actual
+// data (not a promise), so the data survives our process exit.
+static void resolveAllHexClipboardPromises()
+{
+    HexClipboardOwner *owner = g_hexClipboardOwner;
+    if (owner == nil || ![owner hasSnapshot]) {
+        return;
+    }
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    NSArray<NSPasteboardType> *types = pasteboard.types;
+    for (NSPasteboardType type in types) {
+        [owner pasteboard:pasteboard provideDataForType:type];
+    }
+}
+
+static void materializeHexClipboardOnQuitIfNeeded()
+{
+    HexClipboardOwner *owner = g_hexClipboardOwner;
+    if (owner == nil || ![owner hasSnapshot]) {
+        return;
+    }
+    const NSUInteger byteCount = [owner snapshotByteCount];
+    if (byteCount == 0) {
+        return;
+    }
+    if (byteCount <= kHexClipboardSilentMaterializeCap) {
+        // Small enough to materialize without bothering the user.
+        resolveAllHexClipboardPromises();
+        return;
+    }
+
+    // Show the user the size in human-readable form (MB / GB depending on
+    // scale) so the modal communicates the cost concretely.
+    NSString *sizeText = nil;
+    constexpr double kGB = 1024.0 * 1024.0 * 1024.0;
+    if (byteCount >= static_cast<NSUInteger>(kGB)) {
+        sizeText = [NSString stringWithFormat:@"%.1f GB", (double)byteCount / kGB];
+    } else {
+        sizeText = [NSString stringWithFormat:@"%.1f MB",
+                    (double)byteCount / (1024.0 * 1024.0)];
+    }
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = L(@"clipboard.saveOnQuit.title");
+    alert.informativeText = [NSString stringWithFormat:L(@"clipboard.saveOnQuit.body"),
+                             sizeText];
+    [alert addButtonWithTitle:L(@"clipboard.saveOnQuit.keepButton")];
+    [alert addButtonWithTitle:L(@"clipboard.saveOnQuit.discardButton")];
+    if ([alert runModal] == NSAlertFirstButtonReturn) {
+        resolveAllHexClipboardPromises();
+    }
+    // If "Discard": the promise lapses on process exit; the pasteboard
+    // returns no data for our types after we're gone.
+}
+
 // Copy the active rectangular selection to the system pasteboard. Always emits the
 // custom UTI (so paste-back into this plugin gets the exact shape) plus a public-text
 // fallback (space-separated hex bytes per row) for external apps. The source-pane tag
@@ -3822,22 +4059,19 @@ static bool copyRectToPasteboard()
     const hexedit::ByteSource &bufferSource = hexBufferSource();
     std::vector<std::uint8_t> payloadBytes;
     hexedit::extractRectBytes(bufferSource, g_rectSelection, payloadBytes);
-    const std::string text = hexedit::formatRectClipboardHex(bufferSource, g_rectSelection);
 
+    NSData *bytesNS = [NSData dataWithBytes:(payloadBytes.empty() ? nullptr : payloadBytes.data())
+                                     length:payloadBytes.size()];
+    HexClipboardOwner *owner = sharedHexClipboardOwner();
+    [owner snapshotRect:bytesNS
+                   kind:kind
+                  width:static_cast<std::uint32_t>(g_rectSelection.width)
+                 height:static_cast<std::uint32_t>(g_rectSelection.height)];
+
+    // Promise types — pbs will call provideDataForType: on the owner when
+    // some consumer pastes. No bytes hit the pasteboard upfront.
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
-    [pasteboard clearContents];
-    NSString *textNS = [NSString stringWithUTF8String:text.c_str()];
-    if (textNS != nil) {
-        [pasteboard setString:textNS forType:NSPasteboardTypeString];
-    }
-    NSData *encoded = rectPayloadEncode(kind,
-                                         static_cast<std::uint32_t>(g_rectSelection.width),
-                                         static_cast<std::uint32_t>(g_rectSelection.height),
-                                         payloadBytes.empty() ? nullptr : payloadBytes.data(),
-                                         static_cast<std::uint32_t>(payloadBytes.size()));
-    if (encoded != nil) {
-        [pasteboard setData:encoded forType:kHexRectPasteboardType];
-    }
+    [pasteboard declareTypes:@[NSPasteboardTypeString, kHexRectPasteboardType] owner:owner];
     return true;
 }
 
@@ -3855,28 +4089,21 @@ static bool copyHexSelectionToPasteboard()
     }
 
     byteCount = std::min(byteCount, hexBufferLength() - offset);
-    // Materialize the selection into a contiguous NSMutableData buffer.
-    // We can't take a raw pointer into the page-cached source because pages
-    // may evict during the read; copying into NSMutableData snapshots the
-    // selection at copy time, which is what the pasteboard needs anyway.
+    // Snapshot the selection into a contiguous NSMutableData. We can't take
+    // a raw pointer into the page-cached source because pages may evict
+    // during the read; copying into NSMutableData snapshots the selection
+    // at copy time, which is what the pasteboard owner needs anyway.
     NSMutableData *selectionBytes = [NSMutableData dataWithLength:byteCount];
     hexBytesIn(offset, byteCount, static_cast<std::uint8_t *>(selectionBytes.mutableBytes));
 
+    HexClipboardOwner *owner = sharedHexClipboardOwner();
+    [owner snapshotLinear:selectionBytes];
+
+    // Promise types — pbs will call provideDataForType: on the owner when
+    // some consumer pastes. The hex-text and raw-bytes renderings are
+    // synthesized lazily inside the owner from the snapshot.
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
-    [pasteboard clearContents];
-
-    // Always emit space-separated hex bytes as the public-text representation,
-    // regardless of which pane is active. ASCII text would lose information for any
-    // non-printable bytes (which become dots in the on-screen ASCII column), and the
-    // user has explicit "Copy Binary Content" if they want the raw bytes.
-    const std::string hexText = hexedit::formatHexClipboardText(
-        static_cast<const std::uint8_t *>(selectionBytes.bytes), byteCount);
-    NSString *string = [NSString stringWithUTF8String:hexText.c_str()];
-    if (string != nil) {
-        [pasteboard setString:string forType:NSPasteboardTypeString];
-    }
-
-    [pasteboard setData:selectionBytes forType:@"public.data"];
+    [pasteboard declareTypes:@[NSPasteboardTypeString, @"public.data"] owner:owner];
     return true;
 }
 
@@ -7163,6 +7390,15 @@ extern "C" NPP_EXPORT void beNotified(SCNotification *notifyCode)
     }
 
     if (notifyCode->nmhdr.code == NPPN_SHUTDOWN) {
+        // If we hold an outstanding pasteboard promise (the user did Cmd-C
+        // in the hex view and didn't paste yet — or pasted only into apps
+        // that read the type via pbs IPC, leaving us as the data provider),
+        // the bytes vanish when our process dies. Office and Word handle
+        // this by asking the user at quit; we follow the same pattern.
+        // Trivial-size snapshots (≤ 16 MB) materialize silently — no user
+        // friction for small clipboards. Larger ones get a prompt.
+        materializeHexClipboardOnQuitIfNeeded();
+
         hideHexPreview();
         hexRootView = nil;
         hexTableView = nil;

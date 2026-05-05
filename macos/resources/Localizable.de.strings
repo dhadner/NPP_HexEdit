@@ -155,6 +155,16 @@
 /* Diagnose-Zeile im Über-Dialog — zeigt die aktuell geladene .strings-Datei. */
 "about.localeTag"                  = "Strings: de";
 
+/* Zwischenablage-Aufforderung beim Beenden (Office/Word-Muster). Erscheint,
+   wenn der Benutzer eine große Auswahl in der HEX-Ansicht kopiert hat und
+   HEX-Editor beendet wird; die Daten gehen sonst verloren. %1$@ ist eine
+   Größe wie "2.0 GB" oder "150.0 MB". Kleine Zwischenablagen (≤ 16 MB)
+   werden ohne Aufforderung materialisiert. */
+"clipboard.saveOnQuit.title"       = "Zwischenablage behalten?";
+"clipboard.saveOnQuit.body"        = "Sie haben %1$@ aus der HEX-Ansicht kopiert. In der Zwischenablage behalten, damit andere Apps nach dem Schließen von HEX-Editor einfügen können? Verwerfen gibt den Speicher sofort frei.";
+"clipboard.saveOnQuit.keepButton"  = "Behalten";
+"clipboard.saveOnQuit.discardButton" = "Verwerfen";
+
 /* Allgemeine Fehler beim Wechsel zwischen Scintilla und Hex-Ansicht */
 "editor.noActiveBuffer"            = "Kein aktiver Editor-Puffer verfügbar.";
 "editor.noActiveView"              = "Konnte die aktive Editoransicht zum Ersetzen nicht finden.";

@@ -172,6 +172,16 @@
    translation loaded. Each shipped .strings file declares its own tag. */
 "about.localeTag"                  = "Strings: en";
 
+/* Quit-time clipboard prompt (Office/Word pattern). Shown when the user
+   has copied a large selection in the HEX view and HEX-Editor is about
+   to quit; the bytes vanish unless materialized. %1$@ is a size like
+   "2.0 GB" or "150.0 MB". Trivial-size clipboards (≤ 16 MB) materialize
+   silently and don't trigger this. */
+"clipboard.saveOnQuit.title"       = "Keep clipboard contents?";
+"clipboard.saveOnQuit.body"        = "You copied %1$@ from the HEX view. Keep it on the clipboard so other apps can paste it after HEX-Editor closes? Discarding releases the memory immediately.";
+"clipboard.saveOnQuit.keepButton"  = "Keep";
+"clipboard.saveOnQuit.discardButton" = "Discard";
+
 /* Generic error paths used when toggling between Scintilla / hex view */
 "editor.noActiveBuffer"            = "No active editor buffer is available.";
 "editor.noActiveView"              = "Could not find the active editor view to replace.";
