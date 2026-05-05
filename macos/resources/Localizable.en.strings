@@ -159,7 +159,12 @@
 "patternReplace.summaryRect"         = "Filled %1$lu × %2$lu rectangle (%3$lu bytes) with the pattern.";
 
 /* About / help dialog */
-"about.body"                       = "Native macOS port of the Notepad++ HexEditor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.";
+/* "Nextpad⁠+⁠+" includes U+2060 Word Joiners between the letters to keep
+   the product name atomic — NSAlert's word-wrap will otherwise break
+   between the two '+' characters at narrow dialog widths. */
+"about.body"                       = "Native macOS port of the Nextpad⁠+⁠+ HexEditor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.";
+/* Plugin version line. %@ is the version string (e.g. "1.1.0"). */
+"about.version"                    = "Version %@";
 /* Diagnostic line in the About dialog — names the .strings file currently in
    use, so users (and the cascade XCTest) can see at a glance whether their
    translation loaded. Each shipped .strings file declares its own tag. */

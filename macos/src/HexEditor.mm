@@ -15,6 +15,14 @@
 #include <string>
 #include <vector>
 
+// Plugin version string — normally injected by CMake's target_compile_definitions
+// (`HEX_PLUGIN_VERSION="${PROJECT_VERSION}"`). The fallback here exists only so
+// IDE indexers that don't see CMake's flags can parse this file; the shipped
+// build always uses the CMake-provided value.
+#ifndef HEX_PLUGIN_VERSION
+#define HEX_PLUGIN_VERSION "0.0.0"
+#endif
+
 static const char *PLUGIN_NAME = "HexEditor";
 static const int NB_FUNC = 7;
 
@@ -341,7 +349,11 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"patternReplace.summaryRect":         @"Filled %1$lu × %2$lu rectangle (%3$lu bytes) with the pattern.",
 
             // About / help dialog
-            @"about.body":                       @"Native macOS port of the Notepad++ HexEditor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.",
+            // U+2060 Word Joiners between the product-name letters keep
+            // "Nextpad++" atomic — NSAlert's word-wrap otherwise breaks
+            // between the two '+' at narrow dialog widths.
+            @"about.body":                       @"Native macOS port of the Nextpad⁠+⁠+ HexEditor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.",
+            @"about.version":                    @"Version %@",
             // Embedded fallback when no .strings file is loaded — distinct from
             // any shipped tag so the cascade XCTest can detect this state.
             @"about.localeTag":                  @"Strings: (embedded)",
@@ -404,7 +416,7 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"options.colors.row.compare":         @"Compare:",
             @"options.colors.row.bookmark":        @"Bookmark:",
             @"options.colors.row.currentLine":     @"Current Line:",
-            @"options.colors.help":                @"Pick the foreground (Text) and background (Back) colour for each highlight category. Leaving a well at its default lets the colour follow Notepad++'s Light/Dark setting automatically — pick a custom colour only if you want a fixed value that doesn't adapt to appearance changes. Reset (in the dialog footer) clears all overrides at once.",
+            @"options.colors.help":                @"Pick the foreground (Text) and background (Back) colour for each highlight category. Leaving a well at its default lets the colour follow Nextpad⁠+⁠+'s Light/Dark setting automatically — pick a custom colour only if you want a fixed value that doesn't adapt to appearance changes. Reset (in the dialog footer) clears all overrides at once.",
 
             // Font tab — typography + a couple of cosmetic toggles.
             @"options.font.name":                  @"Font Name:",
@@ -922,7 +934,48 @@ static NSTableView *hexTableView = nil;
 static NSTextField *hexStatusLabel = nil;
 static NSView *hexEditorView = nil;
 static NSView *hiddenScintillaView = nil;
+// Byte storage for the visible-hex view. Today this is a full in-RAM
+// copy of (the first PREVIEW_LIMIT bytes of) the Scintilla buffer; the
+// 20 GB scaling work (2026-05-04) is migrating reads through the
+// accessor functions defined just below so a future swap to a
+// windowed lazy reader against Scintilla doesn't require touching
+// every consumer. **Don't add new direct uses of `previewBytes` —
+// go through hexBufferLength / hexByteAt / hexBytesIn / hexBufferData
+// instead.** The only legitimate direct uses are write paths that
+// repopulate the buffer (the `previewBytes = readCurrentBuffer(...)`
+// reload sites and the one `previewBytes.clear()` shutdown site);
+// those are the next ones to migrate, in step 2.
 static std::vector<uint8_t> previewBytes;
+// Read-only accessors. Step 1 of the lazy-Scintilla migration: every
+// consumer reads through these; step 2 replaces the implementations
+// with windowed reads against Scintilla without touching the consumers.
+static inline std::size_t hexBufferLength() { return previewBytes.size(); }
+static inline bool        hexBufferEmpty()  { return previewBytes.empty(); }
+static inline std::uint8_t hexByteAt(std::size_t offset)
+{
+    return offset < previewBytes.size() ? previewBytes[offset] : 0;
+}
+static inline std::size_t hexBytesIn(std::size_t offset,
+                                       std::size_t count,
+                                       std::uint8_t *dest)
+{
+    if (offset >= previewBytes.size()) return 0;
+    const std::size_t available = previewBytes.size() - offset;
+    const std::size_t toCopy = std::min(count, available);
+    std::memcpy(dest, previewBytes.data() + offset, toCopy);
+    return toCopy;
+}
+// Transitional raw-pointer escape for HexCore APIs that currently take
+// `const std::uint8_t *` + length (formatCell, findBytePattern,
+// extractRectBytes, computeByteDiffs, etc.). When step 2 swaps
+// previewBytes for a windowed reader the pointer becomes invalid as
+// soon as the window scrolls, so step 2 will either retarget those
+// HexCore APIs to take a ByteSource* or have callers populate a
+// transient buffer with hexBytesIn() and pass that. New callers
+// should NOT use this — prefer hexBytesIn() if you need a contiguous
+// byte run. Marked deprecated in spirit; in practice the existing
+// callsites stay on it through step 1 to keep the refactor a no-op.
+static inline const std::uint8_t *hexBufferData() { return previewBytes.data(); }
 static std::set<size_t> bookmarkedRows;
 // Compare HEX result mask. Empty when there is no active comparison; otherwise sized to
 // max(myLen, otherLen) with `true` at byte offsets that differ between the current buffer
@@ -1342,8 +1395,8 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
 {
     const size_t bpr = static_cast<size_t>(currentBytesPerRow());
-    NSInteger rows = static_cast<NSInteger>((previewBytes.size() + bpr - 1) / bpr);
-    if (previewBytes.size() == previewTotalLength && (previewBytes.empty() || previewBytes.size() % bpr == 0)) {
+    NSInteger rows = static_cast<NSInteger>((hexBufferLength() + bpr - 1) / bpr);
+    if (hexBufferLength() == previewTotalLength && (hexBufferEmpty() || hexBufferLength() % bpr == 0)) {
         ++rows;
     }
     return rows;
@@ -1364,8 +1417,8 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
         ascii.reserve(static_cast<size_t>(bytesPerRow));
         for (int index = 0; index < bytesPerRow; ++index) {
             const size_t byteIndex = rowOffset + static_cast<size_t>(index);
-            if (byteIndex < previewBytes.size()) {
-                const uint8_t value = previewBytes[byteIndex];
+            if (byteIndex < hexBufferLength()) {
+                const uint8_t value = hexByteAt(byteIndex);
                 ascii.push_back(std::isprint(value) ? static_cast<char>(value) : '.');
             } else {
                 ascii.push_back(' ');
@@ -1382,11 +1435,11 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
         const NSInteger cellIndex = [[identifier substringFromIndex:4] integerValue];
         const hexedit::ViewMode mode = currentViewMode();
         const size_t firstByte = rowOffset + static_cast<size_t>(cellIndex) * static_cast<size_t>(mode.bytesPerCell);
-        if (firstByte >= previewBytes.size()) {
+        if (firstByte >= hexBufferLength()) {
             return @"";
         }
-        const size_t available = std::min(static_cast<size_t>(mode.bytesPerCell), previewBytes.size() - firstByte);
-        std::string formatted = hexedit::formatCell(previewBytes.data() + firstByte, available, mode);
+        const size_t available = std::min(static_cast<size_t>(mode.bytesPerCell), hexBufferLength() - firstByte);
+        std::string formatted = hexedit::formatCell(hexBufferData() + firstByte, available, mode);
         return [NSString stringWithUTF8String:formatted.c_str()];
     }
 
@@ -2131,7 +2184,7 @@ static HexTableDataSource *hexTableDataSource = nil;
             [pasteboard stringForType:NSPasteboardTypeString] != nil;
     }
     if (action == @selector(selectAll:)) {
-        return !previewBytes.empty();
+        return !hexBufferEmpty();
     }
     return YES;
 }
@@ -3463,11 +3516,11 @@ static void captureScintillaSelection()
 
     activeCursorField = HexCursorField::Hex;
     activeHexNibble = 0;
-    activeByteOffset = std::min(upper, previewBytes.size());
+    activeByteOffset = std::min(upper, hexBufferLength());
 
     if (start != end) {
-        selectedByteStart = std::min(lower, previewBytes.size());
-        selectedByteEnd = std::min(upper, previewBytes.size());
+        selectedByteStart = std::min(lower, hexBufferLength());
+        selectedByteEnd = std::min(upper, hexBufferLength());
         if (selectedByteEnd <= selectedByteStart) {
             clearByteSelection();
         }
@@ -3522,8 +3575,8 @@ static void moveActiveCursor(NSInteger delta)
 static hexedit::DocumentView currentDocumentView()
 {
     hexedit::DocumentView view;
-    view.bytes = previewBytes.empty() ? nullptr : previewBytes.data();
-    view.visibleByteCount = previewBytes.size();
+    view.bytes = hexBufferEmpty() ? nullptr : hexBufferData();
+    view.visibleByteCount = hexBufferLength();
     view.totalLength = previewTotalLength;
     return view;
 }
@@ -3708,11 +3761,11 @@ static bool copyRectToPasteboard()
         : HexRectClipboardKind::Bytes;
 
     std::vector<std::uint8_t> payloadBytes;
-    hexedit::extractRectBytes(previewBytes.data(), previewBytes.size(),
+    hexedit::extractRectBytes(hexBufferData(), hexBufferLength(),
                                g_rectSelection, payloadBytes);
-    const std::string text = hexedit::formatRectClipboardHex(previewBytes.data(),
+    const std::string text = hexedit::formatRectClipboardHex(hexBufferData(),
                                                               g_rectSelection,
-                                                              previewBytes.size());
+                                                              hexBufferLength());
 
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
     [pasteboard clearContents];
@@ -3740,12 +3793,12 @@ static bool copyHexSelectionToPasteboard()
     size_t offset = 0;
     size_t byteCount = 0;
     selectedOrCurrentRange(&offset, &byteCount);
-    if (byteCount == 0 || offset >= previewBytes.size()) {
+    if (byteCount == 0 || offset >= hexBufferLength()) {
         return false;
     }
 
-    byteCount = std::min(byteCount, previewBytes.size() - offset);
-    const std::uint8_t *src = previewBytes.data() + offset;
+    byteCount = std::min(byteCount, hexBufferLength() - offset);
+    const std::uint8_t *src = hexBufferData() + offset;
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
     [pasteboard clearContents];
 
@@ -3774,7 +3827,7 @@ static bool copyHexSelectionAsBinary()
             return false;
         }
         std::vector<std::uint8_t> rectBytes;
-        if (hexedit::extractRectBytes(previewBytes.data(), previewBytes.size(),
+        if (hexedit::extractRectBytes(hexBufferData(), hexBufferLength(),
                                        g_rectSelection, rectBytes) && !rectBytes.empty()) {
             NSData *raw = [NSData dataWithBytes:rectBytes.data() length:rectBytes.size()];
             NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
@@ -3786,12 +3839,12 @@ static bool copyHexSelectionAsBinary()
     size_t offset = 0;
     size_t byteCount = 0;
     selectedOrCurrentRange(&offset, &byteCount);
-    if (byteCount == 0 || offset >= previewBytes.size()) {
+    if (byteCount == 0 || offset >= hexBufferLength()) {
         return false;
     }
 
-    byteCount = std::min(byteCount, previewBytes.size() - offset);
-    NSData *bytes = [NSData dataWithBytes:previewBytes.data() + offset length:byteCount];
+    byteCount = std::min(byteCount, hexBufferLength() - offset);
+    NSData *bytes = [NSData dataWithBytes:hexBufferData() + offset length:byteCount];
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
     [pasteboard clearContents];
     [pasteboard setData:bytes forType:NSPasteboardTypeString];
@@ -4068,7 +4121,7 @@ static bool pasteBinaryFromPasteboard()
 static void selectAllHexBytes()
 {
     selectedByteStart = 0;
-    selectedByteEnd = previewBytes.size();
+    selectedByteEnd = hexBufferLength();
     activeCursorField = HexCursorField::Hex;
     activeByteOffset = selectedByteEnd;
     activeHexNibble = 0;
@@ -4329,16 +4382,16 @@ static bool executeHexFindNext(hexedit::SearchDirection direction, NSString **er
     std::size_t startOffset = 0;
     if (direction == hexedit::SearchDirection::Forward) {
         if (hasByteSelection()) {
-            startOffset = std::min(selectedByteStart + 1, previewBytes.size());
+            startOffset = std::min(selectedByteStart + 1, hexBufferLength());
         } else {
-            startOffset = std::min(activeByteOffset + 1, previewBytes.size());
+            startOffset = std::min(activeByteOffset + 1, hexBufferLength());
         }
     } else {
         startOffset = hasByteSelection() ? selectedByteStart : activeByteOffset;
     }
 
     std::size_t found = 0;
-    if (!hexedit::findBytePattern(previewBytes.data(), previewBytes.size(), pattern,
+    if (!hexedit::findBytePattern(hexBufferData(), hexBufferLength(), pattern,
                                    startOffset, direction, g_findWrap, found)) {
         if (errorMessage) *errorMessage = L(@"find.errorNotFound");
         return false;
@@ -4390,9 +4443,9 @@ static int executeHexReplaceAll(NSString *findText, NSString *replaceText, bool 
     // Collect all non-overlapping match offsets, forward, no wrap.
     std::vector<std::size_t> matches;
     std::size_t cursor = 0;
-    while (cursor + findPattern.bytes.size() <= previewBytes.size()) {
+    while (cursor + findPattern.bytes.size() <= hexBufferLength()) {
         std::size_t at = 0;
-        if (!hexedit::findBytePattern(previewBytes.data(), previewBytes.size(), findPattern,
+        if (!hexedit::findBytePattern(hexBufferData(), hexBufferLength(), findPattern,
                                        cursor, hexedit::SearchDirection::Forward, false, at)) {
             break;
         }
@@ -4468,7 +4521,7 @@ static bool executeHexReplaceCurrentSelection(NSString *findText, NSString *repl
         return false;
     }
 
-    activeByteOffset = std::min(selectedByteStart + replacePattern.bytes.size(), previewBytes.size());
+    activeByteOffset = std::min(selectedByteStart + replacePattern.bytes.size(), hexBufferLength());
     activeHexNibble = 0;
     activeCursorField = HexCursorField::Hex;
     clearByteSelection();
@@ -4613,7 +4666,7 @@ static int executeHexCompareWithFile(NSString *otherFilePath, NSString **errorMe
     const std::uint8_t *otherBytes = static_cast<const std::uint8_t *>(otherData.bytes);
     const std::size_t otherLen = otherData.length;
 
-    g_compareDiffs = hexedit::computeByteDiffs(previewBytes.data(), previewBytes.size(),
+    g_compareDiffs = hexedit::computeByteDiffs(hexBufferData(), hexBufferLength(),
                                                 otherBytes, otherLen);
     g_compareOtherPath = [otherFilePath copy];
 
@@ -4752,7 +4805,7 @@ static int executeInsertColumns(NSString *patternText, int count, int position, 
         if (errorMessage) *errorMessage = L(@"insertColumns.errorRowSize");
         return -1;
     }
-    const std::size_t totalLength = previewBytes.size();
+    const std::size_t totalLength = hexBufferLength();
     // Number of rows to insert into is the number of fully-populated rows. A trailing
     // partial row gets padding inserted up to the position too — match Windows which
     // iterates HEXM_GETLINECNT, the count of rendered rows including the trailing one.
@@ -5449,16 +5502,16 @@ static NSView *createHexTableView(NSTableView **tableView, NSTextField **statusL
 
 static NSString *makeStatusText()
 {
-    if (previewBytes.empty()) {
+    if (hexBufferEmpty()) {
         return L(@"status.empty");
     }
 
     NSString *baseText = nil;
-    if (previewBytes.size() < previewTotalLength) {
+    if (hexBufferLength() < previewTotalLength) {
         baseText = [NSString stringWithFormat:L(@"status.showingTruncated"),
-            previewBytes.size(), previewTotalLength];
+            hexBufferLength(), previewTotalLength];
     } else {
-        baseText = [NSString stringWithFormat:L(@"status.showing"), previewBytes.size()];
+        baseText = [NSString stringWithFormat:L(@"status.showing"), hexBufferLength()];
     }
 
     if (hasRectSelection()) {
@@ -5611,8 +5664,10 @@ static void hideHexPreview()
 
 static void showAbout()
 {
-    NSString *body = [NSString stringWithFormat:@"%@\n\n%@",
-                      L(@"about.body"), L(@"about.localeTag")];
+    NSString *versionLine = [NSString stringWithFormat:L(@"about.version"),
+                             [NSString stringWithUTF8String:HEX_PLUGIN_VERSION]];
+    NSString *body = [NSString stringWithFormat:@"%@\n\n%@\n\n%@",
+                      L(@"about.body"), versionLine, L(@"about.localeTag")];
     showMessage(L(@"app.titleMac"), body);
 }
 

@@ -175,7 +175,7 @@ final class HexEditorUITests: XCTestCase {
         let expectedURL = try notepadAppURL().standardizedFileURL
         terminateDevBuildInstances(expectedURL: expectedURL)
 
-        // If a *different* org.notepadplusplus.mac is running (e.g. /Applications/Notepad++.app),
+        // If a *different* org.notepadplusplus.mac is running (e.g. /Applications/Nextpad++.app),
         // XCUI(url:) cannot launch a second instance under the same bundle ID. Skip-fast with a
         // clear message instead of letting the test sit through the launch timeout.
         let conflicts = NSWorkspace.shared.runningApplications.filter {
@@ -185,7 +185,7 @@ final class HexEditorUITests: XCTestCase {
         }
         if let conflict = conflicts.first {
             throw XCTSkip("""
-                Another Notepad++ macOS instance is already running with the same bundle \
+                Another Nextpad++ macOS instance is already running with the same bundle \
                 identifier (org.notepadplusplus.mac):
                   \(conflict.bundleURL?.path ?? "(unknown path)")
                 Quit it before running UI tests. XCUIApplication(url:) cannot launch a \
@@ -233,9 +233,9 @@ final class HexEditorUITests: XCTestCase {
         try? screenshot.pngRepresentation.write(to: fileURL)
     }
 
-    /// Force-kills any running dev-build Notepad++.app instance (path matches `expectedURL`),
+    /// Force-kills any running dev-build Nextpad++.app instance (path matches `expectedURL`),
     /// then waits up to 5 seconds for the process to disappear from the running-apps list.
-    /// Leaves instances at other paths (e.g. /Applications/Notepad++.app) untouched — those
+    /// Leaves instances at other paths (e.g. /Applications/Nextpad++.app) untouched — those
     /// belong to the user.
     private func terminateDevBuildInstances(expectedURL: URL) {
         let dev = NSWorkspace.shared.runningApplications.filter {
@@ -262,7 +262,7 @@ final class HexEditorUITests: XCTestCase {
         let app = try launchNotepad()
         defer { app.terminate() }
 
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "Notepad++ macOS did not launch into the foreground.")
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "Nextpad++ macOS did not launch into the foreground.")
     }
 
     func testHexEditorPluginMenuIsPresent() throws {
@@ -467,7 +467,7 @@ final class HexEditorUITests: XCTestCase {
     //     selection in screenshot capture.
     //   - osascript via Process gets `Application isn't running. (-600)`
     //     because the runner lacks Apple Events Automation permission for
-    //     Notepad++ (separate TCC scope from UI Automation, also not
+    //     Nextpad++ (separate TCC scope from UI Automation, also not
     //     persistable; see project_xcui_runner_tcc.md).
     // The dark factory hexes are tiny static constants in HexEditor.mm;
     // typos there are a code-review concern, not a runtime one. The Light
@@ -2798,6 +2798,44 @@ func testContextMenuCommands() throws {
                               expectedBodyContains: "Native macOS port")
     }
 
+    func testAboutDialogShowsPluginVersion() throws {
+        // The About body must surface the plugin version (injected via CMake's
+        // PROJECT_VERSION → HEX_PLUGIN_VERSION compile define). We assert on
+        // the "Version <semver>" shape rather than a fixed string so a CMake
+        // version bump doesn't churn this test.
+        let app = try launchNotepad(language: "en")
+        defer { app.terminate() }
+        try invokeHexEditorMenu(app: app, item: "Help...")
+        let aboutDialog = app.dialogs.firstMatch
+        XCTAssertTrue(aboutDialog.waitForExistence(timeout: 5))
+        let versionPredicate = NSPredicate(format:
+            "value MATCHES %@ OR label MATCHES %@",
+            ".*Version \\d+\\.\\d+\\.\\d+.*",
+            ".*Version \\d+\\.\\d+\\.\\d+.*")
+        XCTAssertTrue(aboutDialog.staticTexts.element(matching: versionPredicate).exists,
+                      "About dialog should show 'Version <semver>'.")
+        aboutDialog.buttons["OK"].firstMatch.click()
+    }
+
+    func testAboutDialogProductNameStaysAtomic() throws {
+        // The product name "Nextpad++" is built with U+2060 Word Joiners
+        // between letters so NSAlert's word-wrap can't split it across a
+        // line boundary. This regression test asserts the *plain* sequence
+        // "Nextpad++" (without joiners) doesn't appear anywhere in the
+        // dialog — if someone strips the joiners during a string edit, the
+        // plain form returns and this test fails.
+        let app = try launchNotepad(language: "en")
+        defer { app.terminate() }
+        try invokeHexEditorMenu(app: app, item: "Help...")
+        let aboutDialog = app.dialogs.firstMatch
+        XCTAssertTrue(aboutDialog.waitForExistence(timeout: 5))
+        let plainPredicate = NSPredicate(format:
+            "value CONTAINS %@ OR label CONTAINS %@", "Nextpad++", "Nextpad++")
+        XCTAssertFalse(aboutDialog.staticTexts.element(matching: plainPredicate).exists,
+                       "About dialog must keep the product name atomic — found plain 'Nextpad++' (no Word Joiners), which can wrap.")
+        aboutDialog.buttons["OK"].firstMatch.click()
+    }
+
     // MARK: - Rectangular (block) selection — v1.1.0
 
     /// Bootstraps a 1×1 rect at the caret then extends to (1+addCols)×(1+addRows)
@@ -3332,7 +3370,7 @@ func testContextMenuCommands() throws {
         return path
     }
 
-    /// Launch Notepad++ with a fixture file passed as a positional argv. The
+    /// Launch Nextpad++ with a fixture file passed as a positional argv. The
     /// host's CLI parser (NppCommandLineParams in src/AppDelegate.mm) treats
     /// any non-flag argument as a file to open — see `--help` for the catalog.
     private func launchNotepadWithFixture(_ name: String, language: String = "en") throws -> XCUIApplication {
@@ -3343,7 +3381,7 @@ func testContextMenuCommands() throws {
         app.launch()
         let foregroundTimeout = 30.0 * Self.asanTimeoutScale
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: foregroundTimeout),
-                      "Notepad++ macOS did not launch with fixture \(name).")
+                      "Nextpad++ macOS did not launch with fixture \(name).")
         return app
     }
 
@@ -3700,7 +3738,7 @@ func testContextMenuCommands() throws {
         app.launchEnvironment = Self.nppLaunchEnvironment(language: language)
         app.launch()
         let foregroundTimeout = 10.0 * Self.asanTimeoutScale
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: foregroundTimeout), "Notepad++ macOS did not launch.")
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: foregroundTimeout), "Nextpad++ macOS did not launch.")
         return app
     }
 
@@ -3743,7 +3781,7 @@ func testContextMenuCommands() throws {
     }
 
     private func createBufferWithText(app: XCUIApplication, text: String) throws {
-        // XCUI's `typeText` does not reach the Scintilla view in Notepad++ macOS — under the
+        // XCUI's `typeText` does not reach the Scintilla view in Nextpad++ macOS — under the
         // sandboxed UI test runner, synthetic key events are silently dropped before they
         // reach Scintilla's input handler. Edit menu actions (clicked via the menu bar) DO
         // route correctly, so we seed the buffer via Edit > Paste with the clipboard

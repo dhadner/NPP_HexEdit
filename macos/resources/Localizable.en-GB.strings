@@ -12,4 +12,5 @@
  */
 
 /* About / help dialog — diagnostic locale tag */
+"about.version"                    = "Version %@";
 "about.localeTag"                  = "Strings: en-GB";

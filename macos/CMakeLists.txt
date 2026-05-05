@@ -103,6 +103,10 @@ target_link_libraries(HexEditor PRIVATE
     "-framework Cocoa"
 )
 
+target_compile_definitions(HexEditor PRIVATE
+    HEX_PLUGIN_VERSION="${PROJECT_VERSION}"
+)
+
 set_target_properties(HexEditor PROPERTIES
     PREFIX ""
     SUFFIX ".dylib"
