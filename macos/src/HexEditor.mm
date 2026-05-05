@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <dlfcn.h>
 #include <iomanip>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <string>
@@ -337,7 +338,6 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             // Status bar (substring-matched by UI tests, so wording is contractual)
             @"status.empty":                     @"Current document is empty.",
             @"status.showing":                   @"Showing %zu bytes.",
-            @"status.showingTruncated":          @"Showing %1$zu of %2$zu bytes. Preview is truncated for responsiveness.",
             @"status.rectangle":                 @"Rectangle: %1$lu × %2$lu (%3$lu bytes)",
 
             // Rectangular paste error dialogs (strict shape-match)
@@ -494,7 +494,6 @@ static NSString *const kHexEditorStatusAccessibilityID = @"hex-editor.status";
 // and writing an accessibilityValue onto the table itself would clash with the
 // default row/cell semantics. The diagnostic element below is purely additive.
 static NSString *const kHexEditorCursorAccessibilityID = @"hex-editor.cursor.diagnostic";
-static const size_t PREVIEW_LIMIT = 1024 * 1024;
 static const CGFloat HEX_TABLE_HEIGHT = 640.0;
 static const CGFloat HEX_STATUS_HEIGHT = 24.0;
 static const CGFloat HEX_FALLBACK_FONT_SIZE = 10.0;
@@ -937,48 +936,52 @@ static NSTableView *hexTableView = nil;
 static NSTextField *hexStatusLabel = nil;
 static NSView *hexEditorView = nil;
 static NSView *hiddenScintillaView = nil;
-// Byte storage for the visible-hex view. Today this is a full in-RAM
-// copy of (the first PREVIEW_LIMIT bytes of) the Scintilla buffer; the
-// 20 GB scaling work (2026-05-04) is migrating reads through the
-// accessor functions defined just below so a future swap to a
-// windowed lazy reader against Scintilla doesn't require touching
-// every consumer. **Don't add new direct uses of `previewBytes` —
-// go through hexBufferLength / hexByteAt / hexBytesIn / hexBufferData
-// instead.** The only legitimate direct uses are write paths that
-// repopulate the buffer (the `previewBytes = readCurrentBuffer(...)`
-// reload sites and the one `previewBytes.clear()` shutdown site);
-// those are the next ones to migrate, in step 2.
-static std::vector<uint8_t> previewBytes;
-// Read-only accessors. Step 1 of the lazy-Scintilla migration: every
-// consumer reads through these; step 2 replaces the implementations
-// with windowed reads against Scintilla without touching the consumers.
-static inline std::size_t hexBufferLength() { return previewBytes.size(); }
-static inline bool        hexBufferEmpty()  { return previewBytes.empty(); }
+// Long-lived byte-source backing the hex view. Replaces the previous
+// in-RAM previewBytes vector — the lazy-Scintilla migration of 2026-05-05
+// (Step 2c). Reads go on demand against the active Scintilla buffer via
+// WindowedScintillaByteSource's page cache, so plugin RAM stays bounded
+// by the cache size (~4 MB) regardless of document length.
+//
+// Lifecycle is owned by bindHexBufferToActiveScintilla() and
+// invalidateHexBuffer() below. Direct g_hexBuffer access by consumers is
+// discouraged — go through the hexBufferLength / hexBufferEmpty /
+// hexByteAt / hexBytesIn / hexBufferSource accessors so we keep one
+// path through the null-check.
+//
+// Destruction order: g_hexBuffer holds a reference into *g_hexReader,
+// so g_hexBuffer must reset *first*. unique_ptr destructors run in
+// reverse declaration order, so g_hexBuffer is declared *after*
+// g_hexReader to make this happen automatically.
+static std::unique_ptr<hexedit::SciReader> g_hexReader;
+static std::unique_ptr<hexedit::WindowedScintillaByteSource> g_hexBuffer;
+
+static inline std::size_t hexBufferLength() { return g_hexBuffer ? g_hexBuffer->length() : 0; }
+static inline bool        hexBufferEmpty()  { return hexBufferLength() == 0; }
 static inline std::uint8_t hexByteAt(std::size_t offset)
 {
-    return offset < previewBytes.size() ? previewBytes[offset] : 0;
+    if (!g_hexBuffer) return 0;
+    std::uint8_t b = 0;
+    g_hexBuffer->read(offset, &b, 1);
+    return b;
 }
 static inline std::size_t hexBytesIn(std::size_t offset,
                                        std::size_t count,
                                        std::uint8_t *dest)
 {
-    if (offset >= previewBytes.size()) return 0;
-    const std::size_t available = previewBytes.size() - offset;
-    const std::size_t toCopy = std::min(count, available);
-    std::memcpy(dest, previewBytes.data() + offset, toCopy);
-    return toCopy;
+    if (!g_hexBuffer) return 0;
+    return g_hexBuffer->read(offset, dest, count);
 }
-// Transitional raw-pointer escape for HexCore APIs that currently take
-// `const std::uint8_t *` + length (formatCell, findBytePattern,
-// extractRectBytes, computeByteDiffs, etc.). When step 2 swaps
-// previewBytes for a windowed reader the pointer becomes invalid as
-// soon as the window scrolls, so step 2 will either retarget those
-// HexCore APIs to take a ByteSource* or have callers populate a
-// transient buffer with hexBytesIn() and pass that. New callers
-// should NOT use this — prefer hexBytesIn() if you need a contiguous
-// byte run. Marked deprecated in spirit; in practice the existing
-// callsites stay on it through step 1 to keep the refactor a no-op.
-static inline const std::uint8_t *hexBufferData() { return previewBytes.data(); }
+// Pass-by-reference accessor for HexCore APIs that take `const ByteSource&`
+// (findBytePattern, computeByteDiffs, extractRectBytes, formatRectClipboardHex).
+// The returned reference is valid until the next bindHexBufferToActiveScintilla()
+// call. Consumers MUST guard with hexBufferEmpty() — calling this with no
+// buffer bound dereferences null.
+static inline const hexedit::ByteSource &hexBufferSource() { return *g_hexBuffer; }
+
+// Forward declarations; defined after LiveSciReader (the concrete SciReader
+// that talks to the live host-side Scintilla) is in scope.
+static void bindHexBufferToActiveScintilla();
+static void invalidateHexBuffer();
 static std::set<size_t> bookmarkedRows;
 // Compare HEX result mask. Empty when there is no active comparison; otherwise sized to
 // max(myLen, otherLen) with `true` at byte offsets that differ between the current buffer
@@ -1442,7 +1445,13 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
             return @"";
         }
         const size_t available = std::min(static_cast<size_t>(mode.bytesPerCell), hexBufferLength() - firstByte);
-        std::string formatted = hexedit::formatCell(hexBufferData() + firstByte, available, mode);
+        // formatCell reads at most ViewMode.bytesPerCell bytes (≤ 8). Fetch
+        // into a stack scratch buffer so we don't depend on hexBufferData()
+        // returning a raw pointer — Step 2c is migrating the storage to a
+        // page-cached Scintilla reader where no such pointer is exposed.
+        std::uint8_t scratch[8];
+        const size_t got = hexBytesIn(firstByte, available, scratch);
+        std::string formatted = hexedit::formatCell(scratch, got, mode);
         return [NSString stringWithUTF8String:formatted.c_str()];
     }
 
@@ -1685,6 +1694,24 @@ static HexTableDataSource *hexTableDataSource = nil;
     if (c == 'l' || c == 'L') {
         presentHexGotoDialog();
         return YES;
+    }
+    // Wire Cmd-X / Cmd-C / Cmd-V / Cmd-A to our cut: / copy: / paste: /
+    // selectAll: responder methods. Without this, AppKit dispatches the
+    // keyboard shortcut to the host's Edit menu — whose targets are tied
+    // to NPP's text-editor selection, not the hex view's byte selection.
+    // Bug fingerprint when this isn't claimed: Cmd-C does nothing visible
+    // (clipboard stays whatever was there before), and the next Cmd-V
+    // pastes that *stale* clipboard, looking like the source copy "got
+    // the wrong bytes". Only the bare-Command variants are claimed —
+    // shift/option-modified shortcuts (e.g. Cmd-Shift-V "paste and match
+    // style") fall through to whatever the host wires them to.
+    const NSEventModifierFlags clipMask =
+        NSEventModifierFlagShift | NSEventModifierFlagOption | NSEventModifierFlagControl;
+    if ((mods & clipMask) == 0) {
+        if (c == 'c' || c == 'C') { [self copy:nil];      return YES; }
+        if (c == 'x' || c == 'X') { [self cut:nil];       return YES; }
+        if (c == 'v' || c == 'V') { [self paste:nil];     return YES; }
+        if (c == 'a' || c == 'A') { [self selectAll:nil]; return YES; }
     }
     return [super performKeyEquivalent:event];
 }
@@ -2043,11 +2070,16 @@ static HexTableDataSource *hexTableDataSource = nil;
     NSMenuItem *redoItem = [menu addItemWithTitle:L(@"menu.context.redo") action:@selector(redo:) keyEquivalent:@""];
     redoItem.target = self;
     [menu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *cutItem = [menu addItemWithTitle:L(@"menu.context.cut") action:@selector(hexCut:) keyEquivalent:@""];
+    // Cmd-X / Cmd-C / Cmd-V shortcuts shown in the context menu so the user
+    // sees the binding next to each item. The actual key dispatch is handled
+    // in HexTableView.performKeyEquivalent: — these strings exist primarily
+    // for display, but AppKit will also dispatch the shortcut to these items
+    // if the menu is the receiving responder, which is harmless redundancy.
+    NSMenuItem *cutItem = [menu addItemWithTitle:L(@"menu.context.cut") action:@selector(hexCut:) keyEquivalent:@"x"];
     cutItem.target = self;
-    NSMenuItem *copyItem = [menu addItemWithTitle:L(@"menu.context.copy") action:@selector(hexCopy:) keyEquivalent:@""];
+    NSMenuItem *copyItem = [menu addItemWithTitle:L(@"menu.context.copy") action:@selector(hexCopy:) keyEquivalent:@"c"];
     copyItem.target = self;
-    NSMenuItem *pasteItem = [menu addItemWithTitle:L(@"menu.context.paste") action:@selector(hexPaste:) keyEquivalent:@""];
+    NSMenuItem *pasteItem = [menu addItemWithTitle:L(@"menu.context.paste") action:@selector(hexPaste:) keyEquivalent:@"v"];
     pasteItem.target = self;
     NSMenuItem *deleteItem = [menu addItemWithTitle:L(@"menu.context.delete") action:@selector(hexDelete:) keyEquivalent:@""];
     deleteItem.target = self;
@@ -3380,17 +3412,41 @@ private:
     NppHandle handle_ = 0;
 };
 
-static std::vector<uint8_t> readCurrentBuffer(size_t *totalLength)
+// Bind / rebind g_hexBuffer to the active Scintilla. Replaces the legacy
+// `previewBytes = readCurrentBuffer(...)` write sites — instead of copying
+// the (capped) document into a vector, we wrap the live editor in a
+// SciReader and a page-cached source. previewTotalLength stays as a cached
+// length for legacy display code; it mirrors g_hexBuffer->length().
+//
+// Destruction order matters: g_hexBuffer holds a reference into *g_hexReader,
+// so we reset g_hexBuffer *before* replacing g_hexReader.
+static void bindHexBufferToActiveScintilla()
 {
     NppHandle editor = previewScintillaHandle ? previewScintillaHandle : getCurrentScintilla();
     if (!editor) {
-        if (totalLength) {
-            *totalLength = 0;
-        }
-        return {};
+        g_hexBuffer.reset();
+        g_hexReader.reset();
+        previewTotalLength = 0;
+        return;
     }
-    LiveSciReader reader(editor);
-    return hexedit::readPreviewBuffer(reader, PREVIEW_LIMIT, totalLength);
+    g_hexBuffer.reset();
+    g_hexReader = std::make_unique<LiveSciReader>(editor);
+    g_hexBuffer = std::make_unique<hexedit::WindowedScintillaByteSource>(*g_hexReader);
+    previewTotalLength = g_hexBuffer->length();
+}
+
+// Drop cached pages without rebuilding the SciReader. Use this after a known-
+// in-place mutation (SCN_MODIFIED) of the same buffer we're already bound to.
+// length() is queried on every call so the freshly-changed document length
+// is observed without an explicit refresh.
+static void invalidateHexBuffer()
+{
+    if (g_hexBuffer) {
+        g_hexBuffer->invalidate();
+        previewTotalLength = g_hexBuffer->length();
+    } else {
+        bindHexBufferToActiveScintilla();
+    }
 }
 
 static NSInteger cellColumnIndex(NSString *identifier)
@@ -3578,7 +3634,7 @@ static void moveActiveCursor(NSInteger delta)
 static hexedit::DocumentView currentDocumentView()
 {
     hexedit::DocumentView view;
-    view.bytes = hexBufferEmpty() ? nullptr : hexBufferData();
+    view.source = g_hexBuffer.get();
     view.visibleByteCount = hexBufferLength();
     view.totalLength = previewTotalLength;
     return view;
@@ -3650,7 +3706,7 @@ static bool applyEditorByteTransaction(size_t offset, const uint8_t *bytes, size
     sci(editor, SCI_ENDUNDOACTION);
     suppressModificationRefresh = false;
 
-    previewBytes = readCurrentBuffer(&previewTotalLength);
+    bindHexBufferToActiveScintilla();
     clampActiveCursor();
     if (hexStatusLabel) {
         hexStatusLabel.stringValue = makeStatusText();
@@ -3660,7 +3716,7 @@ static bool applyEditorByteTransaction(size_t offset, const uint8_t *bytes, size
 
 static void refreshHexViewFromScintilla(size_t preferredCursorOffset, NSPoint scrollOrigin)
 {
-    previewBytes = readCurrentBuffer(&previewTotalLength);
+    bindHexBufferToActiveScintilla();
     activeByteOffset = std::min(preferredCursorOffset, previewTotalLength);
     activeHexNibble = 0;
     clearByteSelection();
@@ -3763,7 +3819,7 @@ static bool copyRectToPasteboard()
         ? HexRectClipboardKind::Ascii
         : HexRectClipboardKind::Bytes;
 
-    hexedit::SpanByteSource bufferSource(hexBufferData(), hexBufferLength());
+    const hexedit::ByteSource &bufferSource = hexBufferSource();
     std::vector<std::uint8_t> payloadBytes;
     hexedit::extractRectBytes(bufferSource, g_rectSelection, payloadBytes);
     const std::string text = hexedit::formatRectClipboardHex(bufferSource, g_rectSelection);
@@ -3799,7 +3855,13 @@ static bool copyHexSelectionToPasteboard()
     }
 
     byteCount = std::min(byteCount, hexBufferLength() - offset);
-    const std::uint8_t *src = hexBufferData() + offset;
+    // Materialize the selection into a contiguous NSMutableData buffer.
+    // We can't take a raw pointer into the page-cached source because pages
+    // may evict during the read; copying into NSMutableData snapshots the
+    // selection at copy time, which is what the pasteboard needs anyway.
+    NSMutableData *selectionBytes = [NSMutableData dataWithLength:byteCount];
+    hexBytesIn(offset, byteCount, static_cast<std::uint8_t *>(selectionBytes.mutableBytes));
+
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
     [pasteboard clearContents];
 
@@ -3807,14 +3869,14 @@ static bool copyHexSelectionToPasteboard()
     // regardless of which pane is active. ASCII text would lose information for any
     // non-printable bytes (which become dots in the on-screen ASCII column), and the
     // user has explicit "Copy Binary Content" if they want the raw bytes.
-    const std::string hexText = hexedit::formatHexClipboardText(src, byteCount);
+    const std::string hexText = hexedit::formatHexClipboardText(
+        static_cast<const std::uint8_t *>(selectionBytes.bytes), byteCount);
     NSString *string = [NSString stringWithUTF8String:hexText.c_str()];
     if (string != nil) {
         [pasteboard setString:string forType:NSPasteboardTypeString];
     }
 
-    NSData *bytes = [NSData dataWithBytes:src length:byteCount];
-    [pasteboard setData:bytes forType:@"public.data"];
+    [pasteboard setData:selectionBytes forType:@"public.data"];
     return true;
 }
 
@@ -3827,7 +3889,7 @@ static bool copyHexSelectionAsBinary()
         if (!copyRectToPasteboard()) {
             return false;
         }
-        hexedit::SpanByteSource bufferSource(hexBufferData(), hexBufferLength());
+        const hexedit::ByteSource &bufferSource = hexBufferSource();
         std::vector<std::uint8_t> rectBytes;
         if (hexedit::extractRectBytes(bufferSource, g_rectSelection, rectBytes) && !rectBytes.empty()) {
             NSData *raw = [NSData dataWithBytes:rectBytes.data() length:rectBytes.size()];
@@ -3845,7 +3907,8 @@ static bool copyHexSelectionAsBinary()
     }
 
     byteCount = std::min(byteCount, hexBufferLength() - offset);
-    NSData *bytes = [NSData dataWithBytes:hexBufferData() + offset length:byteCount];
+    NSMutableData *bytes = [NSMutableData dataWithLength:byteCount];
+    hexBytesIn(offset, byteCount, static_cast<std::uint8_t *>(bytes.mutableBytes));
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
     [pasteboard clearContents];
     [pasteboard setData:bytes forType:NSPasteboardTypeString];
@@ -4391,7 +4454,7 @@ static bool executeHexFindNext(hexedit::SearchDirection direction, NSString **er
         startOffset = hasByteSelection() ? selectedByteStart : activeByteOffset;
     }
 
-    hexedit::SpanByteSource bufferSource(hexBufferData(), hexBufferLength());
+    const hexedit::ByteSource &bufferSource = hexBufferSource();
     std::size_t found = 0;
     if (!hexedit::findBytePattern(bufferSource, pattern,
                                    startOffset, direction, g_findWrap, found)) {
@@ -4443,7 +4506,7 @@ static int executeHexReplaceAll(NSString *findText, NSString *replaceText, bool 
     }
 
     // Collect all non-overlapping match offsets, forward, no wrap.
-    hexedit::SpanByteSource bufferSource(hexBufferData(), hexBufferLength());
+    const hexedit::ByteSource &bufferSource = hexBufferSource();
     std::vector<std::size_t> matches;
     std::size_t cursor = 0;
     while (cursor + findPattern.bytes.size() <= hexBufferLength()) {
@@ -4479,7 +4542,7 @@ static int executeHexReplaceAll(NSString *findText, NSString *replaceText, bool 
     sci(editor, SCI_ENDUNDOACTION);
     suppressModificationRefresh = false;
 
-    previewBytes = readCurrentBuffer(&previewTotalLength);
+    bindHexBufferToActiveScintilla();
     clampActiveCursor();
     clearByteSelection();
     if (hexTableView) {
@@ -4669,9 +4732,8 @@ static int executeHexCompareWithFile(NSString *otherFilePath, NSString **errorMe
     const std::uint8_t *otherBytes = static_cast<const std::uint8_t *>(otherData.bytes);
     const std::size_t otherLen = otherData.length;
 
-    hexedit::SpanByteSource mySource(hexBufferData(), hexBufferLength());
     hexedit::SpanByteSource otherSource(otherBytes, otherLen);
-    g_compareDiffs = hexedit::computeByteDiffs(mySource, otherSource);
+    g_compareDiffs = hexedit::computeByteDiffs(hexBufferSource(), otherSource);
     g_compareOtherPath = [otherFilePath copy];
 
     if (hexTableView) {
@@ -4839,7 +4901,7 @@ static int executeInsertColumns(NSString *patternText, int count, int position, 
     g_columns = currentColumns + count;
     saveHexPrefs();
 
-    previewBytes = readCurrentBuffer(&previewTotalLength);
+    bindHexBufferToActiveScintilla();
     clampActiveCursor();
     clearByteSelection();
     applyHexViewMode();
@@ -5510,13 +5572,12 @@ static NSString *makeStatusText()
         return L(@"status.empty");
     }
 
-    NSString *baseText = nil;
-    if (hexBufferLength() < previewTotalLength) {
-        baseText = [NSString stringWithFormat:L(@"status.showingTruncated"),
-            hexBufferLength(), previewTotalLength];
-    } else {
-        baseText = [NSString stringWithFormat:L(@"status.showing"), hexBufferLength()];
-    }
+    // hexBufferLength() and previewTotalLength now both reflect the full
+    // Scintilla document length — there's no longer a cap that requires a
+    // separate "truncated" status line. The branch is preserved as a single
+    // "Showing N bytes." path; the previous truncation banner was retired
+    // in Step 2d (page-cached lazy reader removes the need for the cap).
+    NSString *baseText = [NSString stringWithFormat:L(@"status.showing"), hexBufferLength()];
 
     if (hasRectSelection()) {
         // Rectangle status reads e.g. "Rectangle: 4 × 3 (12 bytes)" — the totalBytes
@@ -5586,7 +5647,7 @@ static void showHexPreview()
     }
 
     editorBaseFontSize = readEditorFontSize();
-    previewBytes = readCurrentBuffer(&previewTotalLength);
+    bindHexBufferToActiveScintilla();
     bookmarkedRows.clear();
     activeByteOffset = 0;
     activeHexNibble = 0;
@@ -5654,7 +5715,10 @@ static void hideHexPreview()
             [hiddenScintillaView.window makeFirstResponder:hiddenScintillaView];
         }
 
-        previewBytes.clear();
+        // Drop the byte-source first so its reference into g_hexReader is
+        // released before g_hexReader itself is reset.
+        g_hexBuffer.reset();
+        g_hexReader.reset();
         bookmarkedRows.clear();
         clearAllByteSelections();
         previewTotalLength = 0;
@@ -7090,7 +7154,10 @@ extern "C" NPP_EXPORT void beNotified(SCNotification *notifyCode)
         hexTableView &&
         isPreviewBufferActive() &&
         !suppressModificationRefresh) {
-        previewBytes = readCurrentBuffer(&previewTotalLength);
+        // The Scintilla we're already bound to just mutated. Drop the page
+        // cache instead of rebuilding the source so consecutive byte edits
+        // don't allocate two unique_ptrs per keypress.
+        invalidateHexBuffer();
         clampActiveCursor();
         refreshVisibleHexTables();
     }

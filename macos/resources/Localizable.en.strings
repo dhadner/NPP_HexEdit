@@ -147,7 +147,6 @@
 /* Status bar (substring-matched by UI tests — wording is contractual) */
 "status.empty"                     = "Current document is empty.";
 "status.showing"                   = "Showing %zu bytes.";
-"status.showingTruncated"          = "Showing %1$zu of %2$zu bytes. Preview is truncated for responsiveness.";
 "status.rectangle"                 = "Rectangle: %1$lu × %2$lu (%3$lu bytes)";
 
 /* Rectangular paste error dialogs (strict shape-match, see DEVELOPER.md) */

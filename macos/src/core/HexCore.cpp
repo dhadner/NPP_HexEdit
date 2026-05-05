@@ -220,8 +220,8 @@ bool planHexDigitEdit(const DocumentView &view,
 
     std::uint8_t baseByte = 0;
     std::size_t replacedByteCount = 0;
-    if (working.offset < view.visibleByteCount) {
-        baseByte = view.bytes[working.offset];
+    if (working.offset < view.visibleByteCount && view.source != nullptr) {
+        view.source->read(working.offset, &baseByte, 1);
         replacedByteCount = 1;
     }
 
@@ -273,8 +273,8 @@ bool planBitEdit(const DocumentView &view,
 
     std::uint8_t baseByte = 0;
     std::size_t replacedByteCount = 0;
-    if (working.offset < view.visibleByteCount) {
-        baseByte = view.bytes[working.offset];
+    if (working.offset < view.visibleByteCount && view.source != nullptr) {
+        view.source->read(working.offset, &baseByte, 1);
         replacedByteCount = 1;
     }
 
@@ -1508,6 +1508,98 @@ std::vector<std::uint8_t> readPreviewBuffer(const SciReader &reader,
     reader.readRange(0, bytesToRead, reinterpret_cast<char *>(bytes.data()));
     bytes.resize(bytesToRead);   // drop the NUL slot from the returned size
     return bytes;
+}
+
+// =============================================================================
+// WindowedScintillaByteSource — page-cached random-access read of a Scintilla
+// document.
+// =============================================================================
+
+WindowedScintillaByteSource::WindowedScintillaByteSource(SciReader &reader,
+                                                          std::size_t pageSize,
+                                                          std::size_t maxPages)
+    : reader_(reader),
+      pageSize_(pageSize == 0 ? 64 * 1024 : pageSize),
+      maxPages_(maxPages == 0 ? 1 : maxPages),
+      lruCounter_(0)
+{
+    pages_.reserve(maxPages_);
+}
+
+std::size_t WindowedScintillaByteSource::length() const
+{
+    return reader_.documentLength();
+}
+
+void WindowedScintillaByteSource::invalidate()
+{
+    pages_.clear();
+    lruCounter_ = 0;
+}
+
+const WindowedScintillaByteSource::Page &
+WindowedScintillaByteSource::loadPage(std::size_t pageIndex) const
+{
+    // Cache hit: bump LRU and return.
+    for (auto &p : pages_) {
+        if (p.pageIndex == pageIndex) {
+            p.lru = ++lruCounter_;
+            return p;
+        }
+    }
+    // Cache miss: fetch the page from Scintilla.
+    const std::size_t docLen = reader_.documentLength();
+    const std::size_t cpMin = pageIndex * pageSize_;
+    const std::size_t cpMax = (cpMin >= docLen) ? cpMin : std::min(cpMin + pageSize_, docLen);
+    const std::size_t bytesInPage = cpMax - cpMin;
+
+    Page newPage;
+    newPage.pageIndex = pageIndex;
+    // SciReader::readRange writes a NUL at dest[cpMax - cpMin]; the buffer
+    // must have room for bytesInPage + 1 bytes. Same bug-class as
+    // readPreviewBuffer above.
+    if (bytesInPage > 0) {
+        newPage.bytes.resize(bytesInPage + 1);
+        reader_.readRange(cpMin, cpMax, reinterpret_cast<char *>(newPage.bytes.data()));
+        newPage.bytes.resize(bytesInPage);
+    }
+    newPage.lru = ++lruCounter_;
+
+    // Evict the LRU page when at capacity.
+    if (pages_.size() >= maxPages_) {
+        auto victim = std::min_element(pages_.begin(), pages_.end(),
+            [](const Page &a, const Page &b) { return a.lru < b.lru; });
+        pages_.erase(victim);
+    }
+    pages_.push_back(std::move(newPage));
+    return pages_.back();
+}
+
+std::size_t WindowedScintillaByteSource::read(std::size_t offset,
+                                              std::uint8_t *dest,
+                                              std::size_t count) const
+{
+    if (count == 0) return 0;
+    const std::size_t docLen = reader_.documentLength();
+    if (offset >= docLen) return 0;
+    const std::size_t available = std::min(count, docLen - offset);
+
+    std::size_t written = 0;
+    while (written < available) {
+        const std::size_t cursor = offset + written;
+        const std::size_t pageIndex = cursor / pageSize_;
+        const std::size_t pageOffset = cursor % pageSize_;
+        const Page &page = loadPage(pageIndex);
+        if (pageOffset >= page.bytes.size()) {
+            // Page is shorter than expected (last page truncated); we've read
+            // all available bytes.
+            break;
+        }
+        const std::size_t take = std::min(available - written, page.bytes.size() - pageOffset);
+        std::memcpy(dest + written, page.bytes.data() + pageOffset, take);
+        written += take;
+    }
+    return written;
 }
 
 }

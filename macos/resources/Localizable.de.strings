@@ -147,7 +147,6 @@
 /* Statusleiste (UI-Tests prüfen Substrings — Wortlaut ist vertraglich) */
 "status.empty"                     = "Aktuelles Dokument ist leer.";
 "status.showing"                   = "Zeige %zu Bytes.";
-"status.showingTruncated"          = "Zeige %1$zu von %2$zu Bytes. Vorschau ist aus Performance-Gründen gekürzt.";
 
 /* Über / Hilfe-Dialog */
 "about.body"                       = "Native macOS-Portierung des HEX-Editor-Plugins für N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+. Bietet eine eingebettete Hex-Tabelle mit direkter Byte-Bearbeitung, Auswahl, Lesezeichen, Suchen/Ersetzen, Vergleich und Ansichtswechsel.";

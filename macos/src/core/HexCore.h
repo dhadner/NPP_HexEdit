@@ -43,8 +43,15 @@ struct Selection {
     bool active() const { return end > start; }
 };
 
+// Forward declaration; defined just below.
+class ByteSource;
+
 struct DocumentView {
-    const std::uint8_t *bytes = nullptr;
+    // Backing storage for the visible bytes. Reads go through `source->read(...)`
+    // so this struct works equally well over an in-RAM SpanByteSource and a
+    // page-cached WindowedScintillaByteSource. May be null when no buffer
+    // is open (visibleByteCount and totalLength are both 0 in that case).
+    const ByteSource *source = nullptr;
     std::size_t visibleByteCount = 0;
     std::size_t totalLength = 0;
 
@@ -446,6 +453,64 @@ public:
 std::vector<std::uint8_t> readPreviewBuffer(const SciReader &reader,
                                             std::size_t previewLimit,
                                             std::size_t *outTotalLength);
+
+// =============================================================================
+// WindowedScintillaByteSource — bounded-RAM ByteSource backed by SciReader
+// =============================================================================
+//
+// A ByteSource that reads bytes on demand from a Scintilla document via
+// SciReader::readRange, caching pages in a small LRU table so plugin RAM
+// stays bounded (default ~4 MB) regardless of document size. This is the
+// backend that lets the hex view scale to 20 GB files without a
+// proportional plugin allocation.
+//
+// Cache shape: `maxPages` pages of `pageSize` bytes each. On a cache miss
+// the source fetches one full page from Scintilla; on hit it bumps an LRU
+// counter. When at capacity, the least-recently-used page is evicted to
+// make room for the new one. With the defaults (64 pages × 64 KB), the
+// hot-window covers ~4 MB of the document — comfortably more than any
+// viewport — and a sequential scan (find / replace / compare) only needs
+// one round-trip per 64 KB of haystack.
+//
+// Length: read() and length() both consult SciReader::documentLength()
+// (cheap — SCI_GETLENGTH). Pages are stale after a document edit; plugin
+// code MUST call invalidate() after any modification that changes the
+// underlying bytes (typically from the SCN_MODIFIED notification handler).
+class WindowedScintillaByteSource : public ByteSource {
+public:
+    explicit WindowedScintillaByteSource(SciReader &reader,
+                                         std::size_t pageSize = 64 * 1024,
+                                         std::size_t maxPages = 64);
+
+    std::size_t length() const override;
+    std::size_t read(std::size_t offset, std::uint8_t *dest, std::size_t count) const override;
+
+    // Drop all cached pages. Call after any edit that mutates the underlying
+    // document so subsequent reads re-fetch fresh bytes.
+    void invalidate();
+
+    // Diagnostic accessors — handy for tests verifying cache behaviour.
+    std::size_t pageSize() const { return pageSize_; }
+    std::size_t maxPages() const { return maxPages_; }
+    std::size_t cachedPageCount() const { return pages_.size(); }
+
+private:
+    struct Page {
+        std::size_t pageIndex = 0;
+        std::vector<std::uint8_t> bytes;
+        std::uint64_t lru = 0;
+    };
+
+    SciReader &reader_;
+    std::size_t pageSize_;
+    std::size_t maxPages_;
+    mutable std::vector<Page> pages_;
+    mutable std::uint64_t lruCounter_;
+
+    // Loads (or refreshes the LRU stamp on) the page at `pageIndex` and
+    // returns a reference good until the next loadPage call.
+    const Page &loadPage(std::size_t pageIndex) const;
+};
 
 }
 

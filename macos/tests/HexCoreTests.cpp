@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -36,12 +38,43 @@ void hexExpectEqImpl(const A &lhs, const B &rhs, const char *lhsExpr, const char
 
 using namespace hexedit;
 
-DocumentView makeView(const std::vector<std::uint8_t> &bytes, std::size_t totalLength)
-{
+// Test helper: bundles a SpanByteSource that owns the byte storage and a
+// DocumentView that points at it. Tests construct this once per scenario;
+// `tv.view` is the DocumentView arg passed into the function under test.
+//
+// We can't return a DocumentView with `view.source = &local` from a function
+// — the local SpanByteSource would die on return — so callers either use
+// `TestView` directly or build the pair inline.
+struct TestView {
+    SpanByteSource source;
     DocumentView view;
-    view.bytes = bytes.empty() ? nullptr : bytes.data();
+
+    TestView(const std::vector<std::uint8_t> &bytes, std::size_t totalLength)
+        : source(bytes.empty() ? nullptr : bytes.data(), bytes.size()),
+          view{}
+    {
+        view.source = &source;
+        view.visibleByteCount = bytes.size();
+        view.totalLength = totalLength;
+    }
+};
+
+// Existing call-pattern compatibility: many tests do
+//   DocumentView view = makeView(bytes, totalLength);
+// We keep this working by stashing the SpanByteSource in a static map keyed
+// by the caller's bytes-pointer + size. Stale entries get evicted whenever a
+// new key reuses the same bytes-pointer (which happens implicitly as test
+// suites overwrite the local `bytes` vector). For test runs only.
+inline DocumentView makeView(const std::vector<std::uint8_t> &bytes, std::size_t totalLength)
+{
+    static std::vector<std::unique_ptr<SpanByteSource>> g_keepalive;
+    auto src = std::make_unique<SpanByteSource>(
+        bytes.empty() ? nullptr : bytes.data(), bytes.size());
+    DocumentView view;
+    view.source = src.get();
     view.visibleByteCount = bytes.size();
     view.totalLength = totalLength;
+    g_keepalive.push_back(std::move(src));
     return view;
 }
 
@@ -195,8 +228,9 @@ void testDocumentNavigation()
     HEX_EXPECT_EQ(end.offset, std::size_t(40));
     HEX_EXPECT_EQ(end.nibble, 0);
 
+    SpanByteSource truncatedSource(bytes.data(), bytes.size());
     DocumentView truncated;
-    truncated.bytes = bytes.data();
+    truncated.source = &truncatedSource;
     truncated.visibleByteCount = 10;
     truncated.totalLength = 1024;
     end = cursorToDocumentEnd(c, truncated);
@@ -338,8 +372,9 @@ void testPlanHexDigitEdit()
     cursor.offset = 99;
     HEX_EXPECT(!planHexDigitEdit(view, cursor, sel, 0, op));
 
+    SpanByteSource truncatedSource(bytes.data(), bytes.size());
     DocumentView truncated;
-    truncated.bytes = bytes.data();
+    truncated.source = &truncatedSource;
     truncated.visibleByteCount = 2;
     truncated.totalLength = 1024;
     cursor.offset = 2;
@@ -1826,6 +1861,136 @@ void testSpanByteSource()
     }
 }
 
+// FakeScintilla that records every readRange call for cache-behaviour tests.
+class CountingFakeScintilla : public hexedit::SciReader {
+public:
+    explicit CountingFakeScintilla(std::vector<std::uint8_t> doc)
+        : document_(std::move(doc)) {}
+
+    std::size_t documentLength() const override { return document_.size(); }
+
+    void readRange(std::size_t cpMin, std::size_t cpMax, char *dest) const override
+    {
+        ++readCalls_;
+        const std::size_t copyMax = (cpMin <= document_.size()) ? document_.size() - cpMin : 0;
+        const std::size_t want = (cpMax > cpMin) ? cpMax - cpMin : 0;
+        const std::size_t take = (want < copyMax) ? want : copyMax;
+        if (take > 0) {
+            std::memcpy(dest, document_.data() + cpMin, take);
+        }
+        dest[want] = '\0';
+    }
+
+    int readCalls() const { return readCalls_; }
+    void resetCounter() { readCalls_ = 0; }
+
+private:
+    std::vector<std::uint8_t> document_;
+    mutable int readCalls_ = 0;
+};
+
+void testWindowedScintillaByteSource()
+{
+    g_currentSuite = "WindowedScintillaByteSource";
+
+    // Build a 256 KB document with a recognisable pattern (byte i = i % 251).
+    std::vector<std::uint8_t> doc(256 * 1024);
+    for (std::size_t i = 0; i < doc.size(); ++i) {
+        doc[i] = static_cast<std::uint8_t>(i % 251);
+    }
+
+    // Read across a page boundary returns contiguous bytes correctly.
+    {
+        CountingFakeScintilla fake(doc);
+        WindowedScintillaByteSource source(fake, 4096, 16);  // 4 KB pages, 16 pages
+        HEX_EXPECT_EQ(source.length(), doc.size());
+
+        std::vector<std::uint8_t> got(8192);
+        // Straddle the 4096-byte boundary: read 8192 bytes from offset 4090.
+        const std::size_t n = source.read(4090, got.data(), 8192);
+        HEX_EXPECT_EQ(n, static_cast<std::size_t>(8192));
+        for (std::size_t i = 0; i < 8192; ++i) {
+            HEX_EXPECT_EQ(got[i], doc[4090 + i]);
+        }
+    }
+
+    // Cache hit avoids re-fetching the same page.
+    {
+        CountingFakeScintilla fake(doc);
+        WindowedScintillaByteSource source(fake, 4096, 16);
+        std::uint8_t buf[16] = {};
+        source.read(0, buf, 16);              // miss → 1 readRange
+        const int afterFirst = fake.readCalls();
+        source.read(100, buf, 16);            // same page 0 → hit, no read
+        source.read(4000, buf, 16);           // still page 0 → hit
+        HEX_EXPECT_EQ(fake.readCalls(), afterFirst);
+        // Different page → miss
+        source.read(8192, buf, 16);
+        HEX_EXPECT_EQ(fake.readCalls(), afterFirst + 1);
+    }
+
+    // LRU eviction kicks in at capacity. With maxPages=2 and three distinct
+    // pages touched, the third access evicts the least-recently-used. Touching
+    // the evicted page after eviction must re-fetch.
+    {
+        CountingFakeScintilla fake(doc);
+        WindowedScintillaByteSource source(fake, 4096, 2);
+        std::uint8_t buf[16] = {};
+        source.read(0,         buf, 16);  // page 0
+        source.read(4096,      buf, 16);  // page 1
+        const int beforeEvict = fake.readCalls();
+        source.read(8192,      buf, 16);  // page 2 → evicts page 0 (oldest)
+        HEX_EXPECT_EQ(fake.readCalls(), beforeEvict + 1);
+        HEX_EXPECT_EQ(source.cachedPageCount(), static_cast<std::size_t>(2));
+        // Re-touching page 0 forces a re-fetch.
+        source.read(0,         buf, 16);
+        HEX_EXPECT_EQ(fake.readCalls(), beforeEvict + 2);
+    }
+
+    // Reads past EOF return only the available portion. Last page is partial.
+    {
+        std::vector<std::uint8_t> small(100, 0xAB);
+        CountingFakeScintilla fake(small);
+        WindowedScintillaByteSource source(fake, 64, 4);
+        std::uint8_t buf[256] = {};
+        const std::size_t got = source.read(0, buf, 256);
+        HEX_EXPECT_EQ(got, static_cast<std::size_t>(100));
+        for (std::size_t i = 0; i < 100; ++i) {
+            HEX_EXPECT_EQ(buf[i], static_cast<std::uint8_t>(0xAB));
+        }
+        // Reads at-or-past EOF return 0.
+        HEX_EXPECT_EQ(source.read(100, buf, 1), static_cast<std::size_t>(0));
+        HEX_EXPECT_EQ(source.read(99999, buf, 1), static_cast<std::size_t>(0));
+    }
+
+    // Empty document.
+    {
+        CountingFakeScintilla fake({});
+        WindowedScintillaByteSource source(fake);
+        HEX_EXPECT_EQ(source.length(), static_cast<std::size_t>(0));
+        std::uint8_t b = 0xFF;
+        HEX_EXPECT_EQ(source.read(0, &b, 1), static_cast<std::size_t>(0));
+        HEX_EXPECT_EQ(b, static_cast<std::uint8_t>(0xFF));   // dest untouched
+    }
+
+    // invalidate() drops cached pages — the next read re-fetches.
+    {
+        CountingFakeScintilla fake(doc);
+        WindowedScintillaByteSource source(fake, 4096, 16);
+        std::uint8_t buf[16] = {};
+        source.read(0, buf, 16);
+        source.read(4096, buf, 16);
+        const int before = fake.readCalls();
+        source.invalidate();
+        HEX_EXPECT_EQ(source.cachedPageCount(), static_cast<std::size_t>(0));
+        source.read(0, buf, 16);
+        HEX_EXPECT_EQ(fake.readCalls(), before + 1);
+    }
+
+    // Counts as one suite even though it covers many scenarios — keeps the
+    // main-of-suites count aligned with the tally below.
+}
+
 }
 
 int main()
@@ -1866,9 +2031,10 @@ int main()
     testParseRectClipboardTextFromDebuggerOutput();
     testReadPreviewBuffer();
     testSpanByteSource();
+    testWindowedScintillaByteSource();
 
     if (g_failures == 0) {
-        std::printf("PASS: %d assertions across 36 suites\n", g_assertions);
+        std::printf("PASS: %d assertions across 37 suites\n", g_assertions);
         return 0;
     }
     std::printf("FAIL: %d/%d assertions failed\n", g_failures, g_assertions);

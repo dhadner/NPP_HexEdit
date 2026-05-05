@@ -1560,6 +1560,77 @@ func testStatusLabelReportsByteCount() throws {
         _ = waitForStatus(in: app, contains: "3 bytes", timeout: 3)
     }
 
+    /// Cmd-A / Cmd-C / Cmd-V / Cmd-X must reach the hex view's selectAll: /
+    /// copy: / paste: / cut: handlers via HexTableView.performKeyEquivalent:.
+    /// Existing copy/paste tests dispatch through the Edit menu (XCUI clicks),
+    /// which routes via the responder chain to our handler regardless of the
+    /// performKeyEquivalent: wiring — so they couldn't catch the keyboard-
+    /// shortcut-only regression that surfaced in user testing on 2026-05-05:
+    /// Cmd-C silently did nothing, leaving the clipboard with whatever was
+    /// there before, and the next Cmd-V "pasted" stale content. This test
+    /// drives each shortcut through XCUI keyboard events and asserts on the
+    /// observable byte effect.
+    func testKeyboardShortcutsRouteToHexClipboardHandlers() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "ABC")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForStatus(in: app, contains: "3 bytes", timeout: 5))
+
+        // Pre-poison the clipboard. If Cmd-C never reaches our copy:, the
+        // sentinel survives and the assertion below catches it. Without this
+        // pre-step a no-op Cmd-C would *look* like a successful copy because
+        // the clipboard might already contain text that vaguely resembles
+        // hex (the bug's deceptive symptom in user testing).
+        let sentinel = "__cmd-c-not-wired-sentinel__"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(sentinel, forType: .string)
+
+        app.typeKey("a", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        app.typeKey("c", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+
+        let afterCopy = NSPasteboard.general.string(forType: .string) ?? ""
+        XCTAssertNotEqual(afterCopy, sentinel,
+                          "Cmd-C bypassed the hex view's copy: handler — the clipboard still holds the sentinel. Check HexTableView.performKeyEquivalent: claims Cmd-C.")
+        XCTAssertEqual(afterCopy, "41 42 43",
+                       "Cmd-C should put 'ABC' as space-separated hex (41 42 43) on NSPasteboardTypeString.")
+
+        // Cmd-V at EOF: preload a different value, jump to end, paste, expect
+        // the buffer to grow by 3 bytes. If the shortcut doesn't reach paste:,
+        // the byte count stays at 3.
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("58 59 5A", forType: .string)   // 'X' 'Y' 'Z'
+
+        app.typeKey(.end, modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.2)
+        app.typeKey("v", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.5)
+
+        XCTAssertTrue(waitForStatus(in: app, contains: "6 bytes", timeout: 5),
+                      "Cmd-V should have pasted 3 bytes at EOF, growing the buffer from 3 to 6. If still 3, Cmd-V didn't reach pasteBytesFromPasteboard.")
+
+        // Cmd-X with all bytes selected: buffer should empty. If the shortcut
+        // doesn't reach cut:, the byte count stays at 6.
+        app.typeKey("a", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        app.typeKey("x", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.5)
+
+        XCTAssertTrue(waitForStatus(in: app, contains: "empty", timeout: 5),
+                      "Cmd-X should have cut all bytes, leaving the buffer empty.")
+
+        // Restore the buffer so terminate() doesn't surface an unsaved-changes prompt.
+        app.typeKey("z", modifierFlags: .command)
+        _ = waitForStatus(in: app, contains: "6 bytes", timeout: 3)
+    }
+
     func testHexTableDisplaysCorrectByteValues() throws {
         let app = try launchNotepad()
         defer { app.terminate() }
@@ -3426,38 +3497,44 @@ func testContextMenuCommands() throws {
         defer { app.terminate() }
 
         try invokeHexEditorMenu(app: app, item: "View in HEX")
-        // PREVIEW_LIMIT is 1 MB — 100k fits comfortably under it, so the
-        // status is the fully-loaded form without the truncation phrase.
+        // Status always reports the full byte count post-Step-2d — there's
+        // no PREVIEW_LIMIT cap any more, so 100 k loads fully (and so would
+        // any size up to 20 GB).
         let ok = waitForStatus(in: app, contains: "100000", timeout: 10)
         XCTAssertTrue(ok, "100k fixture should report 100000 bytes loaded. Actual status: '\(currentStatusText(in: app))'")
         XCTAssertFalse(waitForStatus(in: app, contains: "truncated", timeout: 1),
-                       "100k fixture is below PREVIEW_LIMIT — must NOT show the truncation banner.")
+                       "Truncation banner is retired — status must NOT include 'truncated' for any file size.")
     }
 
-    func testLargeFile_OnePastLimitTriggersTruncationBanner() throws {
-        // 1 MB + 1 byte: the smallest input that should flip the truncation
-        // banner on. Confirms PREVIEW_LIMIT's edge precisely.
+    func testLargeFile_OnePastFormerLimitLoadsFully() throws {
+        // 1 MB + 1 byte (1 048 577 bytes): formerly the smallest input that
+        // tripped the PREVIEW_LIMIT cap and showed the truncation banner.
+        // After Step 2d the cap is gone — the page-cached lazy reader
+        // exposes the full document length to the hex view, so the banner
+        // is retired and the status reads the full byte count. This test
+        // pins the new behaviour: no banner, status reports all bytes.
         let app = try launchNotepadWithFixture("1MB-plus.bin")
         defer { app.terminate() }
 
         try invokeHexEditorMenu(app: app, item: "View in HEX")
-        XCTAssertTrue(waitForStatus(in: app, contains: "truncated", timeout: 15),
-                      "Fixture 1 byte past PREVIEW_LIMIT must show the truncation banner. Actual: '\(currentStatusText(in: app))'")
-        XCTAssertTrue(waitForStatus(in: app, contains: "1048576 of 1048577", timeout: 5),
-                      "Truncation banner should name both the displayed size (1 MiB) and the file's true size. Actual: '\(currentStatusText(in: app))'")
-        captureToDashboard("diag-largeFile-truncationBanner")
+        XCTAssertTrue(waitForStatus(in: app, contains: "1048577", timeout: 15),
+                      "1 MB + 1 byte fixture should report the full 1 048 577 bytes — the lazy reader removes the former PREVIEW_LIMIT cap. Actual: '\(currentStatusText(in: app))'")
+        XCTAssertFalse(waitForStatus(in: app, contains: "truncated", timeout: 1),
+                       "Truncation banner is retired post-Step-2d. The status must NOT include 'truncated'.")
+        captureToDashboard("diag-largeFile-fullLoadPastFormerLimit")
     }
 
     func testLargeFile_GotoOffsetFarIntoFile() throws {
-        // Verify Goto navigates correctly inside a 1.5 MB file. Byte at
-        // offset 999000 has value 999000 mod 256 = 88 = 0x58 per the fixture
-        // cycle pattern. (1.5 MB is loaded only up to 1 MB so 999000 is
-        // visible.)
+        // Verify Goto navigates correctly inside a 1.5 MB file. Pre-Step-2d
+        // the file was capped at 1 MiB so offset 999000 was within the
+        // truncated window; post-Step-2d the lazy reader exposes the full
+        // file, so the goto path is exercised against an unbounded source.
         let app = try launchNotepadWithFixture("1.5MB.bin")
         defer { app.terminate() }
 
         try invokeHexEditorMenu(app: app, item: "View in HEX")
-        XCTAssertTrue(waitForStatus(in: app, contains: "truncated", timeout: 15))
+        XCTAssertTrue(waitForStatus(in: app, contains: "1572864", timeout: 15),
+                      "1.5 MB fixture should report the full byte count — no truncation cap any more.")
 
         let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
         XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
@@ -3472,7 +3549,7 @@ func testContextMenuCommands() throws {
         captureToDashboard("diag-largeFile-gotoFarOffset")
     }
 
-    func testLargeFile_HundredMBLoadsAndTruncates() throws {
+    func testLargeFile_HundredMBLoadsFully() throws {
         // Skipped pending upstream fix in notepad-plus-plus-macos. NPP-Mac's
         // main-thread file ingest is the bottleneck: ~150 s observed for a
         // 100 MB file on the Parallels VM, with the UI thread blocked the
@@ -3486,11 +3563,11 @@ func testContextMenuCommands() throws {
         // is ~600× slower per byte and grows linearly with file size; that's
         // an architectural gap to close in the host repo.
         //
-        // The plugin-side perf fix in this same change (bulk SCI_GETTEXTRANGEFULL
-        // instead of per-byte SCI_GETCHARAT — was 10+ s for a 1 MiB read, now
-        // ~1 ms) means our 1 MiB-truncated hex view itself is fast; the test
-        // remains skipped only because the host's ingest blocks before our
-        // plugin gets to run. Re-enable once the upstream issue is resolved.
+        // Plugin-side, Step 2c retired the 1 MB truncation cap (bytes are now
+        // read on demand via a page-cached lazy reader against Scintilla, so
+        // plugin RAM stays bounded regardless of file size). The test remains
+        // skipped only because the host's ingest blocks before our plugin
+        // gets to run. Re-enable once the upstream issue is resolved.
         throw XCTSkip("100 MB ingest blocked by NPP-Mac main-thread file load. " +
                       "Filed upstream as a memory-mapping / chunked-load request. " +
                       "Re-enable when host ingest yields the run loop or finishes < 30 s.")
