@@ -1190,6 +1190,7 @@ static size_t currentHighlightRow();
 static void clearByteSelection();
 static void clearRectSelection();
 static void clearAllByteSelections();
+static void extendByteSelectionToOffset(size_t target);
 static void updateRectSelectionToOffset(size_t endOffset);
 static void captureScintillaSelection();
 static BOOL isBookmarkedRow(size_t row);
@@ -2664,16 +2665,27 @@ static HexTableDataSource *hexTableDataSource = nil;
     if (commandOrControl != 0) {
         // Cmd+Home / Cmd+End jump to document start/end. This mirrors the Notepad++
         // Windows shortcut and lets editing reach EOF on documents larger than one row.
+        // Holding Shift turns the jump into a selection-extend (matches macOS text-view
+        // convention), letting a user select large ranges without an arrow-key drag.
         if ((modifiers & NSEventModifierFlagCommand) != 0) {
+            const bool shiftHeld = (modifiers & NSEventModifierFlagShift) != 0;
             if (character == NSHomeFunctionKey) {
-                clearByteSelection();
-                writeBackCursor(hexedit::cursorToDocumentStart(currentCursor()));
+                if (shiftHeld) {
+                    extendByteSelectionToOffset(0);
+                } else {
+                    clearByteSelection();
+                    writeBackCursor(hexedit::cursorToDocumentStart(currentCursor()));
+                }
                 [self reloadDataPreservingScrollOrigin:scrollOrigin];
                 return;
             }
             if (character == NSEndFunctionKey) {
-                clearByteSelection();
-                writeBackCursor(hexedit::cursorToDocumentEnd(currentCursor(), currentDocumentView()));
+                if (shiftHeld) {
+                    extendByteSelectionToOffset(previewTotalLength);
+                } else {
+                    clearByteSelection();
+                    writeBackCursor(hexedit::cursorToDocumentEnd(currentCursor(), currentDocumentView()));
+                }
                 [self reloadDataPreservingScrollOrigin:scrollOrigin];
                 return;
             }
@@ -3606,6 +3618,38 @@ static void clearAllByteSelections()
 {
     clearByteSelection();
     clearRectSelection();
+}
+
+// Extend (or create) a linear byte selection to span [anchor, target],
+// then move the cursor to `target`. If a selection already exists, the
+// anchor is the end of that selection opposite the cursor — same
+// convention macOS text views use for shift-extend gestures. If no
+// selection exists, the current cursor becomes the anchor and a new
+// selection is created from there. Caller is responsible for redraw.
+//
+// Used by the Shift+Cmd+Home / Shift+Cmd+End handlers (extend selection
+// to document start / end without a long arrow-key drag) and any future
+// shift-modified large-jump gestures. `target` is clamped to the
+// editable range; rect selections are cleared (linear extend wins).
+static void extendByteSelectionToOffset(size_t target)
+{
+    target = std::min(target, previewTotalLength);
+    clearRectSelection();
+    size_t anchor;
+    if (hasByteSelection()) {
+        // Anchor is whichever end of the existing selection isn't at the
+        // current cursor. If the cursor sits exactly between (degenerate),
+        // pick the start so the extension is well-defined.
+        anchor = (activeByteOffset == selectedByteEnd) ? selectedByteStart : selectedByteEnd;
+    } else {
+        anchor = activeByteOffset;
+    }
+    selectedByteStart = std::min(anchor, target);
+    selectedByteEnd = std::max(anchor, target);
+    selectionAnchorByte = anchor;
+    activeByteOffset = target;
+    activeHexNibble = 0;
+    clampActiveCursor();
 }
 
 // Build/update the rectangle from the stored anchor + a new endpoint.

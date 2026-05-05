@@ -116,6 +116,16 @@ PY
 # 100 MB — too large for git, generated on first run (~1 s).
 ensure_fixture "$FIXTURES_DIR/100MB.bin" $((100 * 1024 * 1024))
 
+# 300 MB — exercises hex→hex paste ROUND-TRIP across the pbs IPC
+# threshold on every routine commit. pbs silently drops public.data
+# payloads somewhere in the multi-100-MB range; 300 MB is comfortably
+# above where the bug manifests so the in-process snapshot
+# short-circuit (introduced 2026-05-05) is the only path that can pass
+# this test. Without it, the destination paste would fall through to
+# the placeholder text and the test would fail. Costs ~3 s to generate
+# (idempotent) and ~60 s to run.
+ensure_fixture "$FIXTURES_DIR/300MB.bin" $((300 * 1024 * 1024))
+
 # 17 MB — just past the 16 MB hex-text rendering cap in HexClipboardOwner.
 # Used by the "above-cap shows placeholder" test to verify that an external
 # text-paste consumer sees a human-readable sentence rather than a 51 MB

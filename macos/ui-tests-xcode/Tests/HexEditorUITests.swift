@@ -1690,6 +1690,130 @@ func testStatusLabelReportsByteCount() throws {
                       "Paste at offset==totalLength must append the snapshot bytes. Status after paste: '\(currentStatusText(in: app))'. Pre-fix the paste was a silent no-op.")
     }
 
+    /// Regression test for the Shift+Cmd+Home/End shortcuts that extend
+    /// the linear byte selection to document start/end. Pre-existing
+    /// Cmd+Home/End cleared the selection unconditionally; the shift
+    /// variant lets a user select large ranges (or all-from-here) without
+    /// dragging or holding an arrow key. Sanity-checked at small scale
+    /// here so a regression is caught even when the multi-GB tests aren't
+    /// run.
+    func testShiftCmdHomeEndExtendsByteSelection() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 8-byte buffer "ABCDEFGH" = 0x41..0x48 — small enough that we
+        // can verify the selection via Copy + pasteboard inspection.
+        try createBufferWithText(app: app, text: "ABCDEFGH")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForStatus(in: app, contains: "8 bytes", timeout: 5))
+
+        // Shift+Cmd+Home from EOF (cursor lands at end after invokeHexEditorMenu)
+        // should extend selection back to offset 0 → entire 8 bytes selected.
+        app.typeKey(.home, modifierFlags: [.command, .shift])
+        Thread.sleep(forTimeInterval: 0.2)
+
+        // Verify by copying — Copy is enabled only when there's a selection
+        // (per the validation fix from this session), and the copied bytes
+        // should cover all 8.
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("__sentinel__", forType: .string)
+        app.typeKey("c", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        let copied = pasteboard.string(forType: .string) ?? ""
+        XCTAssertEqual(copied, "41 42 43 44 45 46 47 48",
+                       "Shift+Cmd+Home from EOF should select all 8 bytes; Copy should put '41 42 ... 48' on the pasteboard. Got: '\(copied)'.")
+
+        // Now Cmd+Home (no shift) — should clear selection and put cursor
+        // at offset 0. A subsequent Shift+Cmd+End should select all 8
+        // bytes from cursor (0) to EOF (8).
+        app.typeKey(.home, modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.2)
+        app.typeKey(.end, modifierFlags: [.command, .shift])
+        Thread.sleep(forTimeInterval: 0.2)
+
+        pasteboard.clearContents()
+        pasteboard.setString("__sentinel__", forType: .string)
+        app.typeKey("c", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        let copied2 = pasteboard.string(forType: .string) ?? ""
+        XCTAssertEqual(copied2, "41 42 43 44 45 46 47 48",
+                       "Cmd+Home then Shift+Cmd+End should select all 8 bytes; Copy should put '41 42 ... 48' on the pasteboard. Got: '\(copied2)'.")
+    }
+
+    /// Routine-suite gate for the multi-100-MB pbs-IPC threshold the
+    /// in-process snapshot fix bypasses. pbs silently drops public.data
+    /// payloads somewhere in the multi-100-MB range; 300 MB is
+    /// comfortably above the breakage point so a regression in the
+    /// short-circuit (currentlyOwnedHexSnapshot() inside
+    /// pasteBytesFromPasteboard) would let dataForType return the
+    /// placeholder text and the test would fail. Without the fix, this
+    /// test catches the bug on every commit instead of only when the
+    /// 1.5 GB opt-in test runs.
+    func testHexCopyPaste300MBAcrossTabsRoundTripsBytes() throws {
+        let app = try launchNotepadWithFixture("300MB.bin")
+        defer { app.terminate() }
+
+        // NPP-Mac's large-file warning dismiss-loop (upstream double-click
+        // quirk) plus a settle wait for the source-load to finish.
+        let dialog = app.dialogs.firstMatch
+        for _ in 0..<3 {
+            let warningButton = dialog.buttons.firstMatch
+            guard warningButton.waitForExistence(timeout: 30) else { break }
+            warningButton.click()
+            Thread.sleep(forTimeInterval: 1.0)
+        }
+        // Wait until the warning is gone so subsequent menu interactions
+        // hit a responsive UI. Scintilla's source ingest at 300 MB
+        // dominates this wait.
+        XCTAssertTrue(dialog.waitForNonExistence(timeout: 120),
+                      "Large-file warning should dismiss after Scintilla finishes loading the 300 MB source.")
+
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+
+        let fullSize = "314572800"   // 300 * 1024 * 1024
+        XCTAssertTrue(waitForStatus(in: app, contains: fullSize, timeout: 30),
+                      "300 MB source should report full byte count once hex view engages.")
+
+        // Cmd-A copies the full 300 MB via the lazy reader into a snapshot.
+        app.typeKey("a", modifierFlags: .command)
+        app.typeKey("c", modifierFlags: .command)
+
+        // New empty buffer in the same NPP, engage hex view there.
+        app.typeKey("n", modifierFlags: .command)
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        XCTAssertTrue(waitForStatus(in: app, contains: "empty", timeout: 30),
+                      "Fresh hex view on a new buffer should report empty before paste.")
+
+        // Cmd-V routes through pasteBytesFromPasteboard's in-process
+        // snapshot short-circuit. Without it, pbs IPC would drop the
+        // public.data and the placeholder string would land here instead
+        // of bytes.
+        app.typeKey("v", modifierFlags: .command)
+        XCTAssertTrue(waitForStatus(in: app, contains: fullSize, timeout: 120),
+                      "Paste should populate the new buffer with the full 300 MB. Status after paste: '\(currentStatusText(in: app))'. Failure here means the in-process snapshot path regressed and pbs IPC truncated public.data.")
+
+        // First-row spot-check — byte 0 = 0x20, byte 15 = 0x2f per the
+        // fixture's printable-ASCII cycle. Confirms BYTES landed, not
+        // the placeholder text.
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 10))
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 10))
+        XCTAssertEqual(firstRow.staticTexts.element(boundBy: 1).value as? String, "20",
+                       "Byte 0 of pasted destination should be 0x20 (fixture pattern). If this is some ASCII letter, the placeholder text leaked through instead of the bytes.")
+        XCTAssertEqual(firstRow.staticTexts.element(boundBy: 16).value as? String, "2f",
+                       "Byte 15 of pasted destination should be 0x2f.")
+
+        // Frame-height guard against a row-count rendering regression.
+        XCTAssertGreaterThan(hexTable.frame.height, 100,
+                             "Destination hex table viewport collapsed (<100 px). reloadData in redrawHexTablePreservingScroll has regressed.")
+    }
+
     /// Regression test for two related bugs the user reported manually
     /// 2026-05-05, both rooted in NPPN_BUFFERACTIVATED → hideHexPreview →
     /// tryAutoEngageHexView dropping per-tab "user engaged hex view" state:
@@ -4410,6 +4534,74 @@ final class HexEditorLargeFileUITests: HexEditorBaseUITests {
         // count visible) plus the screenshot above gate the data + rendering
         // for this test; mid/end byte assertions belong in a follow-up test
         // that calls positionHexCursorAt to scroll into view first.
+    }
+
+    /// Upper-bound coverage for in-place paste at large scale. Selects a
+    /// 200 MB slice from the start of a 1.5 GB file via Goto +
+    /// Shift+Cmd+Home, copies it, jumps to EOF, and pastes — the
+    /// destination grows to 1.7 GB (still safely under INT_MAX so
+    /// Scintilla's LayoutLine doesn't overflow). Exercises the
+    /// in-process snapshot short-circuit on the same buffer the user
+    /// is reading from, plus the new Shift+Cmd+Home/End extend wiring
+    /// (without which a sized selection of this magnitude couldn't be
+    /// scripted via XCUI).
+    func testLargeFile_1_5GB_Select200MBPasteAtEOFGrowsBuffer() throws {
+        let app = try launchNotepadWithFixture("1.5GB.bin")
+        defer { app.terminate() }
+
+        // Dismiss the large-file warning(s); upstream double-click quirk.
+        let dialog = app.dialogs.firstMatch
+        for _ in 0..<3 {
+            let warningButton = dialog.buttons.firstMatch
+            guard warningButton.waitForExistence(timeout: 30) else { break }
+            warningButton.click()
+            Thread.sleep(forTimeInterval: 1.5)
+        }
+        XCTAssertTrue(dialog.waitForNonExistence(timeout: 240),
+                      "Large-file warning should dismiss after Scintilla finishes loading.")
+
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        let fullSize = "1610612736"
+        XCTAssertTrue(waitForStatus(in: app, contains: fullSize, timeout: 30),
+                      "1.5 GB fixture should report full byte count once hex view engages.")
+
+        // Goto offset 200 MB so the cursor lands there with no selection.
+        // 200 MB = 209715200 = 0xC800000. Using Cmd+L (Goto Offset) — works
+        // for any offset within the buffer regardless of virtual-row depth.
+        app.typeKey("l", modifierFlags: .command)
+        let gotoInput = app.textFields["hex-editor.goto.input"]
+        XCTAssertTrue(gotoInput.waitForExistence(timeout: 5),
+                      "Go to Offset input should appear after Cmd+L.")
+        gotoInput.replaceFieldText(with: "209715200")
+        let goButton = app.buttons["Go"].firstMatch
+        XCTAssertTrue(goButton.waitForExistence(timeout: 3))
+        goButton.click()
+        XCTAssertTrue(gotoInput.waitForNonExistence(timeout: 5),
+                      "Goto dialog should dismiss after clicking Go.")
+
+        // Shift+Cmd+Home extends selection back to offset 0 — the new
+        // shortcut wired in this commit. Without it, getting a 200 MB
+        // linear selection through XCUI is essentially impossible.
+        app.typeKey(.home, modifierFlags: [.command, .shift])
+        Thread.sleep(forTimeInterval: 0.5)
+
+        // Cmd-C snapshots the 200 MB selection.
+        app.typeKey("c", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 1.0)
+
+        // Cmd+End jumps cursor to EOF (clears the selection — fine).
+        app.typeKey(.end, modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+
+        // Cmd-V pastes 200 MB at offset==totalLength. New buffer length:
+        // 1610612736 + 209715200 = 1820327936 (≈ 1.7 GB). Still under
+        // INT_MAX (2147483647) so Scintilla's pre-Sci_Position arithmetic
+        // doesn't overflow.
+        app.typeKey("v", modifierFlags: .command)
+
+        let grownSize = "1820327936"
+        XCTAssertTrue(waitForStatus(in: app, contains: grownSize, timeout: 300),
+                      "Paste of 200 MB at EOF should grow the 1.5 GB buffer to 1.82 GB. Status after paste: '\(currentStatusText(in: app))'.")
     }
 }
 

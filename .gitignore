@@ -96,6 +96,7 @@ macos/ChatGPT5.5-Chat.md
 #   deterministically by macos/ui-tests-xcode/run-tests.sh on first
 #   invocation. Smaller fixtures stay checked in.
 macos/ui-tests-xcode/fixtures/100MB.bin
+macos/ui-tests-xcode/fixtures/300MB.bin
 macos/ui-tests-xcode/fixtures/17MB.bin
 macos/ui-tests-xcode/fixtures/1.5GB.bin
 
