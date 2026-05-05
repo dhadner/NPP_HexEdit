@@ -152,6 +152,11 @@
 "about.body"                       = "Native macOS-Portierung des HEX-Editor-Plugins für N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+. Bietet eine eingebettete Hex-Tabelle mit direkter Byte-Bearbeitung, Auswahl, Lesezeichen, Suchen/Ersetzen, Vergleich und Ansichtswechsel.";
 /* Plugin-Versionszeile. %@ ist die Versionszeichenfolge (z. B. „1.1.0"). */
 "about.version"                    = "Version %@";
+/* Build-Zeile. %@ ist der git-Kurz-Hash zum Konfigurationszeitpunkt
+   (z. B. „a1b2c3d", oder „a1b2c3d-dirty" bei lokalen Änderungen). */
+"about.build"                      = "Build %@";
+/* GitHub-Projekt-URL — wird nicht übersetzt. */
+"about.url"                        = "Projekt: https://github.com/dhadner/NPP_HexEdit";
 /* Diagnose-Zeile im Über-Dialog — zeigt die aktuell geladene .strings-Datei. */
 "about.localeTag"                  = "Strings: de";
 

@@ -167,6 +167,13 @@
 "about.body"                       = "Native macOS port of the N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+ HEX-Editor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.";
 /* Plugin version line. %@ is the version string (e.g. "1.1.0"). */
 "about.version"                    = "Version %@";
+/* Build tag line. %@ is the git short-hash captured at configure time
+   (e.g. "a1b2c3d", or "a1b2c3d-dirty" when the working tree had uncommitted
+   changes when the dylib was built). Lets a user paste an exact identifier
+   when reporting an issue so the maintainer can reproduce against that commit. */
+"about.build"                      = "Build %@";
+/* GitHub project URL line. Hard-coded — translators don't localize it. */
+"about.url"                        = "Project: https://github.com/dhadner/NPP_HexEdit";
 /* Diagnostic line in the About dialog — names the .strings file currently in
    use, so users (and the cascade XCTest) can see at a glance whether their
    translation loaded. Each shipped .strings file declares its own tag. */

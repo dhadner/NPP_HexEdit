@@ -24,6 +24,14 @@
 #define HEX_PLUGIN_VERSION "0.0.0"
 #endif
 
+// Build tag — git short-hash at configure time, possibly with "-dirty"
+// suffix for builds against an uncommitted working tree. Same fallback
+// pattern as HEX_PLUGIN_VERSION: IDE indexers see "unknown"; the shipped
+// build always carries the CMake-provided real hash. See macos/CMakeLists.txt.
+#ifndef HEX_PLUGIN_BUILD
+#define HEX_PLUGIN_BUILD "unknown"
+#endif
+
 static const char *PLUGIN_NAME = "HexEditor";
 static const int NB_FUNC = 7;
 
@@ -945,6 +953,52 @@ static NSTableView *hexTableView = nil;
 static NSTextField *hexStatusLabel = nil;
 static NSView *hexEditorView = nil;
 static NSView *hiddenScintillaView = nil;
+
+// Per-buffer "user explicitly engaged hex view here" intent. Survives
+// tab-switch buffer activations so hex view comes back when the user
+// returns to the tab — independent of the Startup auto-engage rules
+// (which only fire for files matching the configured extension list or
+// content-density threshold). User-discovered bug 2026-05-05: switching
+// away from a hex-view tab and back reverted to text view for any file
+// that didn't separately match the auto-engage rules.
+//
+// Keyed by NppHandle (the host's bufferId, which is the address of the
+// editor NSView under NPP-Mac). Wrapped in NSValue so an NSMutableSet
+// can hold it. Entries are added when the user calls showHexPreview()
+// (via the menu), removed on user-initiated toggle-off, and removed
+// when the host notifies that a buffer is closing.
+static NSMutableSet<NSValue *> *g_buffersWithHexIntent = nil;
+
+static NSMutableSet<NSValue *> *hexIntentSet()
+{
+    if (g_buffersWithHexIntent == nil) {
+        g_buffersWithHexIntent = [[NSMutableSet alloc] init];
+    }
+    return g_buffersWithHexIntent;
+}
+
+static NSValue *bufferIdValue(uintptr_t bufferId)
+{
+    return [NSValue valueWithPointer:reinterpret_cast<const void *>(bufferId)];
+}
+
+static void recordHexIntent(uintptr_t bufferId)
+{
+    if (bufferId == 0) return;
+    [hexIntentSet() addObject:bufferIdValue(bufferId)];
+}
+
+static void clearHexIntent(uintptr_t bufferId)
+{
+    if (bufferId == 0) return;
+    [hexIntentSet() removeObject:bufferIdValue(bufferId)];
+}
+
+static bool hasHexIntent(uintptr_t bufferId)
+{
+    if (bufferId == 0) return false;
+    return [hexIntentSet() containsObject:bufferIdValue(bufferId)];
+}
 // Long-lived byte-source backing the hex view. Replaces the previous
 // in-RAM previewBytes vector — the lazy-Scintilla migration of 2026-05-05
 // (Step 2c). Reads go on demand against the active Scintilla buffer via
@@ -1095,6 +1149,8 @@ static bool copyHexSelectionAsBinary();
 static bool pasteBytesFromPasteboard();
 static bool pasteBinaryFromPasteboard();
 static bool cutHexSelection();
+@class HexClipboardOwner;
+static HexClipboardOwner *currentlyOwnedHexSnapshot();
 static bool cutHexSelectionBinary();
 static bool applyRectBytesPaste(const hexedit::RectSelection &dest,
                                 const std::uint8_t *bytes,
@@ -2212,15 +2268,28 @@ static HexTableDataSource *hexTableDataSource = nil;
     if (action == @selector(cut:) || action == @selector(copy:) || action == @selector(delete:) ||
         action == @selector(hexCut:) || action == @selector(hexCopy:) || action == @selector(hexDelete:) ||
         action == @selector(hexCutBinary:) || action == @selector(hexCopyBinary:)) {
-        if (hasRectSelection()) {
-            return YES;
-        }
-        size_t offset = 0;
-        size_t byteCount = 0;
-        selectedOrCurrentRange(&offset, &byteCount);
-        return byteCount > 0;
+        // Only enable when there is an actual selection (linear range or rect).
+        // Previously this also returned YES whenever the cursor sat on any byte
+        // inside the buffer — selectedOrCurrentRange falls back to a 1-byte
+        // range at the cursor when no real selection exists — which made
+        // Cut/Copy permanently enabled and surprised users into thinking the
+        // commands had no useful no-op state.
+        return hasByteSelection() || hasRectSelection();
     }
     if (action == @selector(paste:) || action == @selector(hexPaste:) || action == @selector(hexPasteBinary:)) {
+        // First: do we own a fresh in-process snapshot? That's authoritative
+        // — the bytes are right there in HexClipboardOwner._bytes — and works
+        // regardless of whether AppKit decides to materialize the promised
+        // pasteboard types for a validation read. Without this short-circuit,
+        // calling dataForType: against our own promised public.data during
+        // menu validation returned nil on macOS 26 (the promise isn't
+        // materialized until an actual paste-action read), so Paste appeared
+        // disabled immediately after our own Cmd-C — and a subsequent
+        // keyboard Cmd-V went through performKeyEquivalent but pasteboard
+        // reads still came back empty, so the paste silently no-op'd.
+        if (currentlyOwnedHexSnapshot() != nil) {
+            return YES;
+        }
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
         return [pasteboard dataForType:NSPasteboardTypeString] != nil ||
             [pasteboard dataForType:@"public.data"] != nil ||
@@ -3308,6 +3377,15 @@ static void scrollHexTableToActiveOffset()
 
 static void redrawHexTablePreservingScroll(NSPoint origin)
 {
+    // reloadData (not just setNeedsDisplay) so NSTableView re-queries the
+    // row count. Every caller of this helper sits after a buffer-length
+    // change (delete, paste, insert, replace), and setNeedsDisplay alone
+    // only repaints currently-known rows — leaving NSTableView's cached
+    // row count stale. Symptom when this was missing: pasting 1.5 GB into
+    // an empty hex view rendered only the first row, because the table
+    // still believed it had 1 row from the pre-paste empty state.
+    // reloadData is cheap on a virtual table and cheaper than the bug.
+    [hexTableView reloadData];
     [hexTableView setNeedsDisplay:YES];
     restoreHexTableScrollOrigin(origin);
     restoreHexTableScrollOriginLater(origin);
@@ -3848,7 +3926,28 @@ constexpr NSUInteger kHexClipboardTextRawCap = 16 * 1024 * 1024;
 - (void)clearSnapshot;
 - (BOOL)hasSnapshot;
 - (NSUInteger)snapshotByteCount;
+// In-process readers — let pasteBytesFromPasteboard short-circuit pbs IPC
+// for hex→hex paste in the same NPP process. pbs's IPC transport breaks
+// down somewhere in the multi-100-MB range; the snapshot lives in this
+// process's heap and is readable instantly regardless of size.
+- (NSData *)snapshotBytes;
+- (BOOL)snapshotIsRect;
+- (HexRectClipboardKind)snapshotRectKind;
+- (std::uint32_t)snapshotRectWidth;
+- (std::uint32_t)snapshotRectHeight;
 @end
+
+// changeCount returned by `[pasteboard declareTypes:owner:]` at the moment
+// we took ownership of the general pasteboard. Stays valid until any other
+// process or any other in-process pasteboard write bumps the count.
+// Compared against `pasteboard.changeCount` in the paste path: if it still
+// matches, our snapshot is authoritative and we can read directly from it
+// instead of going through pbs IPC (which silently drops public.data
+// payloads in the multi-100-MB range — see comment in
+// pasteFromInProcessSnapshotIfOwner). Sentinel -1 means "we never owned
+// the pasteboard," which is impossible to match an actual changeCount
+// (those start at 1 and only increase).
+static NSInteger g_hexClipboardChangeCount = -1;
 
 @implementation HexClipboardOwner {
     NSData *_bytes;
@@ -3896,6 +3995,31 @@ constexpr NSUInteger kHexClipboardTextRawCap = 16 * 1024 * 1024;
 - (NSUInteger)snapshotByteCount
 {
     return _bytes.length;
+}
+
+- (NSData *)snapshotBytes
+{
+    return _bytes;
+}
+
+- (BOOL)snapshotIsRect
+{
+    return _isRect;
+}
+
+- (HexRectClipboardKind)snapshotRectKind
+{
+    return _rectKind;
+}
+
+- (std::uint32_t)snapshotRectWidth
+{
+    return _rectWidth;
+}
+
+- (std::uint32_t)snapshotRectHeight
+{
+    return _rectHeight;
 }
 
 // AppKit calls this once per requested type per paste, possibly cross-
@@ -3963,6 +4087,10 @@ constexpr NSUInteger kHexClipboardTextRawCap = 16 * 1024 * 1024;
 {
     (void)sender;
     [self clearSnapshot];
+    // Invalidate the change-count sentinel too, so the in-process
+    // short-circuit in pasteFromInProcessSnapshotIfOwner can't read a
+    // stale snapshot if some path forgets to call clearSnapshot.
+    g_hexClipboardChangeCount = -1;
 }
 @end
 
@@ -4069,9 +4197,12 @@ static bool copyRectToPasteboard()
                  height:static_cast<std::uint32_t>(g_rectSelection.height)];
 
     // Promise types — pbs will call provideDataForType: on the owner when
-    // some consumer pastes. No bytes hit the pasteboard upfront.
+    // some consumer pastes. No bytes hit the pasteboard upfront. Capture
+    // the changeCount so an in-process paste can recognize that we still
+    // own the pasteboard and read the snapshot directly (bypassing pbs).
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
-    [pasteboard declareTypes:@[NSPasteboardTypeString, kHexRectPasteboardType] owner:owner];
+    g_hexClipboardChangeCount =
+        [pasteboard declareTypes:@[NSPasteboardTypeString, kHexRectPasteboardType] owner:owner];
     return true;
 }
 
@@ -4101,9 +4232,13 @@ static bool copyHexSelectionToPasteboard()
 
     // Promise types — pbs will call provideDataForType: on the owner when
     // some consumer pastes. The hex-text and raw-bytes renderings are
-    // synthesized lazily inside the owner from the snapshot.
+    // synthesized lazily inside the owner from the snapshot. Capture the
+    // changeCount so an in-process paste can recognize that we still own
+    // the pasteboard and read the snapshot directly (bypassing pbs IPC,
+    // which truncates public.data above ~few hundred MB).
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
-    [pasteboard declareTypes:@[NSPasteboardTypeString, @"public.data"] owner:owner];
+    g_hexClipboardChangeCount =
+        [pasteboard declareTypes:@[NSPasteboardTypeString, @"public.data"] owner:owner];
     return true;
 }
 
@@ -4261,6 +4396,28 @@ static bool applyRectBytesPaste(const hexedit::RectSelection &dest,
     return ok;
 }
 
+// Returns the owner if we still hold the general pasteboard and have a
+// live snapshot — i.e., the most recent declareTypes:owner: call was ours
+// AND no other writer has bumped the changeCount since. In that case the
+// caller can read snapshotBytes directly and skip pbs IPC, which silently
+// truncates public.data above ~few-hundred-MB and is the root cause of
+// hex→hex paste failing for multi-GB selections.
+static HexClipboardOwner *currentlyOwnedHexSnapshot()
+{
+    HexClipboardOwner *owner = g_hexClipboardOwner;
+    if (owner == nil || ![owner hasSnapshot]) {
+        return nil;
+    }
+    if (g_hexClipboardChangeCount < 0) {
+        return nil;
+    }
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    if (pasteboard.changeCount != g_hexClipboardChangeCount) {
+        return nil;
+    }
+    return owner;
+}
+
 // Strict-shape rectangular paste path. Returns true when the paste landed (success
 // OR a user-facing error dialog was presented), false to fall through to the linear
 // paste path. The matrix:
@@ -4281,8 +4438,23 @@ static bool tryRectPasteFromPasteboard()
     std::uint32_t dataLength = 0;
     std::vector<std::uint8_t> textParsedBytes;
 
-    NSData *encoded = [pasteboard dataForType:kHexRectPasteboardType];
-    BOOL haveStructured = rectPayloadDecode(encoded, &kind, &width, &height, &dataPtr, &dataLength);
+    // In-process short-circuit: if we still own the pasteboard and our
+    // snapshot is a rect, read it directly. The owner outlives this
+    // function (static), so dataPtr stays valid through applyRectBytesPaste.
+    HexClipboardOwner *ownedSnapshot = currentlyOwnedHexSnapshot();
+    BOOL haveStructured = NO;
+    if (ownedSnapshot != nil && [ownedSnapshot snapshotIsRect]) {
+        NSData *snapshot = [ownedSnapshot snapshotBytes];
+        kind = [ownedSnapshot snapshotRectKind];
+        width = [ownedSnapshot snapshotRectWidth];
+        height = [ownedSnapshot snapshotRectHeight];
+        dataPtr = static_cast<const std::uint8_t *>(snapshot.bytes);
+        dataLength = static_cast<std::uint32_t>(snapshot.length);
+        haveStructured = YES;
+    } else {
+        NSData *encoded = [pasteboard dataForType:kHexRectPasteboardType];
+        haveStructured = rectPayloadDecode(encoded, &kind, &width, &height, &dataPtr, &dataLength);
+    }
 
     if (!haveStructured) {
         // Q2.b — try parsing public-text as a `\n`-separated rect.
@@ -4352,6 +4524,20 @@ static bool pasteBytesFromPasteboard()
         return true;
     }
 
+    // In-process short-circuit: if we own the pasteboard and have a
+    // linear snapshot, read it directly. Bypasses pbs IPC, which silently
+    // drops public.data payloads in the multi-100-MB range and would
+    // otherwise force a fall-through to the placeholder string at
+    // multi-GB sizes.
+    HexClipboardOwner *ownedSnapshot = currentlyOwnedHexSnapshot();
+    if (ownedSnapshot != nil && ![ownedSnapshot snapshotIsRect]) {
+        NSData *snapshot = [ownedSnapshot snapshotBytes];
+        if (snapshot.length > 0) {
+            return applyBytesPaste(static_cast<const std::uint8_t *>(snapshot.bytes),
+                                   snapshot.length);
+        }
+    }
+
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
 
     NSData *raw = [pasteboard dataForType:@"public.data"];
@@ -4384,6 +4570,16 @@ static bool pasteBinaryFromPasteboard()
 {
     if (tryRectPasteFromPasteboard()) {
         return true;
+    }
+
+    // In-process short-circuit — see pasteBytesFromPasteboard for why.
+    HexClipboardOwner *ownedSnapshot = currentlyOwnedHexSnapshot();
+    if (ownedSnapshot != nil && ![ownedSnapshot snapshotIsRect]) {
+        NSData *snapshot = [ownedSnapshot snapshotBytes];
+        if (snapshot.length > 0) {
+            return applyBytesPaste(static_cast<const std::uint8_t *>(snapshot.bytes),
+                                   snapshot.length);
+        }
     }
 
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
@@ -5912,13 +6108,22 @@ static void showHexPreview()
     // which for a real selection is the END of the selection.
     scrollHexTableToActiveOffset();
     [hexTableView.window makeFirstResponder:hexTableView];
+    // Remember that the user wants hex view on this buffer so a tab-switch
+    // round-trip restores it (instead of relying on the Startup auto-engage
+    // heuristic, which only fires for files matching the configured rules).
+    recordHexIntent(previewBufferId);
     updateHexMenuCheck(true);
 }
 
 static void toggleHexPreview()
 {
     if (isHexViewActive() && isPreviewBufferActive()) {
+        // User explicitly toggled hex view OFF for this buffer. Drop intent
+        // so it stays off across tab switches too. Capture the bufferId
+        // before hideHexPreview clears previewBufferId.
+        const uintptr_t bufId = previewBufferId;
         hideHexPreview();
+        clearHexIntent(bufId);
         return;
     }
 
@@ -5961,8 +6166,14 @@ static void showAbout()
 {
     NSString *versionLine = [NSString stringWithFormat:L(@"about.version"),
                              [NSString stringWithUTF8String:HEX_PLUGIN_VERSION]];
-    NSString *body = [NSString stringWithFormat:@"%@\n\n%@\n\n%@",
-                      L(@"about.body"), versionLine, L(@"about.localeTag")];
+    NSString *buildLine = [NSString stringWithFormat:L(@"about.build"),
+                           [NSString stringWithUTF8String:HEX_PLUGIN_BUILD]];
+    NSString *body = [NSString stringWithFormat:@"%@\n\n%@\n%@\n%@\n\n%@",
+                      L(@"about.body"),
+                      versionLine,
+                      buildLine,
+                      L(@"about.url"),
+                      L(@"about.localeTag")];
     showMessage(L(@"app.titleMac"), body);
 }
 
@@ -7347,20 +7558,24 @@ static void tryAutoEngageHexView()
 extern "C" NPP_EXPORT void beNotified(SCNotification *notifyCode)
 {
     const NppHandle notificationHandle = reinterpret_cast<NppHandle>(notifyCode->nmhdr.hwndFrom);
-    if (previewBufferId != 0 &&
-        (notifyCode->nmhdr.code == NPPN_FILEBEFORECLOSE || notifyCode->nmhdr.code == NPPN_FILECLOSED)) {
-        hideHexPreview();
-        return;
+    if (notifyCode->nmhdr.code == NPPN_FILEBEFORECLOSE || notifyCode->nmhdr.code == NPPN_FILECLOSED) {
+        // The buffer being closed should drop its hex-view intent so a
+        // freshly-opened file doesn't unexpectedly come up in hex view if
+        // it happens to land on the same memory address.
+        clearHexIntent(reinterpret_cast<uintptr_t>(notificationHandle));
+        if (previewBufferId != 0) {
+            hideHexPreview();
+            return;
+        }
     }
 
     if (previewBufferId != 0 &&
         notifyCode->nmhdr.code == NPPN_BUFFERACTIVATED &&
         getCurrentBufferId() != previewBufferId) {
         hideHexPreview();
-        // Fall through to the auto-engage check below: the user may have
-        // switched to a buffer whose extension or content density says it
-        // should be in hex view too. If neither rule fires, we just leave
-        // the new buffer in text mode.
+        // Don't clear intent for the previously-active buffer — the user
+        // may switch back to it, in which case the intent restore below
+        // re-engages hex view there. Fall through to the engage check.
     }
 
     // NPP-Mac restores its session BEFORE plugins load (see AppDelegate.mm:
@@ -7371,7 +7586,16 @@ extern "C" NPP_EXPORT void beNotified(SCNotification *notifyCode)
     // buffer now" hook for first-launch behaviour.
     if (notifyCode->nmhdr.code == NPPN_READY ||
         notifyCode->nmhdr.code == NPPN_BUFFERACTIVATED) {
-        tryAutoEngageHexView();
+        // Per-buffer user intent takes precedence over the auto-engage
+        // heuristic: a tab the user previously engaged should come back
+        // in hex view even if its extension / content density wouldn't
+        // otherwise auto-engage.
+        const uintptr_t currentBuf = getCurrentBufferId();
+        if (currentBuf != 0 && hasHexIntent(currentBuf) && previewBufferId == 0) {
+            showHexPreview();
+        } else {
+            tryAutoEngageHexView();
+        }
     }
 
     if (previewBufferId != 0 &&

@@ -15,19 +15,25 @@
 # Required: SSH alias `npp-vm` must be configured (see DEVELOPER.md, "VM SSH").
 #
 # Usage:
-#   test-ui.sh                          # run all UI tests
+#   test-ui.sh                          # run the routine UI suite
 #   test-ui.sh testFoo testBar          # run a subset by name
 #   test-ui.sh --list                   # enumerate test names; do not run
 #   test-ui.sh --failed                 # re-run last run's failures
 #   test-ui.sh --clean                  # forward --clean to vm-test.sh (wipe DerivedData)
 #   test-ui.sh --asan                   # build + load ASan-instrumented plugin (slower run, catches plugin-side memory bugs)
+#   test-ui.sh --large-files            # include the multi-GB tests (HexEditorLargeFileUITests class)
+#                                       # generates the 1.5 GB fixture; adds a few min per included test
 #   test-ui.sh --re-bootstrap           # re-run vm-bootstrap.sh on the VM
 #   test-ui.sh --dashboard              # open the latest dashboard.html in browser
 #   test-ui.sh -h | --help              # this message
 #
+# Test classes (filterable via -only-testing forwarded args):
+#   HexEditorUITests/HexEditorUITests             # routine suite (default)
+#   HexEditorUITests/HexEditorLargeFileUITests    # multi-GB tests (opt-in via --large-files)
+#
 # Test names match the function names in HexEditorUITests.swift. The full
 # -only-testing prefix (HexEditorUITests/HexEditorUITests/...) is added
-# automatically.
+# automatically when you pass a bare name.
 #
 # --asan: builds the plugin under -fsanitize=address,undefined and installs
 # the instrumented dylib. The ASan runtime is force-loaded into NPP at
@@ -62,7 +68,8 @@ yellow() { printf '\033[1;33m%s\033[0m\n' "$*"; }
 red()    { printf '\033[1;31m%s\033[0m\n' "$*" >&2; }
 
 usage() {
-    sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,36p' "$0" | sed 's/^# \{0,1\}//'
+    # ^ keep range in sync with the comment-block boundary above (last line: "automatically when you pass a bare name.").
     exit 0
 }
 
@@ -74,6 +81,7 @@ DO_REBOOTSTRAP=0
 DO_DASHBOARD=0
 WIPE_DERIVED=0
 ASAN_BUILD=0
+INCLUDE_LARGE_FILES=0
 TEST_NAMES=()
 
 while [[ $# -gt 0 ]]; do
@@ -85,6 +93,7 @@ while [[ $# -gt 0 ]]; do
         --dashboard)       DO_DASHBOARD=1 ;;
         --clean)           WIPE_DERIVED=1 ;;
         --asan)            ASAN_BUILD=1 ;;
+        --large-files)     INCLUDE_LARGE_FILES=1 ;;
         --)                shift; TEST_NAMES+=("$@"); break ;;
         -*)
             red "unknown flag: $1"
@@ -222,12 +231,20 @@ fi
 
 ONLY_TESTING=()
 for name in ${TEST_NAMES[@]+"${TEST_NAMES[@]}"}; do
-    ONLY_TESTING+=("-only-testing:HexEditorUITests/HexEditorUITests/$name")
+    # Route by name prefix: testLargeFile_* → HexEditorLargeFileUITests,
+    # everything else → HexEditorUITests. Keeps callers from having to
+    # know which class a test lives in.
+    if [[ "$name" == testLargeFile_* ]]; then
+        ONLY_TESTING+=("-only-testing:HexEditorUITests/HexEditorLargeFileUITests/$name")
+    else
+        ONLY_TESTING+=("-only-testing:HexEditorUITests/HexEditorUITests/$name")
+    fi
 done
 
 EXTRA_FLAGS=()
 [[ $WIPE_DERIVED -eq 1 ]] && EXTRA_FLAGS+=("--clean")
 [[ $ASAN_BUILD -eq 1 ]] && EXTRA_FLAGS+=("--asan")
+[[ $INCLUDE_LARGE_FILES -eq 1 ]] && EXTRA_FLAGS+=("--large-files")
 
 # ---- Run tests on VM ------------------------------------------------------
 

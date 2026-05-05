@@ -163,8 +163,171 @@ private extension XCUIElement {
     }
 }
 
+/// Common helpers shared by every UI-test class in this file. Holds no
+/// test methods of its own — XCTest only runs methods on subclasses, so
+/// this base contributes shared scaffolding (NPP launch, hex-menu
+/// invocation, status polling, fixture lookup) without showing up in the
+/// dashboard. Both HexEditorUITests (the routine suite) and
+/// HexEditorLargeFileUITests (the gated multi-GB tests) inherit from it.
 @MainActor
-final class HexEditorUITests: XCTestCase {
+class HexEditorBaseUITests: XCTestCase {
+    /// True when the test bundle was launched with TEST_RUNNER_NPP_HEXEDIT_ASAN=1
+    /// (set by vm-test.sh's --asan path). Tests use this to scale long-poll
+    /// timeouts and to force the ASan runtime into NPP at process launch via
+    /// DYLD_INSERT_LIBRARIES.
+    static var isAsanRun: Bool {
+        return ProcessInfo.processInfo.environment["NPP_HEXEDIT_ASAN"] == "1"
+    }
+
+    /// Multiplier for any timeout that depends on NPP's responsiveness. 1× in
+    /// the regular build; 3× under ASan. NPP under DYLD_INSERT_LIBRARIES'd ASan
+    /// runs at roughly 2× speed for AppKit work, so 3× gives a safety margin
+    /// without masking real hangs.
+    static var asanTimeoutScale: Double {
+        return isAsanRun ? 3.0 : 1.0
+    }
+
+    /// Builds the launchEnvironment for an XCUIApplication, layering ASan
+    /// injection on top of the locale override. When isAsanRun is true and the
+    /// runner has been told the resolved ASan dylib path
+    /// (TEST_RUNNER_NPP_HEXEDIT_ASAN_DYLIB → NPP_HEXEDIT_ASAN_DYLIB), we set
+    /// DYLD_INSERT_LIBRARIES to force the ASan runtime into NPP at dyld init —
+    /// a dlopen'd ASan-instrumented plugin otherwise aborts NPP at launch with
+    /// "Interceptors are not working" because NPP's mallocs already happened
+    /// before our dylib loaded.
+    fileprivate static func nppLaunchEnvironment(language: String) -> [String: String] {
+        var env = ["HEX_EDITOR_LANG_OVERRIDE": language]
+        let processEnv = ProcessInfo.processInfo.environment
+        if let asanOpts = processEnv["NPP_HEXEDIT_ASAN_OPTIONS"], !asanOpts.isEmpty {
+            env["ASAN_OPTIONS"] = asanOpts
+        }
+        if let asanDylib = processEnv["NPP_HEXEDIT_ASAN_DYLIB"], !asanDylib.isEmpty {
+            env["DYLD_INSERT_LIBRARIES"] = asanDylib
+        }
+        return env
+    }
+
+    fileprivate func notepadAppURL() throws -> URL {
+        if let explicitPath = ProcessInfo.processInfo.environment["NPP_MACOS_APP"], !explicitPath.isEmpty {
+            let explicitURL = URL(fileURLWithPath: explicitPath)
+            try XCTSkipUnless(FileManager.default.fileExists(atPath: explicitURL.path), "NPP_MACOS_APP does not exist: \(explicitURL.path)")
+            return explicitURL
+        }
+
+        // #filePath: <repo>/macos/ui-tests-xcode/Tests/HexEditorUITests.swift
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let defaultURL = repoRoot
+            .appendingPathComponent("../notepad-plus-plus-macos/build/Notepad++.app")
+            .standardizedFileURL
+
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: defaultURL.path), "Set NPP_MACOS_APP=/path/to/Notepad++.app before running UI tests.")
+        return defaultURL
+    }
+
+    fileprivate func fixturePath(_ name: String) throws -> String {
+        guard let dir = ProcessInfo.processInfo.environment["NPP_HEXEDIT_FIXTURES_DIR"] else {
+            throw XCTSkip("NPP_HEXEDIT_FIXTURES_DIR not set — run via macos/ui-tests-xcode/run-tests.sh.")
+        }
+        let path = (dir as NSString).appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("Fixture missing: \(path). Re-run macos/ui-tests-xcode/run-tests.sh to regenerate.")
+        }
+        return path
+    }
+
+    /// Launch Nextpad++ with a fixture file passed as a positional argv. The
+    /// host's CLI parser (NppCommandLineParams in src/AppDelegate.mm) treats
+    /// any non-flag argument as a file to open — see `--help` for the catalog.
+    fileprivate func launchNotepadWithFixture(_ name: String, language: String = "en") throws -> XCUIApplication {
+        let path = try fixturePath(name)
+        let app = XCUIApplication(url: try notepadAppURL())
+        app.launchArguments = ["-nosession", "--reset-hex-prefs", path]
+        app.launchEnvironment = Self.nppLaunchEnvironment(language: language)
+        app.launch()
+        let foregroundTimeout = 30.0 * Self.asanTimeoutScale
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: foregroundTimeout),
+                      "Nextpad++ macOS did not launch with fixture \(name).")
+        return app
+    }
+
+    fileprivate func invokeHexEditorMenu(app: XCUIApplication, item leaf: String) throws {
+        let pluginsMenu = app.menuBars.menuBarItems["Plugins"]
+        // Generous timeouts here so the helper accommodates the large-file tests:
+        // when NPP is mid-ingest of a 100 MB fixture, its main thread is busy and
+        // menu clicks queue up but don't expand a submenu until the load finishes.
+        // 30 s of patience is overkill for the typical 32-byte test (which sees the
+        // menu surface in <100 ms) but keeps the helper general-purpose without a
+        // separate "slow" variant. Under ASan-injected NPP the budget scales
+        // by Self.asanTimeoutScale to absorb the slower menu construction.
+        let menuTimeout = 30.0 * Self.asanTimeoutScale
+        XCTAssertTrue(pluginsMenu.waitForExistence(timeout: menuTimeout))
+        pluginsMenu.click()
+
+        let hexEditorItem = app.menuBars.menuItems["HexEditor"]
+        XCTAssertTrue(hexEditorItem.waitForExistence(timeout: menuTimeout),
+                      "HexEditor submenu didn't appear within \(menuTimeout) s — host may still be loading a large file.")
+        hexEditorItem.hover()
+
+        let leafItem = app.menuBars.menuItems[leaf]
+        XCTAssertTrue(leafItem.waitForExistence(timeout: menuTimeout), "Plugins > HexEditor > \(leaf) is not visible.")
+        leafItem.click()
+    }
+
+    fileprivate func waitForStatus(in app: XCUIApplication, contains needle: String, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        let element = app.staticTexts.matching(identifier: AXID.status).firstMatch
+        while Date() < deadline {
+            let text = (element.value as? String) ?? element.label
+            if text.contains(needle) {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return false
+    }
+
+    /// Returns the current hex-view status text, useful in failure messages
+    /// to show what was actually displayed when an assertion failed.
+    fileprivate func currentStatusText(in app: XCUIApplication) -> String {
+        let element = app.staticTexts.matching(identifier: AXID.status).firstMatch
+        return (element.value as? String) ?? element.label
+    }
+
+    /// Capture the current screen as a PNG and (a) attach it to the test result
+    /// for archival in the .xcresult bundle and (b) write it directly to the
+    /// runner's sandbox container so run-tests.sh can extract it after xcodebuild
+    /// completes.
+    ///
+    /// Why NSHomeDirectory() and not an env-var-supplied path: the XCUITest
+    /// runner is App-Sandboxed (per `org.notepadplusplus.hexeditor.uitests.xctrunner`
+    /// container). Writes to arbitrary user-fs paths — even ones the runner's
+    /// uid owns, like ~/vm-local/... — fail with NSPOSIXErrorDomain Code=1
+    /// "Operation not permitted". NSHomeDirectory() inside the sandbox resolves
+    /// to ~/Library/Containers/<runner-id>/Data and IS writable. run-tests.sh
+    /// sweeps that container for the screenshots dir after the test pass.
+    fileprivate func captureToDashboard(_ name: String) {
+        let screenshot = XCUIScreen.main.screenshot()
+
+        // Archival in xcresult — visible in Xcode's "Test Result" navigator.
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        // Direct write inside the sandbox container.
+        let dirURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("captureToDashboard-screenshots")
+        try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
+        let fileURL = dirURL.appendingPathComponent("\(name).png")
+        try? screenshot.pngRepresentation.write(to: fileURL)
+    }
+}
+
+@MainActor
+final class HexEditorUITests: HexEditorBaseUITests {
     override func setUp() async throws {
         continueAfterFailure = false
 
@@ -205,33 +368,8 @@ final class HexEditorUITests: XCTestCase {
         try await super.tearDown()
     }
 
-    /// Capture the current screen as a PNG and (a) attach it to the test result
-    /// for archival in the .xcresult bundle and (b) write it directly to the
-    /// runner's sandbox container so run-tests.sh can extract it after xcodebuild
-    /// completes.
-    ///
-    /// Why NSHomeDirectory() and not an env-var-supplied path: the XCUITest
-    /// runner is App-Sandboxed (per `org.notepadplusplus.hexeditor.uitests.xctrunner`
-    /// container). Writes to arbitrary user-fs paths — even ones the runner's
-    /// uid owns, like ~/vm-local/... — fail with NSPOSIXErrorDomain Code=1
-    /// "Operation not permitted". NSHomeDirectory() inside the sandbox resolves
-    /// to ~/Library/Containers/<runner-id>/Data and IS writable. run-tests.sh
-    /// sweeps that container for the screenshots dir after the test pass.
-    private func captureToDashboard(_ name: String) {
-        let screenshot = XCUIScreen.main.screenshot()
-
-        // Archival in xcresult — visible in Xcode's "Test Result" navigator.
-        let attachment = XCTAttachment(screenshot: screenshot)
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
-
-        // Direct write inside the sandbox container.
-        let dirURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("captureToDashboard-screenshots")
-        try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
-        let fileURL = dirURL.appendingPathComponent("\(name).png")
-        try? screenshot.pngRepresentation.write(to: fileURL)
-    }
+    // captureToDashboard moved to HexEditorBaseUITests so both test classes
+    // can use it.
 
     /// Force-kills any running dev-build Nextpad++.app instance (path matches `expectedURL`),
     /// then waits up to 5 seconds for the process to disappear from the running-apps list.
@@ -1390,26 +1528,246 @@ func testStatusLabelReportsByteCount() throws {
 
         let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
         XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
-        // Cursor preservation places the hex caret at end-of-paste (= EOF append slot).
-        // Cut/Copy/Delete are correctly disabled at EOF because there's no current byte.
-        // Reposition to byte 0 so we test the responder-chain routing (the test's actual
-        // intent), not edge-of-buffer caret semantics.
+        try positionHexCursorAtZero(app: app, hexTable: hexTable)
+
+        // Establish a selection via Edit > Select All so Cut/Copy/Delete have
+        // bytes to operate on. Without a selection these are CORRECTLY
+        // DISABLED — that's the regression covered by
+        // testEditMenuCutCopyDisabledWithoutSelection. Doing Select All also
+        // exercises the menu-action → responder-chain route end-to-end, which
+        // is this test's actual purpose.
+        let editMenu = app.menuBars.menuBarItems["Edit"]
+        XCTAssertTrue(editMenu.waitForExistence(timeout: 5))
+        editMenu.click()
+        let selectAllItem = app.menuBars.menuItems["Select All"]
+        XCTAssertTrue(selectAllItem.waitForExistence(timeout: 5))
+        XCTAssertTrue(selectAllItem.isEnabled, "Select All should be enabled with non-empty content.")
+        selectAllItem.click()
+        Thread.sleep(forTimeInterval: 0.3)
+
+        // Re-open Edit menu — the previous click closed it after Select All.
+        editMenu.click()
+
+        // With selection in place: Cut/Copy/Delete enabled; Paste reflects
+        // pasteboard state (we don't assert it here — the dedicated
+        // testEditMenuPasteEnabledAfterOurCopy covers our own-copy case).
+        for label in ["Cut", "Copy", "Delete", "Select All"] {
+            let item = app.menuBars.menuItems[label]
+            XCTAssertTrue(item.waitForExistence(timeout: 3), "Edit menu missing \(label)")
+            XCTAssertTrue(item.isEnabled, "\(label) should be enabled in the hex overlay after Select All")
+        }
+
+        app.typeKey(.escape, modifierFlags: [])
+    }
+
+    /// Regression test for the bug the user surfaced manually 2026-05-05:
+    /// Cut/Copy/Delete in the Edit menu were enabled even when there was no
+    /// byte selection (the previous validator returned YES whenever the cursor
+    /// sat on any byte in the buffer, which is essentially "always" — making
+    /// the menu state misleading). After the fix, validation requires
+    /// hasByteSelection() || hasRectSelection().
+    func testEditMenuCutCopyDisabledWithoutSelection() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "Hex")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        // Position cursor at byte 0 — there's content but no selection.
         try positionHexCursorAtZero(app: app, hexTable: hexTable)
 
         let editMenu = app.menuBars.menuBarItems["Edit"]
         XCTAssertTrue(editMenu.waitForExistence(timeout: 5))
         editMenu.click()
 
-        // With session-restored content the buffer is non-empty, so Cut/Copy/Paste/Delete/
-        // Select All must be enabled (Undo/Redo depend on edit history we haven't created).
-        for label in ["Cut", "Copy", "Paste", "Delete", "Select All"] {
+        // Cut, Copy, Delete must be disabled — there is no selection.
+        for label in ["Cut", "Copy", "Delete"] {
             let item = app.menuBars.menuItems[label]
             XCTAssertTrue(item.waitForExistence(timeout: 3), "Edit menu missing \(label)")
-            XCTAssertTrue(item.isEnabled, "\(label) should be enabled in the hex overlay with content present")
+            XCTAssertFalse(item.isEnabled, "\(label) should be DISABLED when there is no byte selection. Pre-fix this was enabled because validateUserInterfaceItem fell back to a 1-byte 'current byte' range.")
         }
+        // Select All should still be enabled (independent of selection).
+        let selectAllItem = app.menuBars.menuItems["Select All"]
+        XCTAssertTrue(selectAllItem.isEnabled, "Select All should be enabled in a non-empty buffer regardless of current selection state.")
 
         app.typeKey(.escape, modifierFlags: [])
     }
+
+    /// Regression test for the bug the user surfaced manually 2026-05-05 that
+    /// required a diagnostic-NSLog dylib install + Console.app capture to
+    /// pin down: immediately after our own Cmd-C in the hex view, the Edit
+    /// menu Paste was reporting DISABLED. Root cause was that
+    /// `validateUserInterfaceItem` for paste: relied entirely on
+    /// `[pasteboard dataForType:...]` against our own promised-type
+    /// pasteboard, and on macOS 26 those reads don't materialize promises
+    /// during validation — they returned nil, paste appeared disabled, the
+    /// keyboard Cmd-V path also no-op'd because pasteboard reads inside
+    /// pasteBytesFromPasteboard saw the same nils. Fix: short-circuit
+    /// validation via currentlyOwnedHexSnapshot() — if our owner has the
+    /// snapshot live, the paste is valid regardless of what dataForType
+    /// returns.
+    func testEditMenuPasteEnabledAfterOurCopy() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "Hex")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        // Select All + Copy via the Edit menu so the menu route is exercised
+        // end-to-end (matches what the user does with the mouse).
+        let editMenu = app.menuBars.menuBarItems["Edit"]
+        editMenu.click()
+        let selectAllItem = app.menuBars.menuItems["Select All"]
+        XCTAssertTrue(selectAllItem.waitForExistence(timeout: 5))
+        selectAllItem.click()
+        Thread.sleep(forTimeInterval: 0.3)
+
+        editMenu.click()
+        let copyItem = app.menuBars.menuItems["Copy"]
+        XCTAssertTrue(copyItem.waitForExistence(timeout: 5))
+        XCTAssertTrue(copyItem.isEnabled, "Copy should be enabled after Select All.")
+        copyItem.click()
+        Thread.sleep(forTimeInterval: 0.3)
+
+        // Re-open the Edit menu and verify Paste is enabled. Pre-fix this
+        // returned NO because dataForType on our promised-type pasteboard
+        // didn't materialize during menu validation.
+        editMenu.click()
+        let pasteItem = app.menuBars.menuItems["Paste"]
+        XCTAssertTrue(pasteItem.waitForExistence(timeout: 5))
+        XCTAssertTrue(pasteItem.isEnabled, "Paste should be enabled after our own Copy. If this fails, the validateUserInterfaceItem short-circuit via currentlyOwnedHexSnapshot() has regressed.")
+
+        app.typeKey(.escape, modifierFlags: [])
+    }
+
+    /// Regression test for the silent-no-op bug the user reported manually
+    /// 2026-05-05: copy a row out of an existing hex buffer, click the empty
+    /// trailing-sentinel row to position the cursor at offset == totalLength,
+    /// Cmd-V — nothing happened, byte count didn't change, no bytes appeared.
+    /// This was caused by the Paste menu validation issue (above) AND the
+    /// fact that the in-process snapshot wasn't being read on the paste-action
+    /// path either. Fixed by short-circuiting via currentlyOwnedHexSnapshot()
+    /// in pasteBytesFromPasteboard. This test exercises the same flow at
+    /// kilobyte scale so it gates every commit cheaply.
+    func testHexPasteAtEOFAppendsBytes() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 32 bytes is enough to have a row to copy + a trailing-sentinel row
+        // to paste at. "abcdefghijklmnopqrstuvwxyzABCDEF" = 32 chars = 0x20..0x3F.
+        let seedText = "abcdefghijklmnopqrstuvwxyzABCDEF"
+        try createBufferWithText(app: app, text: seedText)
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForStatus(in: app, contains: "32 bytes", timeout: 5),
+                      "Seed buffer should report 32 bytes.")
+
+        // Select All → Cmd-C — snapshot all 32 bytes via our hex copy path.
+        app.typeKey("a", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.2)
+        app.typeKey("c", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+
+        // Position cursor at offset == totalLength (the trailing-sentinel
+        // row). End-of-buffer is reachable via Cmd+End in hex view. Pre-fix
+        // a Cmd-V here was silently no-op'ing.
+        app.typeKey(.end, modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.2)
+        app.typeKey("v", modifierFlags: .command)
+
+        // 32 bytes appended at the end → buffer is now 64 bytes.
+        XCTAssertTrue(waitForStatus(in: app, contains: "64 bytes", timeout: 5),
+                      "Paste at offset==totalLength must append the snapshot bytes. Status after paste: '\(currentStatusText(in: app))'. Pre-fix the paste was a silent no-op.")
+    }
+
+    /// Regression test for two related bugs the user reported manually
+    /// 2026-05-05, both rooted in NPPN_BUFFERACTIVATED → hideHexPreview →
+    /// tryAutoEngageHexView dropping per-tab "user engaged hex view" state:
+    ///
+    ///   (A) **Persistence:** for files that don't match Startup auto-engage
+    ///       rules (extension list / control-char density), switching away
+    ///       from a tab and back loses hex view entirely — it reverts to
+    ///       the default text viewer because tryAutoEngageHexView has no
+    ///       reason to re-engage.
+    ///   (B) **Geometry:** for files that DO match Startup rules, hex view
+    ///       does re-engage but with wrong frame — status text overlaps
+    ///       the window's title bar / tabs row, hex content shifted up,
+    ///       because re-engagement reads stale editor-view bounds at the
+    ///       moment NPPN_BUFFERACTIVATED fires.
+    ///
+    /// This test exercises (A) directly: the 100k.bin fixture is all
+    /// printable ASCII so content-density auto-engage doesn't fire, and
+    /// the .bin extension isn't in the default Startup list. After Cmd-N
+    /// and Ctrl+Shift+Tab back, hex view should still be present (because
+    /// the user explicitly engaged it). The geometry assertions further
+    /// down also exercise (B) once persistence works.
+    func testHexViewSurvivesTabSwitchRoundTrip() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // Use the 100k fixture — content density tells the auto-engage
+        // heuristic this is a binary-ish file, so switching back to it
+        // exercises the auto-engage path that re-installs the hex root
+        // view (which is where the bug was observed).
+        let app1 = try launchNotepadWithFixture("100k.bin")
+        defer { app1.terminate() }
+        _ = app
+
+        try invokeHexEditorMenu(app: app1, item: "View in HEX")
+        XCTAssertTrue(waitForStatus(in: app1, contains: "100000", timeout: 10),
+                      "Hex view should engage on tab A (100k fixture).")
+
+        let hexTable = app1.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        let frameBefore = hexTable.frame
+        captureToDashboard("testHexViewGeometryStableAcrossTabSwitch-01-before-roundtrip")
+
+        // Cmd-N to create tab B. NPP-Mac switches the active buffer; our
+        // NPPN_BUFFERACTIVATED handler hides hex view on tab A.
+        app1.typeKey("n", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.6)
+
+        // Switch back to tab A via NPP-Mac's "Select Previous Tab" Window
+        // menu shortcut (Ctrl+Shift+Tab). With 2 tabs and Tab B currently
+        // active, "previous" wraps back to Tab A. NPP-Mac's tab buttons
+        // are not exposed as AX elements, so the keyboard route is the
+        // only reliable way to script this.
+        app1.typeKey("\t", modifierFlags: [.control, .shift])
+        Thread.sleep(forTimeInterval: 1.0)
+
+        // After switching back, the auto-engage path re-installs the hex
+        // view. Wait for the hex table to be visible again and capture
+        // its frame.
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 10),
+                      "Hex table should reappear on tab A after switching back.")
+        XCTAssertTrue(waitForStatus(in: app1, contains: "100000", timeout: 10),
+                      "Status should report the 100k byte count after switching back to tab A.")
+        let frameAfter = hexTable.frame
+        captureToDashboard("testHexViewGeometryStableAcrossTabSwitch-02-after-roundtrip")
+
+        // The bug shifts the hex view UPWARD into the window chrome. In
+        // macOS screen coords the y axis grows upward, so an upward shift
+        // raises frame.origin.y. Tolerate ±10 px of legitimate layout
+        // jitter; anything larger is the geometry regression.
+        let yDelta = abs(frameAfter.origin.y - frameBefore.origin.y)
+        XCTAssertLessThan(yDelta, 10,
+                          "Hex table frame.origin.y shifted by \(yDelta) px after tab-switch round-trip (before: \(frameBefore.origin.y), after: \(frameAfter.origin.y)). Pre-fix this was the 'status text overlapping title bar' rendering bug.")
+        // Sanity: heights also shouldn't differ by more than a row.
+        let hDelta = abs(frameAfter.size.height - frameBefore.size.height)
+        XCTAssertLessThan(hDelta, 30,
+                          "Hex table height changed by \(hDelta) px after tab-switch round-trip — geometry should be preserved.")
+    }
+
 
     func testEditMenuCopyFromHexView() throws {
         let app = try launchNotepad()
@@ -2888,6 +3246,39 @@ func testContextMenuCommands() throws {
         aboutDialog.buttons["OK"].firstMatch.click()
     }
 
+    /// The About body must surface the build tag (git short-hash captured
+    /// at configure time) and the project's GitHub URL — both added so a
+    /// user filing an issue can paste an unambiguous identifier and find
+    /// the source in seconds. Build tag format: "Build <7+ hex chars>"
+    /// optionally followed by "-dirty" for builds against a modified
+    /// working tree, or "Build unknown" if the build wasn't done from a
+    /// git checkout. URL is the literal string baked into the strings
+    /// file, not a clickable link — a static text search suffices.
+    func testAboutDialogShowsBuildTagAndProjectURL() throws {
+        let app = try launchNotepad(language: "en")
+        defer { app.terminate() }
+        try invokeHexEditorMenu(app: app, item: "Help...")
+        let aboutDialog = app.dialogs.firstMatch
+        XCTAssertTrue(aboutDialog.waitForExistence(timeout: 5))
+
+        // Match either a real short-hash ("Build a1b2c3d" or
+        // "Build a1b2c3d-dirty") or the IDE/no-git fallback ("Build unknown").
+        let buildPredicate = NSPredicate(format:
+            "value MATCHES %@ OR label MATCHES %@",
+            ".*Build ([0-9a-f]{4,}(-dirty)?|unknown).*",
+            ".*Build ([0-9a-f]{4,}(-dirty)?|unknown).*")
+        XCTAssertTrue(aboutDialog.staticTexts.element(matching: buildPredicate).exists,
+                      "About dialog should show 'Build <hash>' (or 'Build unknown' for non-git builds).")
+
+        let urlPredicate = NSPredicate(format:
+            "value CONTAINS %@ OR label CONTAINS %@",
+            "github.com/dhadner/NPP_HexEdit",
+            "github.com/dhadner/NPP_HexEdit")
+        XCTAssertTrue(aboutDialog.staticTexts.element(matching: urlPredicate).exists,
+                      "About dialog should show the GitHub project URL so a user can find the source quickly.")
+        aboutDialog.buttons["OK"].firstMatch.click()
+    }
+
     func testAboutDialogProductNameStaysAtomic() throws {
         // The About body reads "Native macOS port of the Notepad++ ..."
         // — referring to the plugin's origin (a Notepad++ plugin on
@@ -3436,31 +3827,7 @@ func testContextMenuCommands() throws {
     /// Absolute path to a checked-in / generated fixture file. Each byte at
     /// offset N in the fixture has value (N mod 256) — see
     /// [generate-test-fixture.py](../../scripts/generate-test-fixture.py).
-    private func fixturePath(_ name: String) throws -> String {
-        guard let dir = ProcessInfo.processInfo.environment["NPP_HEXEDIT_FIXTURES_DIR"] else {
-            throw XCTSkip("NPP_HEXEDIT_FIXTURES_DIR not set — run via macos/ui-tests-xcode/run-tests.sh.")
-        }
-        let path = (dir as NSString).appendingPathComponent(name)
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("Fixture missing: \(path). Re-run macos/ui-tests-xcode/run-tests.sh to regenerate.")
-        }
-        return path
-    }
-
-    /// Launch Nextpad++ with a fixture file passed as a positional argv. The
-    /// host's CLI parser (NppCommandLineParams in src/AppDelegate.mm) treats
-    /// any non-flag argument as a file to open — see `--help` for the catalog.
-    private func launchNotepadWithFixture(_ name: String, language: String = "en") throws -> XCUIApplication {
-        let path = try fixturePath(name)
-        let app = XCUIApplication(url: try notepadAppURL())
-        app.launchArguments = ["-nosession", "--reset-hex-prefs", path]
-        app.launchEnvironment = Self.nppLaunchEnvironment(language: language)
-        app.launch()
-        let foregroundTimeout = 30.0 * Self.asanTimeoutScale
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: foregroundTimeout),
-                      "Nextpad++ macOS did not launch with fixture \(name).")
-        return app
-    }
+    // fixturePath, launchNotepadWithFixture moved to HexEditorBaseUITests.
 
     func testLargeFile_EmptyFileShowsEmptyStatus() throws {
         let app = try launchNotepadWithFixture("0.bin")
@@ -3572,6 +3939,68 @@ func testContextMenuCommands() throws {
                       "Filed upstream as a memory-mapping / chunked-load request. " +
                       "Re-enable when host ingest yields the run loop or finishes < 30 s.")
     }
+
+    /// Regression test for the >16 MB hex-text rendering cap added in Step 5.
+    /// Cmd-C on a hex selection of 17 MB exceeds the cap inside
+    /// HexClipboardOwner.provideDataForType:, so cross-app text consumers
+    /// receive a `<17.0 MB hex-editor selection> Paste into HEX view to
+    /// receive.` placeholder string instead of a 51 MB UTF-8 hex
+    /// representation. The test reads NSPasteboardTypeString directly from
+    /// the test runner process — that resolves the type via pbs IPC into
+    /// our plugin's owner callback, exactly the path TextEdit / Mail /
+    /// Slack / etc. would take. raw bytes (`public.data`) stay byte-faithful
+    /// at any size, verified by checking the data length matches the file.
+    ///
+    /// Uses fixtures/17MB.bin (smallest size that trips the cap). Total
+    /// runtime ~30 s on a healthy VM, mostly NPP-Mac's main-thread ingest.
+    func testLargeFile_AboveHexTextCapShowsCrossAppPlaceholder() throws {
+        let app = try launchNotepadWithFixture("17MB.bin")
+        defer { app.terminate() }
+
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+
+        // Wait for the full ingest — the lazy reader exposes the entire file
+        // immediately, but the status label only updates once Scintilla has
+        // ingested. Use the byte-count substring as the gate (17 * 1024 *
+        // 1024 = 17_825_792 bytes).
+        XCTAssertTrue(waitForStatus(in: app, contains: "17825792", timeout: 60),
+                      "17 MB fixture should load fully — ingest may be slow on a busy VM. Actual: '\(currentStatusText(in: app))'")
+
+        // Pre-poison the clipboard so we can detect "Cmd-C did nothing".
+        let sentinel = "__cap-test-sentinel__"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(sentinel, forType: .string)
+
+        app.typeKey("a", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        app.typeKey("c", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.5)
+
+        // Read the string-type pasteboard contents — pbs IPC's into our
+        // plugin's HexClipboardOwner, which sees the 17 MB snapshot is past
+        // the 16 MB cap and returns the placeholder sentence rather than a
+        // 51 MB hex string.
+        let stringValue = NSPasteboard.general.string(forType: .string) ?? ""
+        XCTAssertNotEqual(stringValue, sentinel,
+                          "Cmd-C didn't update the clipboard — the keyboard wiring or owner registration is broken.")
+        XCTAssertTrue(stringValue.contains("hex-editor selection"),
+                      "Above-cap clipboard should hold the placeholder. Actual prefix: '\(stringValue.prefix(100))'")
+        XCTAssertTrue(stringValue.contains("Paste into HEX view"),
+                      "Placeholder should guide the user toward the hex view. Actual prefix: '\(stringValue.prefix(100))'")
+        XCTAssertLessThan(stringValue.count, 200,
+                          "Placeholder should be a short sentence — current cap impl returns ~80 chars. Length \(stringValue.count) suggests the cap didn't kick in.")
+
+        // raw-bytes type stays byte-faithful at any size — Scintilla's lazy
+        // reader streams them through pbs IPC on demand. Verify the length
+        // matches the file (17 MB = 17_825_792 bytes).
+        let rawData = NSPasteboard.general.data(forType: NSPasteboard.PasteboardType("public.data"))
+        XCTAssertNotNil(rawData, "public.data type should be available regardless of size.")
+        XCTAssertEqual(rawData?.count, 17 * 1024 * 1024,
+                       "public.data should carry the full 17 MB of bytes — there's no cap on raw-byte rendering.")
+    }
+
+    // testLargeFile_1_5GB_* moved to HexEditorLargeFileUITests
+    // (excluded from the default suite via -skip-testing in run-tests.sh).
 
     // MARK: - Wide content / horizontal scroll
     //
@@ -3765,41 +4194,7 @@ func testContextMenuCommands() throws {
 
     // MARK: - Helpers
 
-    /// True when the test bundle was launched with TEST_RUNNER_NPP_HEXEDIT_ASAN=1
-    /// (set by vm-test.sh's --asan path). Tests use this to scale long-poll
-    /// timeouts and to force the ASan runtime into NPP at process launch via
-    /// DYLD_INSERT_LIBRARIES.
-    static var isAsanRun: Bool {
-        return ProcessInfo.processInfo.environment["NPP_HEXEDIT_ASAN"] == "1"
-    }
-
-    /// Multiplier for any timeout that depends on NPP's responsiveness. 1× in
-    /// the regular build; 3× under ASan. NPP under DYLD_INSERT_LIBRARIES'd ASan
-    /// runs at roughly 2× speed for AppKit work, so 3× gives a safety margin
-    /// without masking real hangs.
-    static var asanTimeoutScale: Double {
-        return isAsanRun ? 3.0 : 1.0
-    }
-
-    /// Builds the launchEnvironment for an XCUIApplication, layering ASan
-    /// injection on top of the locale override. When isAsanRun is true and the
-    /// runner has been told the resolved ASan dylib path
-    /// (TEST_RUNNER_NPP_HEXEDIT_ASAN_DYLIB → NPP_HEXEDIT_ASAN_DYLIB), we set
-    /// DYLD_INSERT_LIBRARIES to force the ASan runtime into NPP at dyld init —
-    /// a dlopen'd ASan-instrumented plugin otherwise aborts NPP at launch with
-    /// "Interceptors are not working" because NPP's mallocs already happened
-    /// before our dylib loaded.
-    private static func nppLaunchEnvironment(language: String) -> [String: String] {
-        var env = ["HEX_EDITOR_LANG_OVERRIDE": language]
-        let processEnv = ProcessInfo.processInfo.environment
-        if let asanOpts = processEnv["NPP_HEXEDIT_ASAN_OPTIONS"], !asanOpts.isEmpty {
-            env["ASAN_OPTIONS"] = asanOpts
-        }
-        if let asanDylib = processEnv["NPP_HEXEDIT_ASAN_DYLIB"], !asanDylib.isEmpty {
-            env["DYLD_INSERT_LIBRARIES"] = asanDylib
-        }
-        return env
-    }
+    // isAsanRun, asanTimeoutScale, nppLaunchEnvironment moved to HexEditorBaseUITests.
 
     private func launchNotepad(language: String = "en", extraArguments: [String] = []) throws -> XCUIApplication {
         let app = XCUIApplication(url: try notepadAppURL())
@@ -3884,68 +4279,137 @@ func testContextMenuCommands() throws {
         Thread.sleep(forTimeInterval: 0.5)
     }
 
-    private func invokeHexEditorMenu(app: XCUIApplication, item leaf: String) throws {
-        let pluginsMenu = app.menuBars.menuBarItems["Plugins"]
-        // Generous timeouts here so the helper accommodates the large-file tests:
-        // when NPP is mid-ingest of a 100 MB fixture, its main thread is busy and
-        // menu clicks queue up but don't expand a submenu until the load finishes.
-        // 30 s of patience is overkill for the typical 32-byte test (which sees the
-        // menu surface in <100 ms) but keeps the helper general-purpose without a
-        // separate "slow" variant. Under ASan-injected NPP the budget scales
-        // by Self.asanTimeoutScale to absorb the slower menu construction.
-        let menuTimeout = 30.0 * Self.asanTimeoutScale
-        XCTAssertTrue(pluginsMenu.waitForExistence(timeout: menuTimeout))
-        pluginsMenu.click()
+    // invokeHexEditorMenu, waitForStatus, currentStatusText, notepadAppURL
+    // moved to HexEditorBaseUITests.
+}
 
-        let hexEditorItem = app.menuBars.menuItems["HexEditor"]
-        XCTAssertTrue(hexEditorItem.waitForExistence(timeout: menuTimeout),
-                      "HexEditor submenu didn't appear within \(menuTimeout) s — host may still be loading a large file.")
-        hexEditorItem.hover()
-
-        let leafItem = app.menuBars.menuItems[leaf]
-        XCTAssertTrue(leafItem.waitForExistence(timeout: menuTimeout), "Plugins > HexEditor > \(leaf) is not visible.")
-        leafItem.click()
+/// Multi-GB tests excluded from the routine UI suite — the fixture they
+/// need (1.5 GB) costs ~12 s of one-time generation and ~1.5 GB of disk,
+/// and a single test takes a few minutes on the VM (Cmd-C materializes
+/// the 1.5 GB selection into a contiguous snapshot, then SCI_INSERTTEXT
+/// inserts it into the destination Scintilla — those two steps
+/// dominate; lazy-reader file open is seconds).
+///
+/// `run-tests.sh` adds `-skip-testing:HexEditorUITests/HexEditorLargeFileUITests`
+/// to xcodebuild by default, so a routine UI run never touches this
+/// class. Pass `--large-files` to `test-ui.sh` (or `run-tests.sh`) to
+/// include it; the flag also triggers fixture generation, so there's
+/// no manual setup or env-var state to leak across shell sessions.
+@MainActor
+final class HexEditorLargeFileUITests: HexEditorBaseUITests {
+    override func setUp() async throws {
+        continueAfterFailure = false
     }
 
-    private func waitForStatus(in app: XCUIApplication, contains needle: String, timeout: TimeInterval) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        let element = app.staticTexts.matching(identifier: AXID.status).firstMatch
-        while Date() < deadline {
-            let text = (element.value as? String) ?? element.label
-            if text.contains(needle) {
-                return true
-            }
-            Thread.sleep(forTimeInterval: 0.1)
+    /// End-to-end byte-preservation roundtrip at 1.5 GB
+    /// (1_610_612_736 bytes). Sized to exercise the lazy reader +
+    /// promised-type owner against pbs IPC and the chunk-streamed
+    /// clipboard paths at multi-GB scale, while keeping ~0.5 GB
+    /// headroom under 2 GB so we never trip the INT_MAX off-by-ones
+    /// in upstream Scintilla's pre-Sci_Position line-layout path
+    /// (LayoutLine sign-extends INT_MIN at exactly 2 GB; verified
+    /// 2026-05-05 via diagnostic crash log).
+    ///
+    /// Exercises Step 2c (lazy reader streams source bytes on demand),
+    /// Step 5 (promised-type owner holds the snapshot, resolves
+    /// public.data through pbs on paste), and the keyboard wiring.
+    func testLargeFile_1_5GB_HexToFreshHexViewSameNPP_PreservesBytes() throws {
+        let app = try launchNotepadWithFixture("1.5GB.bin")
+        defer { app.terminate() }
+
+        // NPP-Mac shows a large-file warning on opens above its threshold
+        // ("This is a large file…"). As of 2026-05-05 the dialog
+        // requires two clicks to dismiss for files this large — the
+        // first click definitively does NOT dismiss it (verified
+        // manually). Likely an upstream NPP-Mac bug; tracked separately.
+        // We click in a loop with a brief settle in between, then wait
+        // for non-existence with a deadline that covers the synchronous
+        // Scintilla source-load that runs after dismissal.
+        let dialog = app.dialogs.firstMatch
+        for _ in 0..<3 {
+            let warningButton = dialog.buttons.firstMatch
+            guard warningButton.waitForExistence(timeout: 30) else { break }
+            warningButton.click()
+            Thread.sleep(forTimeInterval: 1.5)
         }
-        return false
-    }
+        XCTAssertTrue(dialog.waitForNonExistence(timeout: 240),
+                      "Large-file warning dialog should be dismissed after the second click + Scintilla source-load.")
 
-    /// Returns the current hex-view status text, useful in failure messages
-    /// to show what was actually displayed when an assertion failed.
-    private func currentStatusText(in app: XCUIApplication) -> String {
-        let element = app.staticTexts.matching(identifier: AXID.status).firstMatch
-        return (element.value as? String) ?? element.label
-    }
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
 
-    private func notepadAppURL() throws -> URL {
-        if let explicitPath = ProcessInfo.processInfo.environment["NPP_MACOS_APP"], !explicitPath.isEmpty {
-            let explicitURL = URL(fileURLWithPath: explicitPath)
-            try XCTSkipUnless(FileManager.default.fileExists(atPath: explicitURL.path), "NPP_MACOS_APP does not exist: \(explicitURL.path)")
-            return explicitURL
-        }
+        // 1.5 GB == 1_610_612_736 bytes. The lazy reader (Step 2c) means
+        // hex view engages without materializing source bytes upfront, so
+        // status shows the full count within seconds — there's no
+        // "ingest" wait needed.
+        let fullSize = "1610612736"
+        XCTAssertTrue(waitForStatus(in: app, contains: fullSize, timeout: 30),
+                      "1.5 GB fixture should report full byte count once hex view engages. Status: '\(currentStatusText(in: app))'")
 
-        // #filePath: <repo>/macos/ui-tests-xcode/Tests/HexEditorUITests.swift
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let defaultURL = repoRoot
-            .appendingPathComponent("../notepad-plus-plus-macos/build/Notepad++.app")
-            .standardizedFileURL
+        // Cmd-A selects all (instant; just sets the selection range).
+        // Cmd-C iterates the 1.5 GB selection through the lazy reader
+        // into the HexClipboardOwner's contiguous snapshot — the only
+        // step that actually touches every byte of the source. ~10–30 s.
+        app.typeKey("a", modifierFlags: .command)
+        app.typeKey("c", modifierFlags: .command)
 
-        try XCTSkipUnless(FileManager.default.fileExists(atPath: defaultURL.path), "Set NPP_MACOS_APP=/path/to/Notepad++.app before running UI tests.")
-        return defaultURL
+        // Open a new (empty) buffer in the same NPP — Cmd-N reaches the
+        // host's "New Document" action.
+        app.typeKey("n", modifierFlags: .command)
+
+        // Engage hex view on the new buffer. Should report empty.
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        XCTAssertTrue(waitForStatus(in: app, contains: "empty", timeout: 30),
+                      "Fresh hex view on a new buffer should report empty before paste.")
+
+        // Cmd-V routes through pasteBytesFromPasteboard's in-process
+        // snapshot short-circuit: same-process paste reads the bytes
+        // directly out of g_hexClipboardOwner._bytes (bypassing pbs IPC,
+        // which truncates public.data above ~few-hundred-MB). That feeds
+        // SCI_INSERTTEXT to populate the destination Scintilla — the
+        // dominant cost, ~30 s to a couple of minutes for 1.5 GB.
+        app.typeKey("v", modifierFlags: .command)
+        XCTAssertTrue(waitForStatus(in: app, contains: fullSize, timeout: 300),
+                      "Paste should populate the new buffer with the full 1.5 GB within 5 min. Status: '\(currentStatusText(in: app))'")
+
+        // Spot-check: first row's hex cells match the fixture pattern's
+        // prefix (byte N = 0x20 + N mod 95, so 0x20 0x21 ... 0x2F at offsets
+        // 0..15). Catches silent truncation, byte-order, and off-by-one
+        // bugs without iterating 1.5 GB worth of cells.
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 10))
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 10))
+        XCTAssertEqual(firstRow.staticTexts.element(boundBy: 1).value as? String, "20",
+                       "Byte 0 should be 0x20 per the fixture pattern.")
+        XCTAssertEqual(firstRow.staticTexts.element(boundBy: 2).value as? String, "21",
+                       "Byte 1 should be 0x21.")
+        XCTAssertEqual(firstRow.staticTexts.element(boundBy: 16).value as? String, "2f",
+                       "Byte 15 should be 0x2f.")
+
+        // Visual evidence — prior version of this test asserted only the first
+        // row, which falsely passed even when the destination's hex view
+        // viewport was collapsed to a single row's worth of vertical space.
+        // A screenshot lets us diff "many rows visible" vs "one row visible"
+        // by eye on the dashboard, and pairs with the frame-height assertion
+        // below for the deterministic gate.
+        captureToDashboard("testLargeFile_1_5GB-paste-destination-rendering")
+
+        // Deterministic gate for the rendering-geometry bug: the destination's
+        // hex table view must occupy a multi-row vertical extent. Anything
+        // under 100 px means the viewport collapsed to ~one row and the user
+        // sees only the first row of bytes even though Scintilla holds the
+        // full 1.5 GB.
+        XCTAssertGreaterThan(hexTable.frame.height, 100,
+                             "Destination hex table viewport collapsed to <100 px (\(hexTable.frame.height) px). Bytes are present in Scintilla (status reports full size and first row renders correctly), but the hex view's frame is wrong — only one row visible to the user.")
+
+        // Note: we deliberately don't `tableRows.element(boundBy: N)` for
+        // large N here. NSTableView only publishes currently-rendered rows
+        // (a small viewport-sized window) into the accessibility tree, so
+        // XCUI's boundBy: returns nil for anything past that window without
+        // scrolling there first. The status assertion above (full byte
+        // count visible) plus the screenshot above gate the data + rendering
+        // for this test; mid/end byte assertions belong in a follow-up test
+        // that calls positionHexCursorAt to scroll into view first.
     }
 }
 
