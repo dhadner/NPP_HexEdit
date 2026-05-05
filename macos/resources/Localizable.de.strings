@@ -150,7 +150,7 @@
 "status.showingTruncated"          = "Zeige %1$zu von %2$zu Bytes. Vorschau ist aus Performance-Gründen gekürzt.";
 
 /* Über / Hilfe-Dialog */
-"about.body"                       = "Native macOS-Portierung des HexEditor-Plugins für Nextpad⁠+⁠+. Bietet eine eingebettete Hex-Tabelle mit direkter Byte-Bearbeitung, Auswahl, Lesezeichen, Suchen/Ersetzen, Vergleich und Ansichtswechsel.";
+"about.body"                       = "Native macOS-Portierung des HEX-Editor-Plugins für N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+. Bietet eine eingebettete Hex-Tabelle mit direkter Byte-Bearbeitung, Auswahl, Lesezeichen, Suchen/Ersetzen, Vergleich und Ansichtswechsel.";
 /* Plugin-Versionszeile. %@ ist die Versionszeichenfolge (z. B. „1.1.0"). */
 "about.version"                    = "Version %@";
 /* Diagnose-Zeile im Über-Dialog — zeigt die aktuell geladene .strings-Datei. */

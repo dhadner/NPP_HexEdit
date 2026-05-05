@@ -2818,21 +2818,27 @@ func testContextMenuCommands() throws {
     }
 
     func testAboutDialogProductNameStaysAtomic() throws {
-        // The product name "Nextpad++" is built with U+2060 Word Joiners
-        // between letters so NSAlert's word-wrap can't split it across a
-        // line boundary. This regression test asserts the *plain* sequence
-        // "Nextpad++" (without joiners) doesn't appear anywhere in the
-        // dialog — if someone strips the joiners during a string edit, the
-        // plain form returns and this test fails.
+        // The About body reads "Native macOS port of the Notepad++ ..."
+        // — referring to the plugin's origin (a Notepad++ plugin on
+        // Windows ported to macOS), not the macOS host (Nextpad++). The
+        // "Notepad++" must be encoded with U+2060 Word Joiners between
+        // *every* adjacent pair of characters (N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+) so neither
+        // word-wrap nor macOS hyphenation can split it (an earlier fix
+        // only joined `d↔+↔+`, which still let hyphenation break after
+        // "Note"; user reported the wrap).
+        //
+        // We assert that no contiguous "Notepad" substring appears in
+        // any About-dialog staticText — if even one inter-letter joiner
+        // is stripped, the plain word reappears and the test fails.
         let app = try launchNotepad(language: "en")
         defer { app.terminate() }
         try invokeHexEditorMenu(app: app, item: "Help...")
         let aboutDialog = app.dialogs.firstMatch
         XCTAssertTrue(aboutDialog.waitForExistence(timeout: 5))
         let plainPredicate = NSPredicate(format:
-            "value CONTAINS %@ OR label CONTAINS %@", "Nextpad++", "Nextpad++")
+            "value CONTAINS %@ OR label CONTAINS %@", "Notepad", "Notepad")
         XCTAssertFalse(aboutDialog.staticTexts.element(matching: plainPredicate).exists,
-                       "About dialog must keep the product name atomic — found plain 'Nextpad++' (no Word Joiners), which can wrap.")
+                       "About dialog must keep the product name atomic — found contiguous 'Notepad' (some Word Joiners stripped), which can wrap or hyphenate.")
         aboutDialog.buttons["OK"].firstMatch.click()
     }
 

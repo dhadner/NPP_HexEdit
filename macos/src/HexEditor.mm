@@ -349,10 +349,13 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"patternReplace.summaryRect":         @"Filled %1$lu × %2$lu rectangle (%3$lu bytes) with the pattern.",
 
             // About / help dialog
-            // U+2060 Word Joiners between the product-name letters keep
-            // "Nextpad++" atomic — NSAlert's word-wrap otherwise breaks
-            // between the two '+' at narrow dialog widths.
-            @"about.body":                       @"Native macOS port of the Nextpad⁠+⁠+ HexEditor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.",
+            // U+2060 Word Joiners between every adjacent pair of
+            // characters keep "Notepad++" atomic against both word-wrap
+            // (which targets the '+' boundary) and macOS hyphenation
+            // (which was breaking it after "Note"). The body refers to
+            // the plugin's origin (a Notepad++ plugin on Windows that we
+            // ported), not the running host (Nextpad++ on Mac).
+            @"about.body":                       @"Native macOS port of the N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+ HEX-Editor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.",
             @"about.version":                    @"Version %@",
             // Embedded fallback when no .strings file is loaded — distinct from
             // any shipped tag so the cascade XCTest can detect this state.
@@ -416,7 +419,7 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"options.colors.row.compare":         @"Compare:",
             @"options.colors.row.bookmark":        @"Bookmark:",
             @"options.colors.row.currentLine":     @"Current Line:",
-            @"options.colors.help":                @"Pick the foreground (Text) and background (Back) colour for each highlight category. Leaving a well at its default lets the colour follow Nextpad⁠+⁠+'s Light/Dark setting automatically — pick a custom colour only if you want a fixed value that doesn't adapt to appearance changes. Reset (in the dialog footer) clears all overrides at once.",
+            @"options.colors.help":                @"Pick the foreground (Text) and background (Back) colour for each highlight category. Leaving a well at its default lets the colour follow N⁠e⁠x⁠t⁠p⁠a⁠d⁠+⁠+'s Light/Dark setting automatically — pick a custom colour only if you want a fixed value that doesn't adapt to appearance changes. Reset (in the dialog footer) clears all overrides at once.",
 
             // Font tab — typography + a couple of cosmetic toggles.
             @"options.font.name":                  @"Font Name:",
