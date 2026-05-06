@@ -1,4 +1,4 @@
-# Translating the Notepad++ HEX-Editor plugin
+# Translating the Nextpad++ HexEditor plugin
 
 Thanks for considering a translation. The plugin's UI text — menus,
 dialogs, error messages, the About box — is read at runtime from a
@@ -41,7 +41,7 @@ or is a comment.
 "about.version"       = "Version %1$@";
 
 // Single-line comments are also valid. Less common in this project.
-"app.title"           = "HEX-Editor";
+"app.title"           = "HexEditor";
 ```
 
 **Rules:**
@@ -108,14 +108,14 @@ untranslated keys cascade to English.
 
 ## Testing your translation
 
-You can switch the language for *just* Notepad++ macOS without changing
+You can switch the language for *just* Nextpad++ without changing
 your whole Mac:
 
 ```sh
-# Pretend my Mac is set to French for Notepad++ only.
+# Pretend my Mac is set to French for Nextpad++ only.
 defaults write org.notepadplusplus.mac AppleLanguages -array fr
 
-# Launch Notepad++.app from /Applications and engage the HEX-Editor.
+# Launch Nextpad++.app from /Applications and engage the HexEditor.
 # Verify that menus, dialogs, error messages all show the French strings.
 
 # Put it back when you're done.
@@ -135,7 +135,7 @@ short version once the prerequisites are in place:
 cmake -S macos -B macos/build
 cmake --build macos/build --target HexEditor
 macos/scripts/install-host-plugin.sh
-# Quit Notepad++ if it's running, relaunch.
+# Quit Nextpad++ if it's running, relaunch.
 ```
 
 ### Catching layout overflow
@@ -229,7 +229,7 @@ Uyghur are pre-registered).
 
 ## Patterns for plugin and host developers
 
-If you're working on Notepad++ macOS itself — or another plugin — the
+If you're working on Nextpad++ itself — or another plugin — the
 pieces below were the load-bearing details when getting localization
 right in this plugin. Lift any of them.
 

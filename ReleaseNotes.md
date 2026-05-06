@@ -1,8 +1,8 @@
-# HEX-Editor for Notepad++ macOS — v1.1.0
+# HexEditor for Nextpad++ — v1.1.0
 
-The first public release of the macOS-native HEX-Editor plugin for
+The first public release of the macOS-native HexEditor plugin for
 Notepad++ — Jens Lorenz's Windows plugin from 2006, ported and rewritten
-for AppKit. Distributed through the Notepad++ macOS plugin manager.
+for AppKit. Distributed through the Nextpad++ plugin manager.
 
 ## What it is
 
@@ -91,7 +91,7 @@ Windows version" below).
 
 ## Install
 
-The plugin ships through the Notepad++ macOS plugin manager — install
+The plugin ships through the Nextpad++ plugin manager — install
 it from there. To build from source instead:
 
 ```sh
@@ -100,7 +100,7 @@ cmake --build macos/build-universal
 cmake --install macos/build-universal
 ```
 
-Restart Notepad++ macOS. The plugin appears as **Plugins → HexEditor**
+Restart Nextpad++. The plugin appears as **Plugins → HexEditor**
 with seven entries: View in HEX, Compare HEX, Clear Compare Result,
 Insert Columns, Pattern Replace, Options, and Help.
 
@@ -115,7 +115,7 @@ handful of places — every divergence preserves Windows feature
 semantics while adopting the platform-native shape:
 
 - **Compare HEX picks a file from disk** instead of comparing the two
-  panes of a split-view editor. Notepad++ macOS doesn't expose a
+  panes of a split-view editor. Nextpad++ doesn't expose a
   plugin API for reading a second split pane's contents; the
   file-picker approach also makes "compare my unsaved edits against
   the saved version" a one-step workflow.
@@ -144,7 +144,7 @@ Three tiers, all green at release.
   `ctest -L unit`.
 - **Plugin smoke tests** — `dlopen`s the dylib, asserts the NPP
   exports, the menu shape, and English titles. `ctest -L smoke`.
-- **XCTest UI** — full suite against the running Notepad++.app:
+- **XCTest UI** — full suite against the running Nextpad++.app:
   toggle, undo/redo, append-at-EOF, cut/copy/paste/delete round-
   trips (linear and rectangular, including 1.5 GB scale), rectangle
   drag and extend, view-submode rendering, all dialog flows,
@@ -173,7 +173,7 @@ required gate before merging to master.
   the table would break the canonical form for RTL-language
   developers. All other surfaces (menus, NSAlert dialogs, the four
   Options dialog tabs, the host's window chrome) flip naturally.
-- The plugin still tracks Notepad++ macOS upstream API growth — see
+- The plugin still tracks Nextpad++ upstream API growth — see
   CHANGELOG for items that depend on host-side plumbing not yet
   exposed (e.g. comparing two split panes, intercepting
   `IDM_SEARCH_GOTOLINE`, toolbar registration).

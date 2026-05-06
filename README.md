@@ -1,16 +1,18 @@
 # NPP_HexEdit
 
-A hex editor plugin for Notepad++.
+A hex editor plugin for Nextpad++.
 
-This repo holds two versions of the same plugin:
+This repo holds the MacOS port of the Windows Notepad++ HexEditor plugin.  The original Windows source code is included under the same GPL license for comparison since this is a fork of that repo.
+
+In this repo are:
 
 - **The original Windows version** (`HexEditor/`) — Jens Lorenz's HexEditor
-  v0.9.x, copied without changes from
-  [SourceForge](https://sourceforge.net/projects/npp-plugins/files/Hex%20Editor/).
+  v0.9.x, from
+  [SourceForge](https://sourceforge.net/projects/npp-plugins/files/Hex%20Editor/) and forked from the unofficial GitHub repo at [GitHub](https://github.com/chcg/NPP_HexEdit).
 - **A macOS port** (`macos/`) — a fresh rewrite that runs as a plugin file
-  (`HexEditor.dylib`) inside [Nextpad++ macOS](https://github.com/notepad-plus-plus-macos).
+  (`HexEditor.dylib`) inside [Nextpad++](https://github.com/notepad-plus-plus-macos).
   ".dylib" is just the macOS file extension for a dynamically loaded library;
-  Notepad++ loads it on launch.
+  Nextpad++ loads it on launch.
 
 ## Features (macOS port v1.1.0)
 
@@ -35,7 +37,7 @@ This repo holds two versions of the same plugin:
 | RTL languages | Menus / dialogs / host chrome auto-flip under Hebrew and Arabic. The hex view itself stays LTR (Offset on the leading-physical edge, ASCII on the trailing) — hex dumps are universally LTR even for RTL-language developers, so flipping would break the canonical form |
 | Appearance | Semantic `NSColor` values throughout — dark mode and accent-colour preferences inherit from the host |
 
-The full feature inventory and divergences from the Windows version are tracked in [CHANGELOG.md](CHANGELOG.md).
+The full feature inventory and intentional divergences from the Windows version are tracked in [CHANGELOG.md](CHANGELOG.md).
 
 ## Install (macOS)
 
@@ -53,7 +55,9 @@ The install step copies the plugin and its language files to:
 ~/.notepad++/plugins/HexEditor/
 ```
 
-Restart Notepad++ macOS. You'll see a new **Plugins → HexEditor** submenu with seven entries:
+NOTE: The app name is expected to change as the rebranding from Notepad++ for macOS to Nextpad++ is completed.  The rebranding is not expected to affect this plugin as the name change has already been made throughout.
+
+Restart Nextpad++. You'll see a new **Plugins → HexEditor** submenu with seven entries:
 View in HEX, Compare HEX, Clear Compare Result, Insert Columns, Pattern Replace, Options, and Help.
 
 The build expects to find a checkout of `notepad-plus-plus-macos` next to this
@@ -87,17 +91,17 @@ the translator guide for users whose language isn't yet supported.
 There are three sets of tests, from fastest to slowest:
 
 1. **Unit tests** — exercise the plugin's pure logic (cursor math, edit
-   planning, search, parsing) without touching Notepad++ or any macOS UI.
+   planning, search, parsing) without touching Nextpad++ or any macOS UI.
    Run in milliseconds.
-2. **Smoke test** — loads the built plugin file and checks Notepad++ would
+2. **Smoke test** — loads the built plugin file and checks Nextpad++ would
    accept it (right exported functions, plugin name, menu entries).
    Runs in well under a second.
-3. **UI tests** — launch the real Notepad++ app with the plugin installed
+3. **UI tests** — launch the real Nextpad++ app with the plugin installed
    and drive it with synthetic clicks and keystrokes. ~14 minutes.
 
 The first two are fast and need nothing beyond the build, so they're bundled
 into one command. The UI tests are a separate command because they need a
-working Notepad++.app and they take over your keyboard and mouse for the
+working Nextpad++.app and they take over your keyboard and mouse for the
 duration:
 
 ```sh
