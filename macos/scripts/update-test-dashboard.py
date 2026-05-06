@@ -83,10 +83,16 @@ TIER_ORDER = [
 ]
 
 STATUS_ICON = {
-    "pass":    "✅",
-    "fail":    "❌",
-    "skipped": "⊘",
-    "unknown": "❓",
+    # Use single-cell-wide Unicode glyphs so markdownlint MD060 (which checks
+    # pipe alignment by visual cell width, not character count) doesn't flag
+    # the table. ✅ / ❓ are East-Asian-Wide — they render as 2 cells, which
+    # shifts every following pipe in the row one column right of the header
+    # row's pipe and breaks the rule even though the character positions
+    # match. ✓ / ✗ / − / ? are all "Neutral" width = 1 cell.
+    "pass":    "✓",
+    "fail":    "✗",
+    "skipped": "−",
+    "unknown": "?",
 }
 
 
