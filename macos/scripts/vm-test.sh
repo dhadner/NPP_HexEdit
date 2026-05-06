@@ -43,7 +43,7 @@
 # (the env var is set in the XCUITest helper's launchEnvironment so XCUI's
 # launch-services path forwards it). NPP-Mac is ad-hoc signed with no
 # entitlements, so SIP doesn't strip the variable. Runtime overhead measured
-# at ~15% on the Parallels VM (UI suite grows from ~22 min to ~25 min).
+# at ~15% on the Parallels VM (UI suite grows from ~46 min to ~53 min).
 
 set -euo pipefail
 

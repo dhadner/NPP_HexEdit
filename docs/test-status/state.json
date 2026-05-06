@@ -1,0 +1,38 @@
+{
+  "commit_sha": "7196afaf0b2ce535d292eab0a12708f64065b396",
+  "generated_at": "2026-05-06T19:36:28+00:00",
+  "last_kind": "full",
+  "schema_version": 1,
+  "tiers": {
+    "fuzz": {
+      "duration_sec": 249.0,
+      "last_passed_at": "2026-05-06T17:52:19Z",
+      "ran_at": "2026-05-06T17:52:19Z",
+      "status": "pass"
+    },
+    "smoke": {
+      "duration_sec": 0.0,
+      "last_passed_at": "2026-05-06T17:52:19Z",
+      "ran_at": "2026-05-06T17:52:19Z",
+      "status": "pass"
+    },
+    "ui": {
+      "duration_sec": 2754.0,
+      "last_passed_at": "2026-05-06T17:52:19Z",
+      "ran_at": "2026-05-06T17:52:19Z",
+      "status": "pass"
+    },
+    "unit": {
+      "duration_sec": 0.0,
+      "last_passed_at": "2026-05-06T17:52:19Z",
+      "ran_at": "2026-05-06T17:52:19Z",
+      "status": "pass"
+    },
+    "unit_asan": {
+      "duration_sec": 0.0,
+      "last_passed_at": "2026-05-06T17:52:19Z",
+      "ran_at": "2026-05-06T17:52:19Z",
+      "status": "pass"
+    }
+  }
+}

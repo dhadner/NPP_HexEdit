@@ -1,13 +1,24 @@
 # HexCore fuzz harnesses
 
-Four libFuzzer harnesses against the C++ parsers in `macos/src/core/HexCore.{h,cpp}`. Each is a single TU that exposes `LLVMFuzzerTestOneInput` and gets linked with `-fsanitize=fuzzer,address,undefined` so any OOB read, UB, or hang surfaces as a crash with a saved repro.
+Eight libFuzzer harnesses against the C++ parsers in `macos/src/core/HexCore.{h,cpp}` — every external-input boundary the plugin exposes. Each is a single TU that exposes `LLVMFuzzerTestOneInput` and gets linked with `-fsanitize=fuzzer,address,undefined` so any OOB read, UB, or hang surfaces as a crash with a saved repro.
+
+**Rectangular-clipboard path** (custom-UTI binary + text fallback):
 
 | Harness | Function under test | Attack surface |
 |---|---|---|
-| `fuzz_parseRectClipboardText` | `parseRectClipboardText` | Anything on the system pasteboard's text type — pasted with a rect destination selection active |
-| `fuzz_decodeRectPayload` | `decodeRectPayload` | The custom-UTI binary payload `org.notepad-plus-plus.HexEditor.rectangular`. Highest-risk parser — any process on the user's Mac can set this. |
+| `fuzz_parseRectClipboardText` | `parseRectClipboardText` | Pasteboard text type — pasted with a rect destination selection active |
+| `fuzz_decodeRectPayload` | `decodeRectPayload` | The custom-UTI binary payload `org.notepad-plus-plus.HexEditor.rectangular`. Any process on the user's Mac can set this. |
 | `fuzz_extractRectBytes` | `extractRectBytes` | Document buffer indexed by an attacker-influenced RectSelection — protects against bad shape sneaking past `makeRectSelection` / `decodeRectPayload` |
 | `fuzz_makeRectSelection` | `makeRectSelection` (+ `rectToRanges`) | Integer math against attacker-influenced offsets / widths |
+
+**General external-input surface** (added 2026-05-06):
+
+| Harness | Function under test | Attack surface |
+|---|---|---|
+| `fuzz_stripHexDumpAddressAndAscii` | `stripHexDumpAddressAndAscii` | The broadest surface — every line of every external-app paste runs through this multi-format cleaner (lldb / gdb / xxd / x64dbg / IDA / C-escape / C-array). |
+| `fuzz_parseSearchPattern` | `parseSearchPattern` | Find / Find-and-Replace dialog input. Auto-detects ASCII vs hex on every keystroke. |
+| `fuzz_parseHexClipboardText` | `parseHexClipboardText` | Linear hex-clipboard paste path (the rect harness covers the rect-shape variant; this covers the more common linear case). |
+| `fuzz_resolveGotoOffset` | `resolveGotoOffset` | Goto Offset dialog (Cmd+L). Decimal / `0x` hex / relative `+`/`-` offsets resolved against current cursor + document length — exercises wrap-around arithmetic at SIZE_MAX edges. |
 
 ## Setup (one-time)
 
@@ -66,7 +77,7 @@ To save crashing repros to disk:
 
 ## What success looks like
 
-A short ctest run (`ctest -L fuzz`) finishing in ~2 minutes total with no crashes is a clean pass. libFuzzer prints a final-stats line per harness:
+A short ctest run (`ctest -L fuzz`) finishing in ~4 minutes total (8 harnesses × 30 s) with no crashes is a clean pass. libFuzzer prints a final-stats line per harness:
 
 ```text
 #1234567 NEW    cov: 412 ft: 891 corp: 47/2048b lim: 4096 exec/s: 39000 ...
