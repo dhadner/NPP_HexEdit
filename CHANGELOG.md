@@ -8,7 +8,7 @@ own history in [HexEditor/change.log](HexEditor/change.log).
 
 The macOS port of Jens Lorenz's HexEditor — the venerable Notepad++
 plugin from 2006 — now runs natively on macOS and is distributed
-through the Notepad++ macOS plugin manager. v1.1.0 is the debut public
+through the Nextpad++ plugin manager. v1.1.0 is the debut public
 release; the v1.0.0 git tag below predates the host's plugin manager
 and was never installed by users.
 
@@ -122,7 +122,7 @@ documented under "Divergences from Windows" below.
 
 The macOS port deliberately diverges from the Windows plugin in a handful of places — every divergence preserves Windows feature semantics while adopting the platform-native shape:
 
-- **Compare HEX picks a file from disk** instead of comparing the two panes of a split-view editor. We can't replicate the Windows behaviour because Notepad++ macOS doesn't expose a plugin API for reading the contents of a second split pane. The file-picker approach has its own benefit: comparing the in-progress buffer against the saved version on disk is one step (pick the saved file), whereas on Windows it requires opening the saved file into a second split first.
+- **Compare HEX picks a file from disk** instead of comparing the two panes of a split-view editor. We can't replicate the Windows behaviour because Nextpad++ doesn't expose a plugin API for reading the contents of a second split pane. The file-picker approach has its own benefit: comparing the in-progress buffer against the saved version on disk is one step (pick the saved file), whereas on Windows it requires opening the saved file into a second split first.
 - **Goto Offset** is reached via Cmd+L (matches macOS browser/Pages convention) and a context-menu entry; the host's `IDM_SEARCH_GOTOLINE` plumbing isn't intercepted yet.
 - **No `Capital` preference.** Copy emits lowercase hex text (matching Windows `hexMaskNorm`); on-screen rendering is lowercase too. The macOS port doesn't expose Windows' `Capital` toggle.
 - **No font / colour pickers in Options.** The host owns appearance via `NSAppearance` + Style Configurator; plugin colours are semantic and follow the host automatically.
@@ -136,7 +136,7 @@ Three tiers, all green at release. See [DEVELOPER.md](DEVELOPER.md) for setup an
 
 - **HexCore unit tests** — pure C++, ~750 assertions covering cursor math, edit planners, clipboard format/parse helpers, view-mode mappings, byte-pattern search, byte-diff computation, and rectangle extract / format / parse paths (including the external-text inbound parser with mixed separators, raw-ASCII fallback, CRLF tolerance, and shape-mismatch rejection). Runs in milliseconds. `ctest -L unit`.
 - **Plugin smoke tests** — `dlopen`s the dylib, asserts the 5 NPP exports, the `getName()` value, and the 7 menu entries with English titles. Forces `AppleLanguages = en` so the assertions stay valid on any locale. `ctest -L smoke`.
-- **XCTest UI** — full suite against the running Notepad++.app: hex-toggle, undo/redo, append-at-EOF, cut/copy/paste/delete round-trips (linear and rectangular, including 1.5 GB scale), rectangle drag and extend, view-submode rendering, dialog flows for Find / Find-Replace / Goto / Address Width / Columns / Insert Columns / Pattern Replace / Compare HEX / Options, bit-precise binary editing, validation-error paths, the bookmark click, status-label glyph clipping, hex-view row-0 visibility, cursor + selection mirroring from Scintilla, mirror-cursor rendering toggle, and the localization cascade for all 13 shipped tags + an unsupported-language fallback. Driven by the `HEX_EDITOR_LANG_OVERRIDE` env var (set via `launchEnvironment`) for cascade tests, since `defaults write` from the XCUI runner is sandbox-redirected. Each run writes a Markdown summary at `macos/ui-tests-xcode/build/test-results.md`.
+- **XCTest UI** — full suite against the running Nextpad++.app: hex-toggle, undo/redo, append-at-EOF, cut/copy/paste/delete round-trips (linear and rectangular, including 1.5 GB scale), rectangle drag and extend, view-submode rendering, dialog flows for Find / Find-Replace / Goto / Address Width / Columns / Insert Columns / Pattern Replace / Compare HEX / Options, bit-precise binary editing, validation-error paths, the bookmark click, status-label glyph clipping, hex-view row-0 visibility, cursor + selection mirroring from Scintilla, mirror-cursor rendering toggle, and the localization cascade for all 13 shipped tags + an unsupported-language fallback. Driven by the `HEX_EDITOR_LANG_OVERRIDE` env var (set via `launchEnvironment`) for cascade tests, since `defaults write` from the XCUI runner is sandbox-redirected. Each run writes a Markdown summary at `macos/ui-tests-xcode/build/test-results.md`.
 - **Pre-commit gate** — `macos/scripts/pre-commit-tests.sh` runs all five tiers (unit, unit+ASan/UBSan, smoke, fuzz, full UI) and is the required gate before merging to master.
 
 ### Plumbing
@@ -153,7 +153,7 @@ Three tiers, all green at release. See [DEVELOPER.md](DEVELOPER.md) for setup an
 
 ## v1.0.0 — premature tag (not distributed)
 
-A pre-release tag from before Notepad++ macOS exposed plugin-manager
+A pre-release tag from before Nextpad++ exposed plugin-manager
 distribution. v1.0.0 was never installed by users; it exists only in
 the git history. v1.1.0 above is the debut public release.
 
@@ -226,7 +226,7 @@ Menu wiring on Windows is in [Hex.cpp:100-117](HexEditor/src/Hex.cpp#L100-L117);
 - **Go to Offset…** in the context menu (also bound to **Cmd+L** in the hex view, matching the macOS browser/Pages convention for jump-to-location). Single-field NSAlert that auto-detects format: decimal (`1234`), hex (`0x4A2`), or relative (`+0x10`, `-100`). Underscores and commas are accepted as digit separators. Mirrors the Windows [GotoDialog.cpp](HexEditor/src/UserDlg/GotoDialog.cpp) feature without porting the Win32 multi-mode UI; the parser lives in `HexCore::resolveGotoOffset`. Windows wires Goto via the host's `IDM_SEARCH_GOTOLINE` ([Hex.cpp:818](HexEditor/src/Hex.cpp#L818)); on macOS that requires intercepting host menu commands — deferred — so for now the entry point is the context menu plus the keybinding.
 - **Find…** (Cmd+F) / **Find and Replace…** (Cmd+Alt+F) / **Find Next** (Cmd+G) / **Find Previous** (Cmd+Shift+G), all in the context menu and the hex view's `performKeyEquivalent:` (overriding the host's Edit menu so our Find handles the shortcut when the hex view has focus). Single text field auto-detects ASCII vs hex bytes — explicit `0x` prefix or hex digits with separators (`DE AD BE EF`) trigger byte-pattern search; everything else searches as ASCII. Match-case (ASCII only) and wrap-around toggles persist across launches via the existing `org.notepad-plus-plus.HexEditor` prefs suite. Replace All applies all replacements inside one Scintilla undo group, so a single Cmd+Z reverts the whole sweep. The pure search engine lives in `HexCore::findBytePattern` + `parseSearchPattern` — covered by 14 new unit assertions including hex/ASCII auto-detect, forward/backward, wrap edges, and case-insensitive matching. Windows hosts a 819-LOC Win32 dialog with transparency, multi-type combo with history, in-selection scoping, and several coding modes ([UserDlg/FindReplaceDialog.cpp](HexEditor/src/UserDlg/FindReplaceDialog.cpp)) — those layers are intentionally not ported in favour of the macOS-idiomatic single dialog.
 - **Insert Columns…** in the plugin menu — three-field NSAlert (pattern, count, position) inserts a hex pattern into every row at a chosen column position and grows the column count to match. Mirrors Windows [PatternDialog.cpp:139](HexEditor/src/UserDlg/PatternDialog.cpp#L139) `onInsert`: pattern bytes cycle to fill `count × bytesPerCell` bytes per row; the entire sweep is one Scintilla undo group (single Cmd+Z reverts the whole insertion); validation matches Windows ranges (count ≤ 128/bpc − currentColumns; position ∈ [0, currentColumns]). Hex view must be active; otherwise the menu item shows a directive instead of silently failing.
-- **Compare HEX** + **Clear Compare Result** in the plugin menu. Compare opens an `NSOpenPanel`, reads the chosen file, and highlights every byte cell in the current hex view whose underlying byte differs from the file (or sits beyond the shorter buffer's end). The diff math lives in `HexCore::computeByteDiffs`. Mirrors Windows [Hex.cpp:1473](HexEditor/src/Hex.cpp#L1473) `DoCompare` semantics — bytes-only-on-one-side count as differing — but skips the Win32 `.cmp` cache file and the two-Scintilla-handle dance in favour of a single `std::vector<bool>` mask that the cell renderer consults in `willDisplayCell:`. **Divergence from Windows:** Windows compares the two panes of Notepad++'s split-view editor; the macOS port asks the user to pick a file from disk. We can't replicate the Windows behavior because Notepad++ macOS doesn't yet expose a plugin API for reading the contents of a second split pane. The file-picker approach has its own benefit: comparing the in-progress buffer against the saved version on disk is one step (pick the saved file), whereas on Windows it requires opening the saved file into a second split first. Test hook `--test-compare-with=<path>` lets the XCTest harness drive Compare without trying to automate `NSOpenPanel`.
+- **Compare HEX** + **Clear Compare Result** in the plugin menu. Compare opens an `NSOpenPanel`, reads the chosen file, and highlights every byte cell in the current hex view whose underlying byte differs from the file (or sits beyond the shorter buffer's end). The diff math lives in `HexCore::computeByteDiffs`. Mirrors Windows [Hex.cpp:1473](HexEditor/src/Hex.cpp#L1473) `DoCompare` semantics — bytes-only-on-one-side count as differing — but skips the Win32 `.cmp` cache file and the two-Scintilla-handle dance in favour of a single `std::vector<bool>` mask that the cell renderer consults in `willDisplayCell:`. **Divergence from Windows:** Windows compares the two panes of Notepad++'s split-view editor; the macOS port asks the user to pick a file from disk. We can't replicate the Windows behavior because Nextpad++ doesn't yet expose a plugin API for reading the contents of a second split pane. The file-picker approach has its own benefit: comparing the in-progress buffer against the saved version on disk is one step (pick the saved file), whereas on Windows it requires opening the saved file into a second split first. Test hook `--test-compare-with=<path>` lets the XCTest harness drive Compare without trying to automate `NSOpenPanel`.
 - **Pattern Replace…** in the plugin menu — single-field NSAlert that fills the current hex selection with a repeating hex pattern. Mirrors Windows [PatternDialog.cpp:249](HexEditor/src/UserDlg/PatternDialog.cpp#L249) `onReplace` for both the `eSel::HEX_SEL_NORM` (linear) and `eSel::HEX_SEL_BLOCK` (rectangular) cases. Pattern bytes cycle to fill the entire selection length (e.g. linear selection of 4 bytes + pattern `AB CD` → `AB CD AB CD`); the rectangular path restarts the pattern at the first byte of each row, matching Windows. The whole replacement is a single Scintilla undo group. Refuses to operate without a selection or hex view, surfacing a clear directive in either case.
 - All view-mode and gutter settings persist across launches via an `NSUserDefaults` suite at `org.notepad-plus-plus.HexEditor`. Keys: `bytesPerCell`, `notationBinary`, `littleEndian`, `addressWidth`, `columns`. Loaded in `setInfo`, saved on every change.
 - Four accessibility identifiers exposed for UI test reach (`hex-editor.root`, `hex-editor.table`, `hex-editor.status`, `hex-editor.dialog.input`)
@@ -294,7 +294,7 @@ Asserts that `setInfo`, `getName`, `getFuncsArray`, `beNotified`, and `messagePr
 
 **Tier 3 — XCTest UI tests** ([macos/ui-tests-xcode/](macos/ui-tests-xcode/))
 
-Host-level UI automation against the Notepad++ macOS app with the plugin installed. Built as an XcodeGen-generated `.xcodeproj` (spec at [project.yml](macos/ui-tests-xcode/project.yml), generated project gitignored) plus a minimal `TestRunner` stub host required by macOS UI test bundles — SwiftPM XCTest packages cannot host `XCUIApplication`. Runs via:
+Host-level UI automation against the Nextpad++ app with the plugin installed. Built as an XcodeGen-generated `.xcodeproj` (spec at [project.yml](macos/ui-tests-xcode/project.yml), generated project gitignored) plus a minimal `TestRunner` stub host required by macOS UI test bundles — SwiftPM XCTest packages cannot host `XCUIApplication`. Runs via:
 
 ```sh
 macos/ui-tests-xcode/run-tests.sh
@@ -302,11 +302,11 @@ macos/ui-tests-xcode/run-tests.sh
 ctest --test-dir macos/build-universal -L xctest --output-on-failure
 ```
 
-Set `NPP_MACOS_APP=/path/to/Notepad++.app` to override the default host app path.
+Set `NPP_MACOS_APP=/path/to/Nextpad++.app` to override the default host app path.
 
 Test cases in [HexEditorUITests.swift](macos/ui-tests-xcode/Tests/HexEditorUITests.swift):
 
-- `testHostApplicationLaunches` — `XCUIApplication(url:)` launches and foregrounds Notepad++ macOS
+- `testHostApplicationLaunches` — `XCUIApplication(url:)` launches and foregrounds Nextpad++
 - `testHexEditorPluginMenuIsPresent` — the `HexEditor` submenu appears under `Plugins`
 - `testViewInHexToggle` — toggles the hex overlay on and off, asserting the table appears and disappears
 - `testStatusLabelReportsByteCount` — seeded buffer's byte count is reported in the status label
