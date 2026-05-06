@@ -1,0 +1,16 @@
+{
+  "//1": "Three C++ analyzers fight for ownership of diagnostics in this workspace: the Microsoft C/C++ extension (ms-vscode.cpptools), clangd (llvm-vs-code-extensions.vscode-clangd), and the older mitaki28.vscode-clang. They produce overlapping or conflicting errors — most notably 'no member named clamp in std' and 'HexCore.h not found' that don't match the actual CMake build. clangd is the canonical source here (it reads compile_commands.json via macos/.clangd and reports 0 source errors); the other two run with weaker default configurations and surface noise.",
+
+  "//2": "Disable Microsoft IntelliSense — it's still useful for #include navigation if you Cmd-click headers (Default mode), but its analysis pass is what produces the std::clamp false positives. clangd handles all the same operations.",
+  "C_Cpp.intelliSenseEngine": "disabled",
+
+  "//3": "Disable mitaki28.vscode-clang's diagnostic + completion passes. The extension hasn't had a release since 2018 and runs raw `clang -fsyntax-only` with no project-aware flags, so it can't find the C++17 stdlib or the macos/src/core include path. Leaving its formatter on is harmless.",
+  "clang.diagnostic.enable": false,
+  "clang.completion.enable": false,
+
+  "//4": "Markdownlint MD013 (line-length) is intentionally not enforced on this project — the CHANGELOG and ReleaseNotes use one paragraph per line on purpose so GitHub renders them naturally without soft wraps. Same for MD024 (duplicate headings) which fires on the per-version 'Tests' subheading style — we already disambiguate where we can.",
+  "markdownlint.config": {
+    "MD013": false,
+    "MD024": { "siblings_only": true }
+  }
+}

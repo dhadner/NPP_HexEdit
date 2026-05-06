@@ -1,4 +1,4 @@
-/* Notepad++ HEX-Editor — English (en)
+/* Notepad++ HexEditor — English (en)
  *
  * Canonical translation source. The plugin reads this file at runtime; if it is
  * missing, the embedded English defaults in HexEditor.mm carry the UI.
@@ -8,12 +8,13 @@
  * translate the values, and install via the macos/CMakeLists.txt rules.
  */
 
-/* Plugin menu (Plugins > HEX-Editor > …) */
+/* Plugin menu (Plugins > HexEditor > …) */
 "menu.plugin.viewInHex"            = "View in HEX";
 "menu.plugin.compareHex"           = "Compare HEX";
 "menu.plugin.clearCompareResult"   = "Clear Compare Result";
 "menu.plugin.insertColumns"        = "Insert Columns...";
 "menu.plugin.patternReplace"       = "Pattern Replace...";
+"menu.plugin.options"              = "Options...";
 "menu.plugin.help"                 = "Help...";
 
 /* Right-click context menu on the hex view */
@@ -23,6 +24,9 @@
 "menu.context.copy"                = "Copy";
 "menu.context.paste"               = "Paste";
 "menu.context.delete"              = "Delete";
+"menu.context.selectAll"           = "Select All";
+"menu.context.selectToStart"       = "Select to Start of File";
+"menu.context.selectToEnd"         = "Select to End of File";
 "menu.context.cutBinary"           = "Cut Binary Content";
 "menu.context.copyBinary"          = "Copy Binary Content";
 "menu.context.pasteBinary"         = "Paste Binary Content";
@@ -53,23 +57,23 @@
 "button.cancel"                    = "Cancel";
 
 /* App / dialog identity */
-"app.title"                        = "HEX-Editor";
-"app.titleMac"                     = "HEX-Editor for macOS";
-"app.titleCompare"                 = "HEX-Editor Compare";
+"app.title"                        = "HexEditor";
+"app.titleMac"                     = "HexEditor for macOS";
+"app.titleCompare"                 = "HexEditor Compare";
 
 /* Address Width dialog */
 "addressWidth.title"               = "Address Width";
-"addressWidth.message"             = "Number of digits in the offset column (%d–%d).";
-"addressWidth.invalidRange"        = "Only values between %d and %d possible.";
+"addressWidth.message"             = "Number of digits in the offset column (%1$d–%2$d).";
+"addressWidth.invalidRange"        = "Only values between %1$d and %2$d possible.";
 
 /* Columns dialog */
 "columns.title"                    = "Columns";
-"columns.message"                  = "Number of cells per row (1–%d at the current bit width).";
-"columns.invalidMaximum"           = "Maximum of %d bytes can be shown in a row.";
+"columns.message"                  = "Number of cells per row (1–%1$d at the current bit width).";
+"columns.invalidMaximum"           = "Maximum of %1$d bytes can be shown in a row.";
 
 /* Go to Offset dialog */
 "goto.title"                       = "Go to Offset";
-"goto.message"                     = "Enter a byte offset.\n  • Decimal: 1234\n  • Hex: 0x4A2 (or 0X4A2)\n  • Relative: +0x10 jumps forward, -100 jumps back\n\nCurrent: 0x%0*zx    End: 0x%0*zx";
+"goto.message"                     = "Enter a byte offset.\n  • Decimal: 1234\n  • Hex: 0x4A2 (or 0X4A2)\n  • Relative: +0x10 jumps forward, -100 jumps back\n\nCurrent: 0x%1$@    End: 0x%2$@";
 "goto.button"                      = "Go";
 "goto.placeholder"                 = "e.g. 0x1F or +16";
 "goto.errorParse"                  = "Could not parse the offset. Use a decimal value, a 0x-prefixed hex value, or a + / - prefix for relative jumps.";
@@ -96,64 +100,97 @@
 "find.errorReplaceLength"          = "Current selection does not match the find pattern's length.";
 "find.errorReplaceFailedShort"     = "Replacement failed.";
 "find.replacedSingular"            = "Replaced 1 occurrence.";
-"find.replacedPlural"              = "Replaced %d occurrences.";
+"find.replacedPlural"              = "Replaced %1$d occurrences.";
 
 /* Compare HEX */
 "compare.openHexFirstCompare"      = "Open the hex view (View in HEX) before using Compare HEX.";
 "compare.openHexFirstRun"          = "Open the hex view (View in HEX) before running Compare.";
 "compare.errorNoFile"              = "No comparison file selected.";
-"compare.errorReadFile"            = "Could not read %@: %@";
+"compare.errorReadFile"            = "Could not read %1$@: %2$@";
 "compare.errorReadUnknown"         = "unknown error";
 "compare.errorFailed"              = "Compare failed.";
 "compare.openPanelTitle"           = "Compare HEX with…";
 "compare.openPanelMessage"         = "Pick a file to compare against the current buffer.";
 "compare.summaryMatch"             = "Files match.";
 "compare.summaryDifferSingular"    = "1 byte differs.\nUse Clear Compare Result to remove the highlight.";
-"compare.summaryDifferPlural"      = "%d bytes differ.\nUse Clear Compare Result to remove the highlight.";
+"compare.summaryDifferPlural"      = "%1$d bytes differ.\nUse Clear Compare Result to remove the highlight.";
 "compare.noActiveResult"           = "No active comparison to clear.";
 
 /* Insert Columns */
 "insertColumns.openHexFirst"       = "Open the hex view (View in HEX) before using Insert Columns.";
 "insertColumns.title"              = "Insert Columns";
-"insertColumns.message"            = "Insert a hex pattern into every row at a chosen column position. Each row grows by (count × %d) bytes; the column count grows by `count`.\n\nPattern: hex bytes only (e.g. 0x00 or DE AD).\nCount: 1 to %d at the current %d-bit grouping.\nPosition: 0 to %d (current column count).";
+"insertColumns.message"            = "Insert a hex pattern into every row at a chosen column position. Each row grows by (count × %1$d) bytes; the column count grows by `count`.\n\nPattern: hex bytes only (e.g. 0x00 or DE AD).\nCount: 1 to %2$d at the current %3$d-bit grouping.\nPosition: 0 to %4$d (current column count).";
 "insertColumns.button"             = "Insert";
 "insertColumns.placeholder.pattern"  = "Pattern (hex): 0xFF or DE AD";
 "insertColumns.placeholder.count"    = "Count (columns to insert)";
 "insertColumns.placeholder.position" = "Position (column index, 0 = left edge)";
 "insertColumns.errorEmptyPattern"  = "Pattern is empty.";
 "insertColumns.errorParsePattern"  = "Pattern must be a sequence of hex bytes (e.g. 0x00, DE AD BE EF).";
-"insertColumns.errorRangeCount"    = "Column count must be between 1 and %d at the current bit width.";
-"insertColumns.errorRangePosition" = "Insert position must be between 0 and %d (the current column count).";
+"insertColumns.errorRangeCount"    = "Column count must be between 1 and %1$d at the current bit width.";
+"insertColumns.errorRangePosition" = "Insert position must be between 0 and %1$d (the current column count).";
 "insertColumns.errorBufferEmpty"   = "Buffer is empty — nothing to insert into.";
 "insertColumns.errorRowSize"       = "Invalid current row size.";
 "insertColumns.errorFailed"        = "Insert failed.";
-"insertColumns.summarySingularRows" = "Inserted %d column%@ across 1 row.";
-"insertColumns.summaryPluralRows"   = "Inserted %d column%@ across %d rows.";
+"insertColumns.summarySingularRows" = "Inserted %1$d column%2$@ across 1 row.";
+"insertColumns.summaryPluralRows"   = "Inserted %1$d column%2$@ across %3$d rows.";
 
 /* Pattern Replace */
 "patternReplace.openHexFirst"      = "Open the hex view (View in HEX) before using Pattern Replace.";
 "patternReplace.requireSelection"  = "Select something in the hex view first — Pattern Replace fills the selection.";
 "patternReplace.title"             = "Pattern Replace";
-"patternReplace.message"           = "Fill the current %zu-byte selection with a repeating hex pattern.\n\nPattern: hex bytes only (e.g. 0xFF or DE AD).";
+"patternReplace.message"           = "Fill the current %1$zu-byte selection with a repeating hex pattern.\n\nPattern: hex bytes only (e.g. 0xFF or DE AD).";
 "patternReplace.button"            = "Replace";
 "patternReplace.placeholder"       = "Pattern (hex): 0xFF or DE AD";
 "patternReplace.errorEmptyPattern" = "Pattern is empty.";
 "patternReplace.errorParsePattern" = "Pattern must be a sequence of hex bytes (e.g. 0xFF or DE AD BE EF).";
 "patternReplace.errorFailed"       = "Pattern Replace failed.";
 "patternReplace.summarySingular"   = "Replaced 1 byte with the pattern.";
-"patternReplace.summaryPlural"     = "Replaced %d bytes with the pattern.";
+"patternReplace.summaryPlural"     = "Replaced %1$d bytes with the pattern.";
 
 /* Status bar (substring-matched by UI tests — wording is contractual) */
 "status.empty"                     = "Current document is empty.";
-"status.showing"                   = "Showing %zu bytes.";
-"status.showingTruncated"          = "Showing %zu of %zu bytes. Preview is truncated for responsiveness.";
+"status.showing"                   = "Showing %1$zu bytes.";
+"status.rectangle"                 = "Rectangle: %1$lu × %2$lu (%3$lu bytes)";
+
+/* Rectangular paste error dialogs (strict shape-match, see DEVELOPER.md) */
+"paste.rect.errorNeedsRectDestination" = "Destination must be a rectangular selection of %1$lu × %2$lu bytes. Option-drag (or Shift+Option-drag, per Options) to create one.";
+"paste.rect.errorShapeMismatch"      = "Destination is the wrong size — must be %1$lu bytes wide and %2$lu bytes high.";
+
+/* Pattern Replace — rectangular variant (per-row pattern restart) */
+"patternReplace.messageRect"         = "Fill the current %1$lu × %2$lu rectangle with a repeating hex pattern.\nThe pattern restarts at the first byte of each row.\n\nPattern: hex bytes only (e.g. 0xFF or DE AD).";
+"patternReplace.summaryRect"         = "Filled %1$lu × %2$lu rectangle (%3$lu bytes) with the pattern.";
 
 /* About / help dialog */
-"about.body"                       = "Native macOS port of the Notepad++ HEX-Editor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.";
+/* "N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+" includes U+2060 Word Joiners between every adjacent
+   pair of characters so the product name is atomic against both word-
+   wrap (which targets the '+' boundary) and macOS hyphenation (which
+   was breaking it after "Note"). The body refers to the plugin's
+   origin (a Notepad++ plugin on Windows ported to macOS), not the
+   running host (which on Mac is Nextpad++). */
+"about.body"                       = "Native macOS port of the N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+ HEX-Editor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.";
+/* Plugin version line. %@ is the version string (e.g. "1.1.0"). */
+"about.version"                    = "Version %1$@";
+/* GitHub project URL line. Hard-coded — translators don't localize it. */
+"about.url"                        = "Project: https://github.com/dhadner/NPP_HexEdit";
 /* Diagnostic line in the About dialog — names the .strings file currently in
    use, so users (and the cascade XCTest) can see at a glance whether their
    translation loaded. Each shipped .strings file declares its own tag. */
 "about.localeTag"                  = "Strings: en";
+/* Pointer to the translator-facing LOCALIZATION.md guide on GitHub.
+   Shown directly under the locale tag in the About dialog so a curious
+   user (especially one whose preferred language isn't yet supported)
+   can find the contribution path in one click. */
+"about.localizationGuide"          = "Help translate: https://github.com/dhadner/NPP_HexEdit/blob/master/LOCALIZATION.md";
+
+/* Quit-time clipboard prompt (Office/Word pattern). Shown when the user
+   has copied a large selection in the HEX view and HEX-Editor is about
+   to quit; the bytes vanish unless materialized. %1$@ is a size like
+   "2.0 GB" or "150.0 MB". Trivial-size clipboards (≤ 16 MB) materialize
+   silently and don't trigger this. */
+"clipboard.saveOnQuit.title"       = "Keep clipboard contents?";
+"clipboard.saveOnQuit.body"        = "You copied %1$@ from the HEX view. Keep it on the clipboard so other apps can paste it after HEX-Editor closes? Discarding releases the memory immediately.";
+"clipboard.saveOnQuit.keepButton"  = "Keep";
+"clipboard.saveOnQuit.discardButton" = "Discard";
 
 /* Generic error paths used when toggling between Scintilla / hex view */
 "editor.noActiveBuffer"            = "No active editor buffer is available.";
@@ -162,3 +199,16 @@
 /* Column headers in the hex table */
 "table.header.offset"              = "Offset";
 "table.header.ascii"               = "ASCII";
+
+/* Help popovers (shared) */
+"help.button.axLabel"              = "Help";
+
+/* Options dialog (Plugins > HexEditor > Options...) */
+"options.title"                    = "HexEditor Options";
+"options.message"                  = "Plugin-wide preferences. Reset restores the defaults shown below; click Save to apply.";
+"options.button.apply"             = "Apply";
+"options.button.reset"             = "Reset to Defaults";
+"options.rectModifier.label"       = "Modifier key for rectangular (block) selection drag:";
+"options.rectModifier.option"      = "Option (default; matches the Windows HexEditor plugin)";
+"options.rectModifier.shiftOption" = "Shift+Option (matches VS Code)";
+"options.rectModifier.help"        = "While dragging in the hex or ASCII pane, holding this modifier turns the drag into a rectangular (block) selection — the same kind of selection used by hex editors and column-mode text editors.\n\nOption is the default — it matches the Windows HexEditor plugin and the column-select convention on macOS. Pick Shift+Option if your muscle memory comes from Visual Studio Code.";

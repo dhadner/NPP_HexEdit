@@ -1,4 +1,4 @@
-# HEX-Editor macOS port scaffold
+# HexEditor macOS port scaffold
 
 This directory contains the initial native plugin target for the Notepad++ macOS port. It builds `HexEditor.dylib` with the macOS plugin ABI from `NppPluginInterfaceMac.h`.
 

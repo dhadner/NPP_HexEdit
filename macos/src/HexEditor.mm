@@ -10,13 +10,22 @@
 #include <cstdint>
 #include <dlfcn.h>
 #include <iomanip>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <string>
 #include <vector>
 
-static const char *PLUGIN_NAME = "HEX-Editor";
-static const int NB_FUNC = 6;
+// Plugin version string — normally injected by CMake's target_compile_definitions
+// (`HEX_PLUGIN_VERSION="${PROJECT_VERSION}"`). The fallback here exists only so
+// IDE indexers that don't see CMake's flags can parse this file; the shipped
+// build always uses the CMake-provided value.
+#ifndef HEX_PLUGIN_VERSION
+#define HEX_PLUGIN_VERSION "0.0.0"
+#endif
+
+static const char *PLUGIN_NAME = "HexEditor";
+static const int NB_FUNC = 7;
 
 // MARK: - Localization
 //
@@ -190,12 +199,13 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         defaults = @{
-            // Plugin menu (Plugins > HEX-Editor > …)
+            // Plugin menu (Plugins > HexEditor > …)
             @"menu.plugin.viewInHex":            @"View in HEX",
             @"menu.plugin.compareHex":           @"Compare HEX",
             @"menu.plugin.clearCompareResult":   @"Clear Compare Result",
             @"menu.plugin.insertColumns":        @"Insert Columns...",
             @"menu.plugin.patternReplace":       @"Pattern Replace...",
+            @"menu.plugin.options":              @"Options...",
             @"menu.plugin.help":                 @"Help...",
 
             // Right-click context menu on the hex view
@@ -205,6 +215,9 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"menu.context.copy":                @"Copy",
             @"menu.context.paste":               @"Paste",
             @"menu.context.delete":              @"Delete",
+            @"menu.context.selectAll":           @"Select All",
+            @"menu.context.selectToStart":       @"Select to Start of File",
+            @"menu.context.selectToEnd":         @"Select to End of File",
             @"menu.context.cutBinary":           @"Cut Binary Content",
             @"menu.context.copyBinary":          @"Copy Binary Content",
             @"menu.context.pasteBinary":         @"Paste Binary Content",
@@ -235,23 +248,23 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"button.cancel":                    @"Cancel",
 
             // App / dialog identity
-            @"app.title":                        @"HEX-Editor",
-            @"app.titleMac":                     @"HEX-Editor for macOS",
-            @"app.titleCompare":                 @"HEX-Editor Compare",
+            @"app.title":                        @"HexEditor",
+            @"app.titleMac":                     @"HexEditor for macOS",
+            @"app.titleCompare":                 @"HexEditor Compare",
 
             // Address Width dialog
             @"addressWidth.title":               @"Address Width",
-            @"addressWidth.message":             @"Number of digits in the offset column (%d–%d).",
-            @"addressWidth.invalidRange":        @"Only values between %d and %d possible.",
+            @"addressWidth.message":             @"Number of digits in the offset column (%1$d–%2$d).",
+            @"addressWidth.invalidRange":        @"Only values between %1$d and %2$d possible.",
 
             // Columns dialog
             @"columns.title":                    @"Columns",
-            @"columns.message":                  @"Number of cells per row (1–%d at the current bit width).",
-            @"columns.invalidMaximum":           @"Maximum of %d bytes can be shown in a row.",
+            @"columns.message":                  @"Number of cells per row (1–%1$d at the current bit width).",
+            @"columns.invalidMaximum":           @"Maximum of %1$d bytes can be shown in a row.",
 
             // Go to Offset dialog
             @"goto.title":                       @"Go to Offset",
-            @"goto.message":                     @"Enter a byte offset.\n  • Decimal: 1234\n  • Hex: 0x4A2 (or 0X4A2)\n  • Relative: +0x10 jumps forward, -100 jumps back\n\nCurrent: 0x%0*zx    End: 0x%0*zx",
+            @"goto.message":                     @"Enter a byte offset.\n  • Decimal: 1234\n  • Hex: 0x4A2 (or 0X4A2)\n  • Relative: +0x10 jumps forward, -100 jumps back\n\nCurrent: 0x%1$@    End: 0x%2$@",
             @"goto.button":                      @"Go",
             @"goto.placeholder":                 @"e.g. 0x1F or +16",
             @"goto.errorParse":                  @"Could not parse the offset. Use a decimal value, a 0x-prefixed hex value, or a + / - prefix for relative jumps.",
@@ -278,63 +291,89 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"find.errorReplaceLength":          @"Current selection does not match the find pattern's length.",
             @"find.errorReplaceFailedShort":    @"Replacement failed.",
             @"find.replacedSingular":            @"Replaced 1 occurrence.",
-            @"find.replacedPlural":              @"Replaced %d occurrences.",
+            @"find.replacedPlural":              @"Replaced %1$d occurrences.",
 
             // Compare HEX
             @"compare.openHexFirstCompare":      @"Open the hex view (View in HEX) before using Compare HEX.",
             @"compare.openHexFirstRun":          @"Open the hex view (View in HEX) before running Compare.",
             @"compare.errorNoFile":              @"No comparison file selected.",
-            @"compare.errorReadFile":            @"Could not read %@: %@",
+            @"compare.errorReadFile":            @"Could not read %1$@: %2$@",
             @"compare.errorReadUnknown":         @"unknown error",
             @"compare.errorFailed":              @"Compare failed.",
             @"compare.openPanelTitle":           @"Compare HEX with…",
             @"compare.openPanelMessage":         @"Pick a file to compare against the current buffer.",
             @"compare.summaryMatch":             @"Files match.",
             @"compare.summaryDifferSingular":    @"1 byte differs.\nUse Clear Compare Result to remove the highlight.",
-            @"compare.summaryDifferPlural":      @"%d bytes differ.\nUse Clear Compare Result to remove the highlight.",
+            @"compare.summaryDifferPlural":      @"%1$d bytes differ.\nUse Clear Compare Result to remove the highlight.",
             @"compare.noActiveResult":           @"No active comparison to clear.",
 
             // Insert Columns
             @"insertColumns.openHexFirst":       @"Open the hex view (View in HEX) before using Insert Columns.",
             @"insertColumns.title":              @"Insert Columns",
-            @"insertColumns.message":            @"Insert a hex pattern into every row at a chosen column position. Each row grows by (count × %d) bytes; the column count grows by `count`.\n\nPattern: hex bytes only (e.g. 0x00 or DE AD).\nCount: 1 to %d at the current %d-bit grouping.\nPosition: 0 to %d (current column count).",
+            @"insertColumns.message":            @"Insert a hex pattern into every row at a chosen column position. Each row grows by (count × %1$d) bytes; the column count grows by `count`.\n\nPattern: hex bytes only (e.g. 0x00 or DE AD).\nCount: 1 to %2$d at the current %3$d-bit grouping.\nPosition: 0 to %4$d (current column count).",
             @"insertColumns.button":             @"Insert",
             @"insertColumns.placeholder.pattern": @"Pattern (hex): 0xFF or DE AD",
             @"insertColumns.placeholder.count":   @"Count (columns to insert)",
             @"insertColumns.placeholder.position": @"Position (column index, 0 = left edge)",
             @"insertColumns.errorEmptyPattern":  @"Pattern is empty.",
             @"insertColumns.errorParsePattern":  @"Pattern must be a sequence of hex bytes (e.g. 0x00, DE AD BE EF).",
-            @"insertColumns.errorRangeCount":    @"Column count must be between 1 and %d at the current bit width.",
-            @"insertColumns.errorRangePosition": @"Insert position must be between 0 and %d (the current column count).",
+            @"insertColumns.errorRangeCount":    @"Column count must be between 1 and %1$d at the current bit width.",
+            @"insertColumns.errorRangePosition": @"Insert position must be between 0 and %1$d (the current column count).",
             @"insertColumns.errorBufferEmpty":   @"Buffer is empty — nothing to insert into.",
             @"insertColumns.errorRowSize":       @"Invalid current row size.",
             @"insertColumns.errorFailed":        @"Insert failed.",
-            @"insertColumns.summarySingularRows": @"Inserted %d column%@ across 1 row.",
-            @"insertColumns.summaryPluralRows":   @"Inserted %d column%@ across %d rows.",
+            @"insertColumns.summarySingularRows": @"Inserted %1$d column%2$@ across 1 row.",
+            @"insertColumns.summaryPluralRows":   @"Inserted %1$d column%2$@ across %3$d rows.",
 
             // Pattern Replace
             @"patternReplace.openHexFirst":      @"Open the hex view (View in HEX) before using Pattern Replace.",
             @"patternReplace.requireSelection": @"Select something in the hex view first — Pattern Replace fills the selection.",
             @"patternReplace.title":             @"Pattern Replace",
-            @"patternReplace.message":           @"Fill the current %zu-byte selection with a repeating hex pattern.\n\nPattern: hex bytes only (e.g. 0xFF or DE AD).",
+            @"patternReplace.message":           @"Fill the current %1$zu-byte selection with a repeating hex pattern.\n\nPattern: hex bytes only (e.g. 0xFF or DE AD).",
             @"patternReplace.button":            @"Replace",
             @"patternReplace.placeholder":       @"Pattern (hex): 0xFF or DE AD",
             @"patternReplace.errorEmptyPattern": @"Pattern is empty.",
             @"patternReplace.errorParsePattern": @"Pattern must be a sequence of hex bytes (e.g. 0xFF or DE AD BE EF).",
             @"patternReplace.errorFailed":       @"Pattern Replace failed.",
             @"patternReplace.summarySingular":   @"Replaced 1 byte with the pattern.",
-            @"patternReplace.summaryPlural":     @"Replaced %d bytes with the pattern.",
+            @"patternReplace.summaryPlural":     @"Replaced %1$d bytes with the pattern.",
 
             // Status bar (substring-matched by UI tests, so wording is contractual)
             @"status.empty":                     @"Current document is empty.",
-            @"status.showing":                   @"Showing %zu bytes.",
-            @"status.showingTruncated":          @"Showing %zu of %zu bytes. Preview is truncated for responsiveness.",
+            @"status.showing":                   @"Showing %1$zu bytes.",
+            @"status.rectangle":                 @"Rectangle: %1$lu × %2$lu (%3$lu bytes)",
+
+            // Rectangular paste error dialogs (strict shape-match)
+            @"paste.rect.errorNeedsRectDestination": @"Destination must be a rectangular selection of %1$lu × %2$lu bytes. Option-drag (or Shift+Option-drag, per Options) to create one.",
+            @"paste.rect.errorShapeMismatch":      @"Destination is the wrong size — must be %1$lu bytes wide and %2$lu bytes high.",
+
+            // Pattern Replace — rectangular variant
+            @"patternReplace.messageRect":         @"Fill the current %1$lu × %2$lu rectangle with a repeating hex pattern.\nThe pattern restarts at the first byte of each row.\n\nPattern: hex bytes only (e.g. 0xFF or DE AD).",
+            @"patternReplace.summaryRect":         @"Filled %1$lu × %2$lu rectangle (%3$lu bytes) with the pattern.",
 
             // About / help dialog
-            @"about.body":                       @"Native macOS port of the Notepad++ HEX-Editor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.",
+            // U+2060 Word Joiners between every adjacent pair of
+            // characters keep "Notepad++" atomic against both word-wrap
+            // (which targets the '+' boundary) and macOS hyphenation
+            // (which was breaking it after "Note"). The body refers to
+            // the plugin's origin (a Notepad++ plugin on Windows that we
+            // ported), not the running host (Nextpad++ on Mac).
+            @"about.body":                       @"Native macOS port of the N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+ HEX-Editor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.",
+            @"about.version":                    @"Version %1$@",
+            @"about.url":                        @"Project: https://github.com/dhadner/NPP_HexEdit",
             // Embedded fallback when no .strings file is loaded — distinct from
             // any shipped tag so the cascade XCTest can detect this state.
             @"about.localeTag":                  @"Strings: (embedded)",
+            @"about.localizationGuide":          @"Help translate: https://github.com/dhadner/NPP_HexEdit/blob/master/LOCALIZATION.md",
+
+            // Quit-time clipboard prompt (Office/Word pattern). Shown when
+            // we hold an outstanding pasteboard promise larger than the
+            // silent-materialize threshold and HEX-Editor is about to quit.
+            // %1$@ is a human-readable size like "2.0 GB" or "150.0 MB".
+            @"clipboard.saveOnQuit.title":         @"Keep clipboard contents?",
+            @"clipboard.saveOnQuit.body":          @"You copied %1$@ from the HEX view. Keep it on the clipboard so other apps can paste it after HEX-Editor closes? Discarding releases the memory immediately.",
+            @"clipboard.saveOnQuit.keepButton":    @"Keep",
+            @"clipboard.saveOnQuit.discardButton": @"Discard",
 
             // Generic error path used when toggling between Scintilla / hex view
             @"editor.noActiveBuffer":            @"No active editor buffer is available.",
@@ -343,6 +382,68 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             // Column headers in the hex table
             @"table.header.offset":              @"Offset",
             @"table.header.ascii":               @"ASCII",
+
+            // Help popovers (shared)
+            @"help.button.axLabel":              @"Help",
+
+            // Options dialog
+            @"options.title":                    @"HexEditor Options",
+            @"options.message":                  @"Plugin-wide preferences. Reset restores the defaults shown below; click Save to apply.",
+            @"options.button.apply":             @"Apply",
+            @"options.button.reset":             @"Reset to Defaults",
+            // Tab labels — match the Windows HexEditor plugin's Options dialog
+            // (Start Layout, Startup, Colors, Font). Implementation phased in
+            // tab-by-tab; non-Start-Layout tabs ship as placeholders for now.
+            // See macos/design/options-dialog-reference.md for the truth model.
+            @"options.tab.startLayout":          @"Start Layout",
+            @"options.tab.startup":              @"Startup",
+            @"options.tab.colors":               @"Colors",
+            @"options.tab.font":                 @"Font",
+            @"options.tab.placeholder":          @"This tab will be populated in a future update.",
+
+            // Start Layout tab — initial state when the hex view opens.
+            @"options.startLayout.bits.8":       @"8-Bit",
+            @"options.startLayout.bits.16":      @"16-Bit",
+            @"options.startLayout.bits.32":      @"32-Bit",
+            @"options.startLayout.bits.64":      @"64-Bit",
+            @"options.startLayout.base.hex":     @"Hexadecimal",
+            @"options.startLayout.base.binary":  @"Binary",
+            @"options.startLayout.endian.big":   @"Big-Endian",
+            @"options.startLayout.endian.little":@"Little-Endian (Native)",
+            @"options.startLayout.columnCount":  @"Column Count:",
+            @"options.startLayout.addressWidth": @"Address Width:",
+            @"options.startLayout.bits.help":    @"Bytes packed into a single column of the hex view. 8-Bit shows one byte per column in address-ascending order — byte at offset N appears at column N (mod the row width). 16/32/64-Bit pack two/four/eight bytes per column and apply the Endianness setting to choose which byte appears first within each column. Multi-byte columns let you read interpreted integer values directly.",
+            @"options.startLayout.base.help":    @"Hexadecimal renders column values in base 16 (00–FF for an 8-bit column). Binary renders the same value as 0/1 digits — useful for inspecting bit-level flags.",
+            @"options.startLayout.endian.help":  @"Byte order within a multi-byte column. Big-Endian shows the most significant byte first — matches the wire-order of network traffic dumps and most file-format specs. Little-Endian shows the least significant byte first — matches the in-memory layout on macOS hardware (Apple Silicon and Intel are both little-endian; that's why this option is labelled \"Native\"). At 8-Bit there's no observable difference (single bytes are always shown in address-ascending order), but your choice is preserved — switch back to 16-Bit / 32-Bit / 64-Bit and the same endian setting applies.",
+            @"options.startLayout.columnCount.help": @"Number of columns per row in the hex view. Maximum depends on the bits-per-column setting (smaller columns allow more per row; the row never exceeds 128 bytes total).",
+            @"options.startLayout.addressWidth.help": @"Number of hex digits shown in the address gutter at the start of each row. 8 digits cover files up to 4 GB; 16 digits is the architectural maximum on a 64-bit system.",
+
+            // Startup tab — auto-engage on NPPN_BUFFERACTIVATED.
+            @"options.startup.extensions.label":   @"Extensions:",
+            @"options.startup.extensions.hint":    @"e.g.: .dat .bin .exe",
+            @"options.startup.extensions.help":    @"Space-separated list of file extensions for which the hex view auto-opens when you switch to that buffer. Each token is matched case-insensitively against the end of the path. Empty string disables this rule.",
+            @"options.startup.percent.label":      @"Control char count threshold (%):",
+            @"options.startup.percent.help":       @"Sample the first ~1 MB of the active buffer; if at least this percentage of bytes are control characters (below 0x20 excluding tab, CR, LF), auto-open the hex view. Useful for catching binary files whose extension wasn't anticipated. Set to 0 to disable.",
+
+            // Colors tab — per-category Text/Back colour wells.
+            @"options.colors.header.text":         @"Text",
+            @"options.colors.header.back":         @"Back",
+            @"options.colors.row.regularText":     @"Regular Text:",
+            @"options.colors.row.selection":       @"Selection:",
+            @"options.colors.row.compare":         @"Compare:",
+            @"options.colors.row.bookmark":        @"Bookmark:",
+            @"options.colors.row.currentLine":     @"Current Line:",
+            @"options.colors.help":                @"Pick the foreground (Text) and background (Back) colour for each highlight category. Leaving a well at its default lets the colour follow N⁠e⁠x⁠t⁠p⁠a⁠d⁠+⁠+'s Light/Dark setting automatically — pick a custom colour only if you want a fixed value that doesn't adapt to appearance changes. Reset (in the dialog footer) clears all overrides at once.",
+
+            // Font tab — typography + a couple of cosmetic toggles.
+            @"options.font.name":                  @"Font Name:",
+            @"options.font.size":                  @"Font Size:",
+            @"options.font.bold":                  @"Bold",
+            @"options.font.italic":                @"Italic",
+            @"options.font.underline":             @"Underline",
+            @"options.font.uppercaseHex":          @"Capital letters mode",
+            @"options.font.mirrorAsciiCursor":     @"Mirror Cursor as Rect",
+            @"options.font.help":                  @"Font Name and Font Size set the typeface used in the hex and ASCII panes (the address column tracks the same font). Bold / Italic / Underline modify the rendered glyphs without changing the underlying byte values. Capital letters mode uppercases the A-F hex digits in both the byte cells and the address column. Mirror Cursor as Rect outlines the corresponding cell in the inactive pane (the hex pane mirrors the ASCII caret as a rectangle and vice versa) so you can see exactly which byte the caret refers to in either view.",
         };
     });
     return defaults;
@@ -354,16 +455,47 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
 // are the final fallback so a missing key is never user-visible. Returns the key
 // itself only when nothing in the chain or defaults has it — that case shows up
 // as a literal "menu.context.foo" string in the UI, intentional dev signal.
+// True when `en-test` (a UI-layout stress locale, see `hexExpandedTestString`
+// below) is the highest-priority preferred language. Computed once per
+// L() lookup — the cost is one NSArray.firstObject + isEqualToString:,
+// which is negligible against the dictionary walk we already do.
+static BOOL hexLayoutStressLocaleActive()
+{
+    NSString *first = [hexUserPreferredLanguages() firstObject];
+    return [first isEqualToString:@"en-test"];
+}
+
+// `en-test` locale transformer: returns the input string repeated three
+// times, separated by spaces. Used to prove that dialog layouts survive
+// localisation expansion (German, French, Russian, Japanese — all push
+// labels well past the English baseline). The transformation is
+// deterministic and runs at L()-lookup time, so we don't need to maintain
+// a parallel static .strings file that would rot on every English-string
+// edit. Numbered placeholders (`%1$@`) round-trip unchanged, so any
+// translation-aware formatter still sees them in the right order.
+static NSString *hexExpandedTestString(NSString *s)
+{
+    if (s.length == 0) return s;
+    return [NSString stringWithFormat:@"%@ %@ %@", s, s, s];
+}
+
 static NSString *L(NSString *key)
 {
+    NSString *resolved = nil;
     for (NSDictionary<NSString *, NSString *> *layer in hexActiveStringsChain()) {
         NSString *value = layer[key];
         if (value != nil && value.length > 0) {
-            return value;
+            resolved = value;
+            break;
         }
     }
-    NSString *fallback = hexEnglishDefaults()[key];
-    return fallback != nil ? fallback : key;
+    if (resolved == nil) {
+        resolved = hexEnglishDefaults()[key] ?: key;
+    }
+    if (hexLayoutStressLocaleActive()) {
+        return hexExpandedTestString(resolved);
+    }
+    return resolved;
 }
 
 // Accessibility identifiers — must match the strings hard-coded in
@@ -376,13 +508,21 @@ static NSString *const kHexEditorStatusAccessibilityID = @"hex-editor.status";
 // and writing an accessibilityValue onto the table itself would clash with the
 // default row/cell semantics. The diagnostic element below is purely additive.
 static NSString *const kHexEditorCursorAccessibilityID = @"hex-editor.cursor.diagnostic";
-static const size_t PREVIEW_LIMIT = 1024 * 1024;
 static const CGFloat HEX_TABLE_HEIGHT = 640.0;
 static const CGFloat HEX_STATUS_HEIGHT = 24.0;
 static const CGFloat HEX_FALLBACK_FONT_SIZE = 10.0;
-static const CGFloat HEX_CELL_HORIZONTAL_PADDING = 2.0;
-static const CGFloat HEX_MID_BYTE_SEPARATOR_WIDTH = 5.0;
-static const CGFloat HEX_ASCII_SEPARATOR_WIDTH = 8.0;
+// Horizontal padding added to each byte cell's text width, expressed in
+// monospaced glyph widths so the visible gap between adjacent cells stays
+// proportional to the current font (otherwise the gap shrinks visually at
+// high zoom). Half is split to the left of the glyph, half to the right
+// (centre alignment). At a typical 10-pt monospaced font glyph width is
+// ~6 pt → ~2.4 pt total gap, ≈ 20% wider than the original 2-pt fixed gap.
+static const CGFloat HEX_CELL_HORIZONTAL_PADDING_GLYPHS = 0.4;
+// Inter-pane gaps are derived from the current font's monospaced glyph width so
+// they scale with pinch-zoom — fixed-pt values would look generous at small font
+// sizes and disappear at large ones. See offsetTrailingPadding / asciiSeparatorWidth.
+static const CGFloat HEX_OFFSET_TRAILING_GLYPHS = 1.0;
+static const CGFloat HEX_ASCII_SEPARATOR_GLYPHS = 0.5;
 static const CGFloat HEX_MIN_FONT_SIZE = 6.0;
 static const CGFloat HEX_MAX_FONT_SIZE = 32.0;
 static const CGFloat HEX_CARET_WIDTH = 2.0;
@@ -395,6 +535,80 @@ static NSString *const HEX_PREF_ADDRESS_WIDTH = @"addressWidth";
 static NSString *const HEX_PREF_COLUMNS = @"columns";
 static NSString *const HEX_PREF_FIND_MATCH_CASE = @"findMatchCase";
 static NSString *const HEX_PREF_FIND_WRAP = @"findWrap";
+// Startup auto-engage prefs (Options → Startup tab). Match Windows:
+// - extensions: space-separated list (e.g. ".dat .bin .exe"); buffer file
+//   path matching any token auto-opens the hex view on activation.
+// - controlCharPercent: 0–99. Sample first N bytes of buffer; if at least
+//   N * percent / 100 bytes are control chars (< 0x20 except tab/CR/LF),
+//   auto-open the hex view. 0 disables this heuristic.
+static NSString *const HEX_PREF_AUTO_EXTENSIONS = @"autoEngageExtensions";
+static NSString *const HEX_PREF_AUTO_CONTROL_PERCENT = @"autoEngageControlCharPercent";
+// Font tab keys. Defaults are deliberately conservative: Menlo at 12pt with
+// no traits, no uppercase, mirror cursor off (the user opts into the
+// hollow-rectangle indicator if they want it; default is the unadorned
+// caret). Empty fontName / 0 size = "use system fallback"
+// (monospacedSystemFontOfSize: at the Scintilla-derived size).
+static NSString *const HEX_PREF_FONT_NAME           = @"font.name";
+static NSString *const HEX_PREF_FONT_SIZE           = @"font.size";
+static NSString *const HEX_PREF_FONT_BOLD           = @"font.bold";
+static NSString *const HEX_PREF_FONT_ITALIC         = @"font.italic";
+static NSString *const HEX_PREF_FONT_UNDERLINE      = @"font.underline";
+static NSString *const HEX_PREF_FONT_UPPERCASE_HEX  = @"font.uppercaseHex";
+static NSString *const HEX_PREF_MIRROR_ASCII_CURSOR = @"font.mirrorAsciiCursor";
+
+static NSString *const HEX_DEFAULT_FONT_NAME = @"Menlo";
+static const int HEX_DEFAULT_FONT_SIZE_PT = 12;
+static const int HEX_FONT_SIZE_MIN_PT = 6;
+static const int HEX_FONT_SIZE_MAX_PT = 72;
+// Colors tab — Text (foreground) and Back (background) per category. Stored
+// as archived NSData so any colour space + alpha round-trips. Missing key /
+// nil decoded value = "use the default" (the existing dynamic system colour),
+// which is what we want for both fresh installs and unchanged categories.
+// Per-mode color override pref keys. Each setting has Light + Dark slots;
+// presence of a key means "this mode has a user override", absence means
+// "use the factory default for this mode" (which the resolve helpers fetch
+// from hexFactory*Light() / hexFactory*Dark() at draw time, so changing
+// hard-coded factory values in a new release immediately takes effect for
+// any user who hadn't actively customised that slot).
+static NSString *const HEX_PREF_COLOR_REG_TEXT_FG_LIGHT     = @"color.regularText.fg.light";
+static NSString *const HEX_PREF_COLOR_REG_TEXT_FG_DARK      = @"color.regularText.fg.dark";
+static NSString *const HEX_PREF_COLOR_REG_TEXT_BG_LIGHT     = @"color.regularText.bg.light";
+static NSString *const HEX_PREF_COLOR_REG_TEXT_BG_DARK      = @"color.regularText.bg.dark";
+static NSString *const HEX_PREF_COLOR_SELECTION_FG_LIGHT    = @"color.selection.fg.light";
+static NSString *const HEX_PREF_COLOR_SELECTION_FG_DARK     = @"color.selection.fg.dark";
+static NSString *const HEX_PREF_COLOR_SELECTION_BG_LIGHT    = @"color.selection.bg.light";
+static NSString *const HEX_PREF_COLOR_SELECTION_BG_DARK     = @"color.selection.bg.dark";
+static NSString *const HEX_PREF_COLOR_COMPARE_FG_LIGHT      = @"color.compare.fg.light";
+static NSString *const HEX_PREF_COLOR_COMPARE_FG_DARK       = @"color.compare.fg.dark";
+static NSString *const HEX_PREF_COLOR_COMPARE_BG_LIGHT      = @"color.compare.bg.light";
+static NSString *const HEX_PREF_COLOR_COMPARE_BG_DARK       = @"color.compare.bg.dark";
+static NSString *const HEX_PREF_COLOR_BOOKMARK_FG_LIGHT     = @"color.bookmark.fg.light";
+static NSString *const HEX_PREF_COLOR_BOOKMARK_FG_DARK      = @"color.bookmark.fg.dark";
+static NSString *const HEX_PREF_COLOR_BOOKMARK_BG_LIGHT     = @"color.bookmark.bg.light";
+static NSString *const HEX_PREF_COLOR_BOOKMARK_BG_DARK      = @"color.bookmark.bg.dark";
+static NSString *const HEX_PREF_COLOR_CURRENT_LINE_BG_LIGHT = @"color.currentLine.bg.light";
+static NSString *const HEX_PREF_COLOR_CURRENT_LINE_BG_DARK  = @"color.currentLine.bg.dark";
+
+// Legacy single-set color keys (pre-2026-05-03). Read once on load as
+// fallback for the new per-mode keys, then removed on next save. After all
+// active installs have migrated they could be deleted entirely; keep here
+// for now so users upgrading from older builds don't lose their picks.
+static NSString *const HEX_PREF_COLOR_REG_TEXT_FG_LEGACY     = @"color.regularText.fg";
+static NSString *const HEX_PREF_COLOR_REG_TEXT_BG_LEGACY     = @"color.regularText.bg";
+static NSString *const HEX_PREF_COLOR_SELECTION_FG_LEGACY    = @"color.selection.fg";
+static NSString *const HEX_PREF_COLOR_SELECTION_BG_LEGACY    = @"color.selection.bg";
+static NSString *const HEX_PREF_COLOR_COMPARE_FG_LEGACY      = @"color.compare.fg";
+static NSString *const HEX_PREF_COLOR_COMPARE_BG_LEGACY      = @"color.compare.bg";
+static NSString *const HEX_PREF_COLOR_BOOKMARK_FG_LEGACY     = @"color.bookmark.fg";
+static NSString *const HEX_PREF_COLOR_BOOKMARK_BG_LEGACY     = @"color.bookmark.bg";
+static NSString *const HEX_PREF_COLOR_CURRENT_LINE_BG_LEGACY = @"color.currentLine.bg";
+
+// Sample size for the control-char density heuristic. Match the Windows
+// AUTOSTART_MAX (~1 MB). We never read more than this even for huge files
+// because the density signal saturates well below that — control bytes in
+// a binary file cluster densely enough that a 1 MB sample reliably exceeds
+// any reasonable percent threshold.
+static const NSUInteger HEX_AUTOSTART_SAMPLE_BYTES = 1024 * 1024;
 
 static NSString *g_lastFindText = @"";
 static NSString *g_lastReplaceText = @"";
@@ -412,6 +626,72 @@ static hexedit::CellNotation g_notation = hexedit::CellNotation::Hex;
 static bool g_littleEndian = false;
 static int g_addressWidth = HEX_DEFAULT_ADDRESS_WIDTH;
 static int g_columns = HEX_DEFAULT_COLUMNS;
+// Auto-engage state. Empty extensions / 0 percent = feature off (default).
+static NSString *g_autoExtensions = @"";
+static int g_autoControlPercent = 0;
+// Font-tab state. fontName / fontSize default to Menlo / 12pt; an empty
+// fontName means "fall back to monospacedSystemFontOfSize:" (the historical
+// behaviour, useful if Menlo is somehow unavailable). The Cmd+/Cmd− zoom
+// delta still applies on top of fontSize at render time.
+static NSString *g_fontName = nil;        // copy of HEX_DEFAULT_FONT_NAME after load
+static int g_fontSize = HEX_DEFAULT_FONT_SIZE_PT;
+static bool g_fontBold = false;
+static bool g_fontItalic = false;
+static bool g_fontUnderline = false;
+static bool g_uppercaseHex = false;
+static bool g_mirrorAsciiCursor = false;
+// Diagnostic stash for the caret's last-rendered geometry. Reset at the
+// start of every HexTableView.drawRect: paint and set to true only when
+// drawRect: actually paints the caret stripe. Read by
+// HexCursorDiagnosticView so UI tests can assert that a given cursor /
+// rect state landed on the expected pixel column. The bool flag avoids
+// the NaN-sentinel pattern (NaN propagates silently through any further
+// math, easy to miss); when g_caretLastRenderedValid == false the X /
+// Row / CellMinX values are stale and consumers must not use them.
+static bool g_caretLastRenderedValid = false;
+static CGFloat g_caretLastRenderedX = 0.0;
+static NSInteger g_caretLastRenderedRow = -1;
+static CGFloat g_caretLastRenderedCellMinX = 0.0;
+// Mirror-cursor diagnostic: width of the last-drawn mirror rectangle in
+// pt. 0 = mirror was not drawn this paint (either disabled, no caret,
+// or out of bounds). Read by UI tests to verify the Mirror Cursor as
+// Rect toggle reaches the rendering path. Width is naturally always
+// positive when drawn, so 0 is a clear unambiguous "not drawn" marker
+// (no NaN-sentinel needed — width is bounded below by glyphWidth ≥ 1).
+static CGFloat g_mirrorLastRenderedWidth = 0.0;
+// Height of the last-drawn mirror indicator. For "Mirror as Rect" mode
+// this matches the rectangle's full height (~16 px at default font);
+// for the underline-only mode (Mirror toggle off) this is 2 px. Used
+// by UI tests to deterministically distinguish the two visual styles
+// without diffing screenshots.
+static CGFloat g_mirrorLastRenderedHeight = 0.0;
+// Per-category, per-mode colour overrides. nil = "use the factory default
+// for this mode" (which the resolve helpers fetch from hexFactory*Light()
+// / hexFactory*Dark() at draw time). This lets us change hard-coded factory
+// hexes between releases and have any user who's still on defaults pick up
+// the new values automatically — only users who actively customised a slot
+// retain their pinned choice. Light and Dark are independent: customising
+// Selection bg in Light mode does NOT affect what Dark mode shows. The
+// Colors tab writes through to the active mode's slot when the user picks
+// a colour, leaving the other mode untouched.
+static NSColor *g_colorRegularTextFgLight    = nil;
+static NSColor *g_colorRegularTextFgDark     = nil;
+static NSColor *g_colorRegularTextBgLight    = nil;
+static NSColor *g_colorRegularTextBgDark     = nil;
+static NSColor *g_colorSelectionFgLight      = nil;
+static NSColor *g_colorSelectionFgDark       = nil;
+static NSColor *g_colorSelectionBgLight      = nil;
+static NSColor *g_colorSelectionBgDark       = nil;
+static NSColor *g_colorCompareFgLight        = nil;
+static NSColor *g_colorCompareFgDark         = nil;
+static NSColor *g_colorCompareBgLight        = nil;
+static NSColor *g_colorCompareBgDark         = nil;
+static NSColor *g_colorBookmarkFgLight       = nil;
+static NSColor *g_colorBookmarkFgDark        = nil;
+static NSColor *g_colorBookmarkBgLight       = nil;
+static NSColor *g_colorBookmarkBgDark        = nil;
+static NSColor *g_colorCurrentLineBgLight    = nil;
+static NSColor *g_colorCurrentLineBgDark     = nil;
 
 static NSUserDefaults *hexPrefs()
 {
@@ -451,6 +731,62 @@ static void hexPrefSetBool(NSString *key, bool value)
     [hexPrefs() setBool:value forKey:key];
 }
 
+static NSString *hexPrefString(NSString *key, NSString *fallback)
+{
+    NSString *value = [hexPrefs() stringForKey:key];
+    return value ?: fallback;
+}
+
+static void hexPrefSetString(NSString *key, NSString *value)
+{
+    [hexPrefs() setObject:value forKey:key];
+}
+
+// NSColor ↔ NSData via NSKeyedArchiver. Round-trips colour space and alpha
+// faithfully so a re-launched plugin renders exactly what the user picked.
+// nil colour → remove the key (so the fallback path kicks in); nil/missing
+// data on read → nil colour (caller falls back).
+static NSColor *hexPrefColor(NSString *key)
+{
+    NSData *data = [hexPrefs() dataForKey:key];
+    if (data.length == 0) return nil;
+    NSError *err = nil;
+    NSColor *color = [NSKeyedUnarchiver unarchivedObjectOfClass:[NSColor class]
+                                                       fromData:data
+                                                          error:&err];
+    return color;
+}
+
+// MRC-safe assignment helper for the g_color* slots. Without ARC a plain
+// `g_color = newColor` doesn't retain the new value or release the old —
+// any colour assigned this way (e.g. an autoreleased NSColor pulled from
+// an NSColorWell or NSKeyedUnarchiver) gets freed when its owner goes
+// away, leaving the static pointer dangling. drawRect: then calls setFill
+// on the freed object and crashes (EXC_BAD_ACCESS in objc_msgSend). All
+// g_color* mutation must go through this helper.
+static void setHexColor(NSColor **slot, NSColor *value)
+{
+    if (*slot == value) return;
+    [value retain];
+    [*slot release];
+    *slot = value;
+}
+
+static void hexPrefSetColor(NSString *key, NSColor *color)
+{
+    if (color == nil) {
+        [hexPrefs() removeObjectForKey:key];
+        return;
+    }
+    NSError *err = nil;
+    NSData *data = [NSKeyedArchiver archivedDataWithRootObject:color
+                                          requiringSecureCoding:NO
+                                                          error:&err];
+    if (data) {
+        [hexPrefs() setObject:data forKey:key];
+    }
+}
+
 static int currentBytesPerRow()
 {
     return std::max(g_columns, 1) * std::max(g_bytesPerCell, 1);
@@ -462,6 +798,7 @@ static hexedit::ViewMode currentViewMode()
     mode.bytesPerCell = g_bytesPerCell;
     mode.notation = g_notation;
     mode.littleEndian = g_littleEndian;
+    mode.uppercase = g_uppercaseHex;
     return mode;
 }
 
@@ -498,7 +835,14 @@ static void loadHexPrefs()
     g_notation = hexPrefBool(HEX_PREF_NOTATION_BINARY, false)
         ? hexedit::CellNotation::Binary
         : hexedit::CellNotation::Hex;
-    g_littleEndian = (bpc > 1) ? hexPrefBool(HEX_PREF_LITTLE_ENDIAN, false) : false;
+    // Default to Little-Endian: Apple Silicon, Intel, ARM (Linux),
+    // Windows-on-x64 — basically every system you'd open a hex view on
+    // is little-endian. Big-Endian is reserved for network-protocol
+    // dumps (TCP/IP wire order) and a handful of legacy file formats;
+    // most users would never need it. New installs (no pref key set)
+    // start at Little; existing installs keep whatever they previously
+    // saved.
+    g_littleEndian = hexPrefBool(HEX_PREF_LITTLE_ENDIAN, true);
     g_addressWidth = std::clamp(
         hexPrefInt(HEX_PREF_ADDRESS_WIDTH, HEX_DEFAULT_ADDRESS_WIDTH),
         HEX_MIN_ADDRESS_WIDTH,
@@ -508,6 +852,48 @@ static void loadHexPrefs()
     g_columns = std::clamp(columns, 1, columnsLimit);
     g_findMatchCase = hexPrefBool(HEX_PREF_FIND_MATCH_CASE, true);
     g_findWrap = hexPrefBool(HEX_PREF_FIND_WRAP, true);
+    g_autoExtensions = hexPrefString(HEX_PREF_AUTO_EXTENSIONS, @"") ?: @"";
+    g_autoControlPercent = std::clamp(hexPrefInt(HEX_PREF_AUTO_CONTROL_PERCENT, 0), 0, 99);
+    g_fontName = [hexPrefString(HEX_PREF_FONT_NAME, HEX_DEFAULT_FONT_NAME) ?: HEX_DEFAULT_FONT_NAME copy];
+    g_fontSize = std::clamp(hexPrefInt(HEX_PREF_FONT_SIZE, HEX_DEFAULT_FONT_SIZE_PT),
+                             HEX_FONT_SIZE_MIN_PT, HEX_FONT_SIZE_MAX_PT);
+    g_fontBold = hexPrefBool(HEX_PREF_FONT_BOLD, false);
+    g_fontItalic = hexPrefBool(HEX_PREF_FONT_ITALIC, false);
+    g_fontUnderline = hexPrefBool(HEX_PREF_FONT_UNDERLINE, false);
+    g_uppercaseHex = hexPrefBool(HEX_PREF_FONT_UPPERCASE_HEX, false);
+    g_mirrorAsciiCursor = hexPrefBool(HEX_PREF_MIRROR_ASCII_CURSOR, false);
+    // Color overrides: read new per-mode keys; if absent and a legacy
+    // single-set key is present, copy the legacy value into BOTH modes
+    // (preserves the user's prior pick across the migration). The legacy
+    // keys are removed by the next saveHexPrefs() call below.
+    NSColor *legacyRegFg     = hexPrefColor(HEX_PREF_COLOR_REG_TEXT_FG_LEGACY);
+    NSColor *legacyRegBg     = hexPrefColor(HEX_PREF_COLOR_REG_TEXT_BG_LEGACY);
+    NSColor *legacySelFg     = hexPrefColor(HEX_PREF_COLOR_SELECTION_FG_LEGACY);
+    NSColor *legacySelBg     = hexPrefColor(HEX_PREF_COLOR_SELECTION_BG_LEGACY);
+    NSColor *legacyCmpFg     = hexPrefColor(HEX_PREF_COLOR_COMPARE_FG_LEGACY);
+    NSColor *legacyCmpBg     = hexPrefColor(HEX_PREF_COLOR_COMPARE_BG_LEGACY);
+    NSColor *legacyBmkFg     = hexPrefColor(HEX_PREF_COLOR_BOOKMARK_FG_LEGACY);
+    NSColor *legacyBmkBg     = hexPrefColor(HEX_PREF_COLOR_BOOKMARK_BG_LEGACY);
+    NSColor *legacyCurBg     = hexPrefColor(HEX_PREF_COLOR_CURRENT_LINE_BG_LEGACY);
+
+    setHexColor(&g_colorRegularTextFgLight, hexPrefColor(HEX_PREF_COLOR_REG_TEXT_FG_LIGHT)     ?: legacyRegFg);
+    setHexColor(&g_colorRegularTextFgDark,  hexPrefColor(HEX_PREF_COLOR_REG_TEXT_FG_DARK)      ?: legacyRegFg);
+    setHexColor(&g_colorRegularTextBgLight, hexPrefColor(HEX_PREF_COLOR_REG_TEXT_BG_LIGHT)     ?: legacyRegBg);
+    setHexColor(&g_colorRegularTextBgDark,  hexPrefColor(HEX_PREF_COLOR_REG_TEXT_BG_DARK)      ?: legacyRegBg);
+    setHexColor(&g_colorSelectionFgLight,   hexPrefColor(HEX_PREF_COLOR_SELECTION_FG_LIGHT)    ?: legacySelFg);
+    setHexColor(&g_colorSelectionFgDark,    hexPrefColor(HEX_PREF_COLOR_SELECTION_FG_DARK)     ?: legacySelFg);
+    setHexColor(&g_colorSelectionBgLight,   hexPrefColor(HEX_PREF_COLOR_SELECTION_BG_LIGHT)    ?: legacySelBg);
+    setHexColor(&g_colorSelectionBgDark,    hexPrefColor(HEX_PREF_COLOR_SELECTION_BG_DARK)     ?: legacySelBg);
+    setHexColor(&g_colorCompareFgLight,     hexPrefColor(HEX_PREF_COLOR_COMPARE_FG_LIGHT)      ?: legacyCmpFg);
+    setHexColor(&g_colorCompareFgDark,      hexPrefColor(HEX_PREF_COLOR_COMPARE_FG_DARK)       ?: legacyCmpFg);
+    setHexColor(&g_colorCompareBgLight,     hexPrefColor(HEX_PREF_COLOR_COMPARE_BG_LIGHT)      ?: legacyCmpBg);
+    setHexColor(&g_colorCompareBgDark,      hexPrefColor(HEX_PREF_COLOR_COMPARE_BG_DARK)       ?: legacyCmpBg);
+    setHexColor(&g_colorBookmarkFgLight,    hexPrefColor(HEX_PREF_COLOR_BOOKMARK_FG_LIGHT)     ?: legacyBmkFg);
+    setHexColor(&g_colorBookmarkFgDark,     hexPrefColor(HEX_PREF_COLOR_BOOKMARK_FG_DARK)      ?: legacyBmkFg);
+    setHexColor(&g_colorBookmarkBgLight,    hexPrefColor(HEX_PREF_COLOR_BOOKMARK_BG_LIGHT)     ?: legacyBmkBg);
+    setHexColor(&g_colorBookmarkBgDark,     hexPrefColor(HEX_PREF_COLOR_BOOKMARK_BG_DARK)      ?: legacyBmkBg);
+    setHexColor(&g_colorCurrentLineBgLight, hexPrefColor(HEX_PREF_COLOR_CURRENT_LINE_BG_LIGHT) ?: legacyCurBg);
+    setHexColor(&g_colorCurrentLineBgDark,  hexPrefColor(HEX_PREF_COLOR_CURRENT_LINE_BG_DARK)  ?: legacyCurBg);
 }
 
 static void saveHexPrefs()
@@ -517,6 +903,49 @@ static void saveHexPrefs()
     hexPrefSetBool(HEX_PREF_LITTLE_ENDIAN, g_littleEndian);
     hexPrefSetInt(HEX_PREF_ADDRESS_WIDTH, g_addressWidth);
     hexPrefSetInt(HEX_PREF_COLUMNS, g_columns);
+    hexPrefSetString(HEX_PREF_AUTO_EXTENSIONS, g_autoExtensions ?: @"");
+    hexPrefSetInt(HEX_PREF_AUTO_CONTROL_PERCENT, g_autoControlPercent);
+    hexPrefSetString(HEX_PREF_FONT_NAME, g_fontName ?: HEX_DEFAULT_FONT_NAME);
+    hexPrefSetInt(HEX_PREF_FONT_SIZE, g_fontSize);
+    hexPrefSetBool(HEX_PREF_FONT_BOLD, g_fontBold);
+    hexPrefSetBool(HEX_PREF_FONT_ITALIC, g_fontItalic);
+    hexPrefSetBool(HEX_PREF_FONT_UNDERLINE, g_fontUnderline);
+    hexPrefSetBool(HEX_PREF_FONT_UPPERCASE_HEX, g_uppercaseHex);
+    hexPrefSetBool(HEX_PREF_MIRROR_ASCII_CURSOR, g_mirrorAsciiCursor);
+    hexPrefSetColor(HEX_PREF_COLOR_REG_TEXT_FG_LIGHT,     g_colorRegularTextFgLight);
+    hexPrefSetColor(HEX_PREF_COLOR_REG_TEXT_FG_DARK,      g_colorRegularTextFgDark);
+    hexPrefSetColor(HEX_PREF_COLOR_REG_TEXT_BG_LIGHT,     g_colorRegularTextBgLight);
+    hexPrefSetColor(HEX_PREF_COLOR_REG_TEXT_BG_DARK,      g_colorRegularTextBgDark);
+    hexPrefSetColor(HEX_PREF_COLOR_SELECTION_FG_LIGHT,    g_colorSelectionFgLight);
+    hexPrefSetColor(HEX_PREF_COLOR_SELECTION_FG_DARK,     g_colorSelectionFgDark);
+    hexPrefSetColor(HEX_PREF_COLOR_SELECTION_BG_LIGHT,    g_colorSelectionBgLight);
+    hexPrefSetColor(HEX_PREF_COLOR_SELECTION_BG_DARK,     g_colorSelectionBgDark);
+    hexPrefSetColor(HEX_PREF_COLOR_COMPARE_FG_LIGHT,      g_colorCompareFgLight);
+    hexPrefSetColor(HEX_PREF_COLOR_COMPARE_FG_DARK,       g_colorCompareFgDark);
+    hexPrefSetColor(HEX_PREF_COLOR_COMPARE_BG_LIGHT,      g_colorCompareBgLight);
+    hexPrefSetColor(HEX_PREF_COLOR_COMPARE_BG_DARK,       g_colorCompareBgDark);
+    hexPrefSetColor(HEX_PREF_COLOR_BOOKMARK_FG_LIGHT,     g_colorBookmarkFgLight);
+    hexPrefSetColor(HEX_PREF_COLOR_BOOKMARK_FG_DARK,      g_colorBookmarkFgDark);
+    hexPrefSetColor(HEX_PREF_COLOR_BOOKMARK_BG_LIGHT,     g_colorBookmarkBgLight);
+    hexPrefSetColor(HEX_PREF_COLOR_BOOKMARK_BG_DARK,      g_colorBookmarkBgDark);
+    hexPrefSetColor(HEX_PREF_COLOR_CURRENT_LINE_BG_LIGHT, g_colorCurrentLineBgLight);
+    hexPrefSetColor(HEX_PREF_COLOR_CURRENT_LINE_BG_DARK,  g_colorCurrentLineBgDark);
+
+    // Migration: clear legacy single-set keys once they've been folded
+    // into the new per-mode globals (loadHexPrefs reads them as fallback).
+    // After all installs save once, the legacy keys are gone. Keeping the
+    // remove-calls indefinitely is harmless — removeObjectForKey is a
+    // no-op for absent keys.
+    NSUserDefaults *prefs = hexPrefs();
+    [prefs removeObjectForKey:HEX_PREF_COLOR_REG_TEXT_FG_LEGACY];
+    [prefs removeObjectForKey:HEX_PREF_COLOR_REG_TEXT_BG_LEGACY];
+    [prefs removeObjectForKey:HEX_PREF_COLOR_SELECTION_FG_LEGACY];
+    [prefs removeObjectForKey:HEX_PREF_COLOR_SELECTION_BG_LEGACY];
+    [prefs removeObjectForKey:HEX_PREF_COLOR_COMPARE_FG_LEGACY];
+    [prefs removeObjectForKey:HEX_PREF_COLOR_COMPARE_BG_LEGACY];
+    [prefs removeObjectForKey:HEX_PREF_COLOR_BOOKMARK_FG_LEGACY];
+    [prefs removeObjectForKey:HEX_PREF_COLOR_BOOKMARK_BG_LEGACY];
+    [prefs removeObjectForKey:HEX_PREF_COLOR_CURRENT_LINE_BG_LEGACY];
 }
 
 static FuncItem funcItem[NB_FUNC];
@@ -527,7 +956,98 @@ static NSTableView *hexTableView = nil;
 static NSTextField *hexStatusLabel = nil;
 static NSView *hexEditorView = nil;
 static NSView *hiddenScintillaView = nil;
-static std::vector<uint8_t> previewBytes;
+
+// Per-buffer "user explicitly engaged hex view here" intent. Survives
+// tab-switch buffer activations so hex view comes back when the user
+// returns to the tab — independent of the Startup auto-engage rules
+// (which only fire for files matching the configured extension list or
+// content-density threshold). User-discovered bug 2026-05-05: switching
+// away from a hex-view tab and back reverted to text view for any file
+// that didn't separately match the auto-engage rules.
+//
+// Keyed by NppHandle (the host's bufferId, which is the address of the
+// editor NSView under NPP-Mac). Wrapped in NSValue so an NSMutableSet
+// can hold it. Entries are added when the user calls showHexPreview()
+// (via the menu), removed on user-initiated toggle-off, and removed
+// when the host notifies that a buffer is closing.
+static NSMutableSet<NSValue *> *g_buffersWithHexIntent = nil;
+
+static NSMutableSet<NSValue *> *hexIntentSet()
+{
+    if (g_buffersWithHexIntent == nil) {
+        g_buffersWithHexIntent = [[NSMutableSet alloc] init];
+    }
+    return g_buffersWithHexIntent;
+}
+
+static NSValue *bufferIdValue(uintptr_t bufferId)
+{
+    return [NSValue valueWithPointer:reinterpret_cast<const void *>(bufferId)];
+}
+
+static void recordHexIntent(uintptr_t bufferId)
+{
+    if (bufferId == 0) return;
+    [hexIntentSet() addObject:bufferIdValue(bufferId)];
+}
+
+static void clearHexIntent(uintptr_t bufferId)
+{
+    if (bufferId == 0) return;
+    [hexIntentSet() removeObject:bufferIdValue(bufferId)];
+}
+
+static bool hasHexIntent(uintptr_t bufferId)
+{
+    if (bufferId == 0) return false;
+    return [hexIntentSet() containsObject:bufferIdValue(bufferId)];
+}
+// Long-lived byte-source backing the hex view. Replaces the previous
+// in-RAM previewBytes vector — the lazy-Scintilla migration of 2026-05-05
+// (Step 2c). Reads go on demand against the active Scintilla buffer via
+// WindowedScintillaByteSource's page cache, so plugin RAM stays bounded
+// by the cache size (~4 MB) regardless of document length.
+//
+// Lifecycle is owned by bindHexBufferToActiveScintilla() and
+// invalidateHexBuffer() below. Direct g_hexBuffer access by consumers is
+// discouraged — go through the hexBufferLength / hexBufferEmpty /
+// hexByteAt / hexBytesIn / hexBufferSource accessors so we keep one
+// path through the null-check.
+//
+// Destruction order: g_hexBuffer holds a reference into *g_hexReader,
+// so g_hexBuffer must reset *first*. unique_ptr destructors run in
+// reverse declaration order, so g_hexBuffer is declared *after*
+// g_hexReader to make this happen automatically.
+static std::unique_ptr<hexedit::SciReader> g_hexReader;
+static std::unique_ptr<hexedit::WindowedScintillaByteSource> g_hexBuffer;
+
+static inline std::size_t hexBufferLength() { return g_hexBuffer ? g_hexBuffer->length() : 0; }
+static inline bool        hexBufferEmpty()  { return hexBufferLength() == 0; }
+static inline std::uint8_t hexByteAt(std::size_t offset)
+{
+    if (!g_hexBuffer) return 0;
+    std::uint8_t b = 0;
+    g_hexBuffer->read(offset, &b, 1);
+    return b;
+}
+static inline std::size_t hexBytesIn(std::size_t offset,
+                                       std::size_t count,
+                                       std::uint8_t *dest)
+{
+    if (!g_hexBuffer) return 0;
+    return g_hexBuffer->read(offset, dest, count);
+}
+// Pass-by-reference accessor for HexCore APIs that take `const ByteSource&`
+// (findBytePattern, computeByteDiffs, extractRectBytes, formatRectClipboardHex).
+// The returned reference is valid until the next bindHexBufferToActiveScintilla()
+// call. Consumers MUST guard with hexBufferEmpty() — calling this with no
+// buffer bound dereferences null.
+static inline const hexedit::ByteSource &hexBufferSource() { return *g_hexBuffer; }
+
+// Forward declarations; defined after LiveSciReader (the concrete SciReader
+// that talks to the live host-side Scintilla) is in scope.
+static void bindHexBufferToActiveScintilla();
+static void invalidateHexBuffer();
 static std::set<size_t> bookmarkedRows;
 // Compare HEX result mask. Empty when there is no active comparison; otherwise sized to
 // max(myLen, otherLen) with `true` at byte offsets that differ between the current buffer
@@ -565,10 +1085,30 @@ static intptr_t lastScintillaCaret = -1;
 static bool isSelectingBytes = false;
 static size_t selectionAnchorByte = 0;
 
+// Rectangular (block) selection state. Mutually exclusive with the linear
+// `selectedByteStart`/`selectedByteEnd` pair: when g_rectActive is true, the linear
+// selection is empty. The rect's geometry is anchored to the bytesPerRow at creation
+// time — changing the row width via the Columns / View-in dialogs clears the rect.
+//
+// g_rectAnchorOffset is one corner (the byte the user mouseDowned on, or where they
+// were positioned when they first pressed Shift+modifier+arrow). The other corner is
+// implicit in g_rectSelection's geometry plus activeByteOffset, which always tracks
+// the dragged-to byte so the caret renders at the user's pointer.
+//
+// g_rectOriginField is the pane the drag began in (Hex or Ascii) and is used by the
+// copy/paste matrix to tag the clipboard payload with kind = Bytes / Ascii. The address
+// column is not selectable — clicking there toggles a bookmark instead.
+static hexedit::RectSelection g_rectSelection;
+static bool g_rectActive = false;
+static bool g_isSelectingRect = false;
+static size_t g_rectAnchorOffset = 0;
+static HexCursorField g_rectOriginField = HexCursorField::Hex;
+
 static void zoomHexFont(NSInteger delta);
 static void resetHexFontZoom();
 static void refreshVisibleHexTables();
 static NSFont *hexTableFont();
+static NSFont *hexHeaderFontFor(NSFont *gridFont);
 static CGFloat preciseTextWidth(NSString *text, NSFont *font);
 static CGFloat textWidth(NSString *text, NSFont *font);
 static CGFloat monospacedGlyphWidth(NSFont *font);
@@ -612,7 +1152,25 @@ static bool copyHexSelectionAsBinary();
 static bool pasteBytesFromPasteboard();
 static bool pasteBinaryFromPasteboard();
 static bool cutHexSelection();
+@class HexClipboardOwner;
+static HexClipboardOwner *currentlyOwnedHexSnapshot();
 static bool cutHexSelectionBinary();
+static bool applyRectBytesPaste(const hexedit::RectSelection &dest,
+                                const std::uint8_t *bytes,
+                                std::size_t byteCount);
+
+// Custom pasteboard type that carries shape + kind alongside the byte data. When
+// the paste path finds this UTI it uses the structured payload directly; when only
+// public-text is on the clipboard (e.g. copied from another app), it falls back to
+// hexedit::parseRectClipboardText per the user's Q2.b decision.
+//
+// The wire format is owned by HexCore (kRectPayloadMagic, encodeRectPayload,
+// decodeRectPayload) so the same parser the plugin reads can also be exercised
+// from libFuzzer harnesses without dragging in AppKit. HexRectClipboardKind below
+// is a typedef alias so existing call sites read naturally.
+static NSString *const kHexRectPasteboardType = @"org.notepad-plus-plus.HexEditor.rectangular";
+
+using HexRectClipboardKind = hexedit::RectClipboardKind;
 static bool deleteHexSelection();
 static void selectAllHexBytes();
 static bool handleHexDigit(unichar character);
@@ -629,8 +1187,16 @@ static NSInteger cellColumnIndex(NSString *identifier);
 static BOOL isVisibleEditableOffset(size_t offset);
 static BOOL hasByteSelection();
 static BOOL isSelectedByte(size_t offset);
+static BOOL hasRectSelection();
+static BOOL hasAnyByteSelection();
 static size_t currentHighlightRow();
 static void clearByteSelection();
+static void clearRectSelection();
+static void clearAllByteSelections();
+static void extendByteSelectionToOffset(size_t target);
+static void scrollHexTableToActiveOffset();
+static void scrollHexTableByPage(bool up);
+static void updateRectSelectionToOffset(size_t endOffset);
 static void captureScintillaSelection();
 static BOOL isBookmarkedRow(size_t row);
 static void toggleBookmarkRow(size_t row);
@@ -650,6 +1216,12 @@ static NSColor *hexCurrentLineColor();
 static NSColor *hexSelectionColor();
 static NSColor *hexCurrentLineSelectionColor();
 static NSColor *hexCompareDiffColor();
+static NSColor *hexCompareDiffTextColor();
+static NSColor *hexRegularTextColor();
+static NSColor *hexRegularTextBackgroundColor();
+static NSColor *hexSelectionTextColor();
+static NSColor *hexBookmarkBackgroundColor();
+static NSColor *hexBookmarkTextColor();
 static NSString *makeStatusText();
 static hexedit::DocumentView currentDocumentView();
 static hexedit::Selection currentSelection();
@@ -725,9 +1297,91 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
     NSString *nsPrefsJoined = [nsPrefs componentsJoinedByString:@"|"];
     NSArray<NSString *> *userPrefs = hexUserPreferredLanguages();
     NSString *userPrefsJoined = [userPrefs componentsJoinedByString:@"|"];
+    // Rect diagnostic fields. rectActive=1 when a rectangular selection is in place;
+    // rectOrigin/rectWidth/rectHeight describe its anchor and size in bytes; rectBpr is
+    // the bytes-per-row the rect was anchored to (lets a test detect stale rect after
+    // the user changes columns). rectOriginPane is "Hex" / "Ascii" so tests can confirm
+    // the source-pane tag will travel through to the clipboard.
+    NSString *rectOriginPane = (g_rectOriginField == HexCursorField::Ascii) ? @"Ascii" : @"Hex";
+    // Header-vs-data alignment match. Set to 1 iff every column's headerCell.alignment
+    // equals its dataCell.alignment. The XCUI test asserts this — covers the visual
+    // "centered data with left-aligned header" imbalance bug. 0 means at least one
+    // column will look unbalanced; the testfailure shouldn't need to dig into which.
+    int headerAlignsMatchData = 1;
+    if (hexTableView != nil) {
+        for (NSTableColumn *col in hexTableView.tableColumns) {
+            id dc = col.dataCell;
+            id hc = col.headerCell;
+            if (![dc respondsToSelector:@selector(alignment)] ||
+                ![hc respondsToSelector:@selector(alignment)]) {
+                continue;
+            }
+            if ([dc alignment] != [hc alignment]) {
+                headerAlignsMatchData = 0;
+                break;
+            }
+        }
+    }
+    // Cell + header font sizes (points). Tests verify that when the user
+    // zooms in/out via Cmd+/Cmd-/pinch, the header tracks the cell — the
+    // headerFont is built off the cell font in hexHeaderFontFor() and any
+    // future regression that breaks that link will surface as headerFontPt
+    // staying constant while cellFontPt changes.
+    CGFloat cellFontPt = 0.0;
+    CGFloat headerFontPt = 0.0;
+    if (hexTableView != nil && hexTableView.tableColumns.count > 0) {
+        NSTableColumn *firstColumn = hexTableView.tableColumns.firstObject;
+        if (NSTextFieldCell *dataCell = static_cast<NSTextFieldCell *>(firstColumn.dataCell)) {
+            cellFontPt = dataCell.font.pointSize;
+        }
+        // Read from the attributed-string title's NSFontAttributeName, not
+        // headerCell.font directly: AppKit derives header rendering from
+        // attributedStringValue, and assigning attributedStringValue can
+        // reset the .font property to a system default — so .font is not a
+        // reliable proxy for what's actually being drawn.
+        NSAttributedString *headerAttr = firstColumn.headerCell.attributedStringValue;
+        if (headerAttr.length > 0) {
+            NSFont *renderingFont = [headerAttr attribute:NSFontAttributeName atIndex:0 effectiveRange:nil];
+            if (renderingFont != nil) {
+                headerFontPt = renderingFont.pointSize;
+            }
+        }
+        // Fall back to the .font property if no attributed title was set
+        // (e.g. a column built before configureTableColumn ran fully).
+        if (headerFontPt == 0.0 && firstColumn.headerCell.font != nil) {
+            headerFontPt = firstColumn.headerCell.font.pointSize;
+        }
+    }
+    // Caret render geometry — the actual pixel column where drawRect:
+    // last painted the caret stripe. Used by rect-drag tests to confirm
+    // a known activeByteOffset translates into the expected screen
+    // position; the alternative (sampling pixels) is brittle.
+    // caretCellMinX is the row-relative X of the cell that contained the
+    // caret on its last paint; caretCellOffsetX is (caretX - caretCellMinX),
+    // i.e. how far the caret sits inside the cell. Tests assert
+    // caretCellOffsetX equals cellGlyphLeft minus column origin, plus
+    // (digitInCell × glyphWidth), which means rendering tracks the
+    // computed activeByteOffset rather than diverging from it.
+    const CGFloat caretCellOffsetX = g_caretLastRenderedValid
+        ? (g_caretLastRenderedX - g_caretLastRenderedCellMinX)
+        : -1.0;
+    // Font-tab toggles. Exposed so tests can confirm the dialog round-
+    // trips them through commit + load. Each is a single bit; flagged as
+    // a comma-keyed list ("fontFlags=bold,italic,underline,uppercase,mirrorAsciiCursor"
+    // each 1/0). Tests pattern-match the prefix to assert specific bits.
+    NSString *fontFlags = [NSString stringWithFormat:@"%d,%d,%d,%d,%d",
+                              g_fontBold ? 1 : 0,
+                              g_fontItalic ? 1 : 0,
+                              g_fontUnderline ? 1 : 0,
+                              g_uppercaseHex ? 1 : 0,
+                              g_mirrorAsciiCursor ? 1 : 0];
     return [NSString stringWithFormat:
             @"offset=%zu;selStart=%zu;selEnd=%zu;hasSelection=%d;statusH=%.1f;statusFontH=%.1f"
-            @";sciSelStart=%lld;sciSelEnd=%lld;sciCaret=%lld;preferredLanguages=%@;userPrefs=%@",
+            @";sciSelStart=%lld;sciSelEnd=%lld;sciCaret=%lld;preferredLanguages=%@;userPrefs=%@"
+            @";rectActive=%d;rectOrigin=%zu;rectWidth=%zu;rectHeight=%zu;rectBpr=%zu;rectOriginPane=%@"
+            @";hdrAlignMatch=%d;cellFontPt=%.1f;headerFontPt=%.1f"
+            @";caretX=%.1f;caretRow=%ld;caretCellMinX=%.1f;caretCellOffsetX=%.1f"
+            @";mirrorWidth=%.1f;mirrorHeight=%.1f;fontFlags=%@",
             activeByteOffset, selectedByteStart, selectedByteEnd,
             (selectedByteEnd > selectedByteStart) ? 1 : 0,
             statusFrameHeight, statusFontLineHeight,
@@ -735,7 +1389,23 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
             (long long)lastScintillaSelEnd,
             (long long)lastScintillaCaret,
             nsPrefsJoined,
-            userPrefsJoined];
+            userPrefsJoined,
+            g_rectActive ? 1 : 0,
+            g_rectSelection.originOffset,
+            g_rectSelection.width,
+            g_rectSelection.height,
+            g_rectSelection.bytesPerRow,
+            rectOriginPane,
+            headerAlignsMatchData,
+            cellFontPt,
+            headerFontPt,
+            g_caretLastRenderedValid ? g_caretLastRenderedX : -1.0,
+            (long)g_caretLastRenderedRow,
+            g_caretLastRenderedValid ? g_caretLastRenderedCellMinX : -1.0,
+            caretCellOffsetX,
+            g_mirrorLastRenderedWidth,
+            g_mirrorLastRenderedHeight,
+            fontFlags];
 }
 @end
 
@@ -803,8 +1473,8 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
 {
     const size_t bpr = static_cast<size_t>(currentBytesPerRow());
-    NSInteger rows = static_cast<NSInteger>((previewBytes.size() + bpr - 1) / bpr);
-    if (previewBytes.size() == previewTotalLength && (previewBytes.empty() || previewBytes.size() % bpr == 0)) {
+    NSInteger rows = static_cast<NSInteger>((hexBufferLength() + bpr - 1) / bpr);
+    if (hexBufferLength() == previewTotalLength && (hexBufferEmpty() || hexBufferLength() % bpr == 0)) {
         ++rows;
     }
     return rows;
@@ -817,7 +1487,7 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
     NSString *identifier = tableColumn.identifier;
 
     if ([identifier isEqualToString:@"offset"]) {
-        return [NSString stringWithFormat:@"%0*zx", g_addressWidth, rowOffset];
+        return [NSString stringWithFormat:g_uppercaseHex ? @"%0*zX" : @"%0*zx", g_addressWidth, rowOffset];
     }
 
     if ([identifier isEqualToString:@"ascii"]) {
@@ -825,8 +1495,8 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
         ascii.reserve(static_cast<size_t>(bytesPerRow));
         for (int index = 0; index < bytesPerRow; ++index) {
             const size_t byteIndex = rowOffset + static_cast<size_t>(index);
-            if (byteIndex < previewBytes.size()) {
-                const uint8_t value = previewBytes[byteIndex];
+            if (byteIndex < hexBufferLength()) {
+                const uint8_t value = hexByteAt(byteIndex);
                 ascii.push_back(std::isprint(value) ? static_cast<char>(value) : '.');
             } else {
                 ascii.push_back(' ');
@@ -835,7 +1505,7 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
         return [NSString stringWithUTF8String:ascii.c_str()];
     }
 
-    if ([identifier isEqualToString:@"midspacer"] || [identifier isEqualToString:@"spacer"]) {
+    if ([identifier isEqualToString:@"offsetSpacer"] || [identifier isEqualToString:@"spacer"]) {
         return @"";
     }
 
@@ -843,11 +1513,17 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
         const NSInteger cellIndex = [[identifier substringFromIndex:4] integerValue];
         const hexedit::ViewMode mode = currentViewMode();
         const size_t firstByte = rowOffset + static_cast<size_t>(cellIndex) * static_cast<size_t>(mode.bytesPerCell);
-        if (firstByte >= previewBytes.size()) {
+        if (firstByte >= hexBufferLength()) {
             return @"";
         }
-        const size_t available = std::min(static_cast<size_t>(mode.bytesPerCell), previewBytes.size() - firstByte);
-        std::string formatted = hexedit::formatCell(previewBytes.data() + firstByte, available, mode);
+        const size_t available = std::min(static_cast<size_t>(mode.bytesPerCell), hexBufferLength() - firstByte);
+        // formatCell reads at most ViewMode.bytesPerCell bytes (≤ 8). Fetch
+        // into a stack scratch buffer so we don't depend on hexBufferData()
+        // returning a raw pointer — Step 2c is migrating the storage to a
+        // page-cached Scintilla reader where no such pointer is exposed.
+        std::uint8_t scratch[8];
+        const size_t got = hexBytesIn(firstByte, available, scratch);
+        std::string formatted = hexedit::formatCell(scratch, got, mode);
         return [NSString stringWithUTF8String:formatted.c_str()];
     }
 
@@ -861,23 +1537,144 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
     }
 
     NSTextFieldCell *textCell = static_cast<NSTextFieldCell *>(cell);
+    // Regular cells never paint a background of their own — the row-level
+    // current-line highlight (drawn beneath in drawRect:) needs to show
+    // through. The "Regular Text Background" preference applies at the
+    // table-canvas level (table.backgroundColor) instead, so it covers
+    // the entire pane uniformly. Compare-diff and bookmark below override
+    // intentionally — those highlights are meant to mask the row colour.
     textCell.drawsBackground = NO;
     textCell.backgroundColor = nil;
-    textCell.textColor = [NSColor labelColor];
+    textCell.textColor = hexRegularTextColor();
 
     NSString *identifier = tableColumn.identifier;
     if ([identifier isEqualToString:@"offset"] && isBookmarkedRow(static_cast<size_t>(row))) {
         textCell.drawsBackground = YES;
-        textCell.backgroundColor = [NSColor systemRedColor];
-        textCell.textColor = [NSColor whiteColor];
-    } else if ([identifier hasPrefix:@"cell"] && !g_compareDiffs.empty()) {
+        textCell.backgroundColor = hexBookmarkBackgroundColor();
+        textCell.textColor = hexBookmarkTextColor();
+    } else if ([identifier hasPrefix:@"cell"]) {
         const NSInteger cellIdx = [[identifier substringFromIndex:4] integerValue];
-        if (compareDiffMaskCellHasDiff(row, cellIdx)) {
+        if (!g_compareDiffs.empty() && compareDiffMaskCellHasDiff(row, cellIdx)) {
             textCell.drawsBackground = YES;
             textCell.backgroundColor = hexCompareDiffColor();
-            textCell.textColor = [NSColor whiteColor];
+            textCell.textColor = hexCompareDiffTextColor();
+        }
+        // Selection text colour overrides any per-cell foreground above.
+        // The selection background is painted by drawRect: as a rectangle
+        // beneath the cell text; setting textColor here makes the byte
+        // glyphs render in the user's chosen Selection-Text colour on top
+        // of that rectangle. Matches the Windows plugin's recolouring.
+        if ([self cellInSelectionAtRow:row cellIndex:cellIdx]) {
+            textCell.textColor = hexSelectionTextColor();
+        }
+    } else if ([identifier isEqualToString:@"ascii"]) {
+        // ASCII pane: one cell per row containing all bpr characters as a
+        // single string. Plain `textColor` would paint every glyph the same
+        // colour, which is wrong inside a partial selection — the chars
+        // outside the selection should stay in regular-text colour, the
+        // chars inside should match Selection-Text. Switch to an attributed
+        // string with per-character foreground attrs only when there's an
+        // active selection (avoids the allocation in the common case).
+        if (hasByteSelection() || hasRectSelection()) {
+            NSString *plain = textCell.stringValue ?: @"";
+            const NSUInteger len = plain.length;
+            if (len > 0) {
+                NSMutableAttributedString *attr = [[[NSMutableAttributedString alloc] initWithString:plain] autorelease];
+                NSRange whole = NSMakeRange(0, len);
+                [attr addAttribute:NSForegroundColorAttributeName value:hexRegularTextColor() range:whole];
+                if (textCell.font) {
+                    [attr addAttribute:NSFontAttributeName value:textCell.font range:whole];
+                }
+                if (g_fontUnderline) {
+                    [attr addAttribute:NSUnderlineStyleAttributeName
+                                  value:@(NSUnderlineStyleSingle)
+                                  range:whole];
+                }
+                NSColor *selFg = hexSelectionTextColor();
+                for (NSUInteger b = 0; b < len; b++) {
+                    if ([self asciiByteInSelectionAtRow:row byteInRow:(NSInteger)b]) {
+                        [attr addAttribute:NSForegroundColorAttributeName value:selFg range:NSMakeRange(b, 1)];
+                    }
+                }
+                textCell.attributedStringValue = attr;
+            }
         }
     }
+
+    // Underline pass: NSTextFieldCell has no underline property, so the
+    // only way to draw underlined glyphs is via NSAttributedString with
+    // NSUnderlineStyleAttributeName. When the Font tab's underline toggle
+    // is on, we wrap whatever stringValue the cell ended up with into a
+    // freshly built attributed string carrying the cell's current font
+    // / textColor / underline. Skipped when the ASCII branch above
+    // already produced an attributed string (it folded the underline in
+    // there to keep the per-byte selection-fg recolouring working).
+    if (g_fontUnderline && ![identifier isEqualToString:@"offsetSpacer"] && ![identifier isEqualToString:@"spacer"]) {
+        NSAttributedString *existingAttr = textCell.attributedStringValue;
+        const BOOL alreadyAttributed = (existingAttr.length > 0) &&
+            [existingAttr attribute:NSUnderlineStyleAttributeName atIndex:0 effectiveRange:NULL] != nil;
+        if (!alreadyAttributed) {
+            NSString *plain = textCell.stringValue ?: @"";
+            if (plain.length > 0 && textCell.font) {
+                NSDictionary *attrs = @{
+                    NSFontAttributeName: textCell.font,
+                    NSForegroundColorAttributeName: textCell.textColor ?: [NSColor textColor],
+                    NSUnderlineStyleAttributeName: @(NSUnderlineStyleSingle),
+                };
+                textCell.attributedStringValue =
+                    [[[NSAttributedString alloc] initWithString:plain attributes:attrs] autorelease];
+            }
+        }
+    }
+}
+
+// Per-byte selection check for the ASCII pane. The cellInSelectionAtRow:cellIndex:
+// helper above works on bytes-per-cell groupings (the hex pane's column
+// granularity); ASCII renders one glyph per byte, so we need a byte-level
+// version. Handles both linear (selectedByteStart..selectedByteEnd) and
+// rectangular (g_rectSelection) selection modes the same way the hex pane
+// does — keeping the two visualisations in sync.
+- (BOOL)asciiByteInSelectionAtRow:(NSInteger)row byteInRow:(NSInteger)byteInRow
+{
+    if (!hasByteSelection() && !hasRectSelection()) return NO;
+    const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+    if ((size_t)byteInRow >= bpr) return NO;
+    const size_t byteOffset = static_cast<size_t>(row) * bpr + static_cast<size_t>(byteInRow);
+    if (hasRectSelection()) {
+        const size_t rectFirstRow = g_rectSelection.originOffset / bpr;
+        const size_t rectLastRow = rectFirstRow + g_rectSelection.height - 1;
+        if (static_cast<size_t>(row) < rectFirstRow || static_cast<size_t>(row) > rectLastRow) return NO;
+        const size_t rectCol0 = g_rectSelection.originOffset % bpr;
+        const size_t rectColEnd = rectCol0 + g_rectSelection.width;  // exclusive
+        return static_cast<size_t>(byteInRow) >= rectCol0 && static_cast<size_t>(byteInRow) < rectColEnd;
+    }
+    return byteOffset >= selectedByteStart && byteOffset < selectedByteEnd;
+}
+
+// True iff the cell at (row, cellIndex) overlaps the current selection
+// (linear or rectangular). Used by willDisplayCell to recolour the byte
+// glyphs in the user's chosen Selection-Text colour. Cell range is
+// [cellIndex * bpc, (cellIndex + 1) * bpc) bytes within the row.
+- (BOOL)cellInSelectionAtRow:(NSInteger)row cellIndex:(NSInteger)cellIndex
+{
+    if (!hasByteSelection() && !hasRectSelection()) return NO;
+    const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+    const size_t bpc = static_cast<size_t>(std::max(g_bytesPerCell, 1));
+    const size_t rowFirst = static_cast<size_t>(row) * bpr;
+    const size_t cellFirst = rowFirst + static_cast<size_t>(cellIndex) * bpc;
+    const size_t cellEnd = cellFirst + bpc;  // exclusive
+
+    if (hasRectSelection()) {
+        const size_t rectFirstRow = g_rectSelection.originOffset / bpr;
+        const size_t rectLastRow = rectFirstRow + g_rectSelection.height - 1;
+        if (static_cast<size_t>(row) < rectFirstRow || static_cast<size_t>(row) > rectLastRow) return NO;
+        const size_t rectCol0 = g_rectSelection.originOffset % bpr;
+        const size_t rectColEnd = rectCol0 + g_rectSelection.width;  // exclusive
+        const size_t cellCol0 = static_cast<size_t>(cellIndex) * bpc;
+        const size_t cellColEnd = cellCol0 + bpc;
+        return cellCol0 < rectColEnd && cellColEnd > rectCol0;
+    }
+    return cellFirst < selectedByteEnd && cellEnd > selectedByteStart;
 }
 
 - (BOOL)tableView:(NSTableView *)tableView shouldSelectRow:(NSInteger)row
@@ -887,6 +1684,39 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
 @end
 
 static HexTableDataSource *hexTableDataSource = nil;
+
+// Header view that paints its background to match the table's data-row
+// background (windowBackgroundColor) instead of the system's default
+// header chrome (a darker control gray that doesn't match the surrounding
+// pane in light mode). We don't call super.drawRect because that draws
+// the chrome we're trying to avoid; instead we fill the column-occupied
+// span with the row colour and call drawInteriorWithFrame: on each
+// headerCell to render just the title text.
+@interface HexTableHeaderView : NSTableHeaderView
+@end
+
+@implementation HexTableHeaderView
+- (void)drawRect:(NSRect)dirtyRect
+{
+    NSColor *bg = self.tableView.backgroundColor ?: [NSColor windowBackgroundColor];
+    [bg set];
+    NSRectFill(dirtyRect);
+
+    const NSInteger numCols = self.tableView.numberOfColumns;
+    for (NSInteger i = 0; i < numCols; ++i) {
+        const NSRect cellRect = [self headerRectOfColumn:i];
+        if (!NSIntersectsRect(cellRect, dirtyRect)) {
+            continue;
+        }
+        NSTableColumn *col = [self.tableView.tableColumns objectAtIndex:i];
+        // drawInteriorWithFrame: renders the title text without the
+        // headerCell's own chrome (background + bottom rule). The bg
+        // fill above sits behind every column, so spacers paint as
+        // empty same-colour strips matching the data rows beneath.
+        [col.headerCell drawInteriorWithFrame:cellRect inView:self];
+    }
+}
+@end
 
 @interface HexTableView : NSTableView
 @end
@@ -936,6 +1766,24 @@ static HexTableDataSource *hexTableDataSource = nil;
     if (c == 'l' || c == 'L') {
         presentHexGotoDialog();
         return YES;
+    }
+    // Wire Cmd-X / Cmd-C / Cmd-V / Cmd-A to our cut: / copy: / paste: /
+    // selectAll: responder methods. Without this, AppKit dispatches the
+    // keyboard shortcut to the host's Edit menu — whose targets are tied
+    // to NPP's text-editor selection, not the hex view's byte selection.
+    // Bug fingerprint when this isn't claimed: Cmd-C does nothing visible
+    // (clipboard stays whatever was there before), and the next Cmd-V
+    // pastes that *stale* clipboard, looking like the source copy "got
+    // the wrong bytes". Only the bare-Command variants are claimed —
+    // shift/option-modified shortcuts (e.g. Cmd-Shift-V "paste and match
+    // style") fall through to whatever the host wires them to.
+    const NSEventModifierFlags clipMask =
+        NSEventModifierFlagShift | NSEventModifierFlagOption | NSEventModifierFlagControl;
+    if ((mods & clipMask) == 0) {
+        if (c == 'c' || c == 'C') { [self copy:nil];      return YES; }
+        if (c == 'x' || c == 'X') { [self cut:nil];       return YES; }
+        if (c == 'v' || c == 'V') { [self paste:nil];     return YES; }
+        if (c == 'a' || c == 'A') { [self selectAll:nil]; return YES; }
     }
     return [super performKeyEquivalent:event];
 }
@@ -989,7 +1837,32 @@ static HexTableDataSource *hexTableDataSource = nil;
         const size_t bpr = static_cast<size_t>(currentBytesPerRow());
         const size_t rowStart = static_cast<size_t>(rowIndex) * bpr;
         const size_t rowEnd = rowStart + bpr;
-        if (!hasByteSelection() || selectedByteEnd <= rowStart || selectedByteStart >= rowEnd) {
+
+        // Compute the byte range to highlight in this row. Linear and rectangular
+        // selections are mutually exclusive (the selection helpers enforce that), so
+        // we only enter one branch here. Both branches end in the same per-row
+        // highlight code below — only the [firstByteInRow, lastByteInRow] range differs.
+        size_t firstByteInRow = 0;
+        size_t lastByteInRow = 0;
+        bool drawHighlight = false;
+        if (hasRectSelection()) {
+            const size_t rectFirstRow = g_rectSelection.originOffset / bpr;
+            const size_t rectLastRow = rectFirstRow + g_rectSelection.height - 1;
+            const size_t rectCol0 = g_rectSelection.originOffset % bpr;
+            const size_t rectColN = rectCol0 + g_rectSelection.width - 1;
+            if (static_cast<size_t>(rowIndex) >= rectFirstRow && static_cast<size_t>(rowIndex) <= rectLastRow) {
+                firstByteInRow = rectCol0;
+                lastByteInRow = std::min(rectColN, bpr - 1);
+                drawHighlight = true;
+            }
+        } else if (hasByteSelection() && selectedByteEnd > rowStart && selectedByteStart < rowEnd) {
+            const size_t selectedRowStart = std::max(selectedByteStart, rowStart);
+            const size_t selectedRowEnd = std::min(selectedByteEnd, rowEnd);
+            firstByteInRow = selectedRowStart % bpr;
+            lastByteInRow = (selectedRowEnd - 1) % bpr;
+            drawHighlight = true;
+        }
+        if (!drawHighlight) {
             continue;
         }
 
@@ -999,10 +1872,6 @@ static HexTableDataSource *hexTableDataSource = nil;
         const hexedit::ViewMode mode = currentViewMode();
         const int bpc = std::max(mode.bytesPerCell, 1);
         const int digitsPerByte = (mode.notation == hexedit::CellNotation::Binary) ? 8 : 2;
-        const size_t selectedRowStart = std::max(selectedByteStart, rowStart);
-        const size_t selectedRowEnd = std::min(selectedByteEnd, rowEnd);
-        const size_t firstByteInRow = selectedRowStart % bpr;
-        const size_t lastByteInRow = (selectedRowEnd - 1) % bpr;
         const size_t firstCell = firstByteInRow / static_cast<size_t>(bpc);
         const size_t lastCell = lastByteInRow / static_cast<size_t>(bpc);
 
@@ -1029,6 +1898,14 @@ static HexTableDataSource *hexTableDataSource = nil;
 
     [super drawRect:dirtyRect];
 
+    // Reset per-paint diagnostic stashes BEFORE the early-return below
+    // so an invalidated caret doesn't leave stale values from the prior
+    // paint visible to tests. Set to true / non-zero only when this
+    // paint actually draws something.
+    g_caretLastRenderedValid = false;
+    g_mirrorLastRenderedWidth = 0.0;
+    g_mirrorLastRenderedHeight = 0.0;
+
     if (!isVisibleEditableOffset(activeByteOffset)) {
         return;
     }
@@ -1039,7 +1916,26 @@ static HexTableDataSource *hexTableDataSource = nil;
         selectedByteEnd > selectedByteStart &&
         selectedByteEnd == activeByteOffset &&
         (selectedByteEnd % caretBpr) == 0;
-    const size_t caretByteOffset = drawAsciiCaretAtLineEnd ? selectedByteEnd - 1 : activeByteOffset;
+    // Linear-drag caret convention (set 2026-05-04 to match Windows):
+    // while the user is mid-drag (isSelectingBytes), the caret is rendered
+    // flush against the right edge of the LAST selected byte — no gap
+    // between the selection wash and the caret stripe. After mouseUp the
+    // caret falls through to its normal activeByteOffset = selectedByteEnd
+    // position, which sits at byte (selectedByteEnd)'s left edge (one
+    // inter-cell gap to the right of the selection, "at the beginning of
+    // the next byte"). The "during" branch picks up by adjusting the
+    // caret-target byte to (selectedByteEnd - 1) and engaging the same
+    // right-edge shift used by rect-mode. drawAsciiCaretAtLineEnd remains
+    // a special case for ASCII end-of-row even outside an active drag.
+    const bool inLinearMouseDrag = isSelectingBytes &&
+        hasByteSelection() &&
+        selectedByteEnd > selectedByteStart &&
+        selectedByteEnd == activeByteOffset &&
+        selectedByteEnd > 0;
+    const bool useLinearDragCaretByte = inLinearMouseDrag;
+    const size_t caretByteOffset = (drawAsciiCaretAtLineEnd || useLinearDragCaretByte)
+        ? selectedByteEnd - 1
+        : activeByteOffset;
     const NSInteger row = static_cast<NSInteger>(caretByteOffset / caretBpr);
     if (row < 0 || row >= self.numberOfRows || !NSIntersectsRect(dirtyRect, [self rectOfRow:row])) {
         return;
@@ -1061,6 +1957,33 @@ static HexTableDataSource *hexTableDataSource = nil;
         cellFrame = [self frameOfCellAtColumn:tableColumn row:row];
         const CGFloat glyphWidth = monospacedGlyphWidth(font);
         caretX = cellGlyphLeft(self, tableColumn, row, font) + (static_cast<CGFloat>(pos.digitInCell) * glyphWidth);
+
+        // Right-edge shift: the caret renders flush against the right edge
+        // of the byte under it instead of at its left edge. Engaged in two
+        // scenarios:
+        //   - Linear mouse drag in progress (caretByteOffset was already
+        //     reset to selectedByteEnd-1 above, so this just slides the
+        //     caret stripe past the byte's digits to sit visually on
+        //     top of the rightmost edge of the selection wash).
+        //   - Rect selection where the active corner sits on the rect's
+        //     right column (drag-right / keyboard-extend-right). Same
+        //     visual outcome as linear; the user can't tell rect from
+        //     linear by where the caret renders.
+        // For rect drag-LEFT (active corner == rect left), no shift; the
+        // caret stays at the byte's left edge so it sits before the
+        // selection wash, mirror-image of drag-right.
+        bool applyRightEdgeShift = useLinearDragCaretByte;
+        if (hasRectSelection() && !applyRightEdgeShift) {
+            const size_t rectColStart = g_rectSelection.originOffset % caretBpr;
+            const size_t rectColEnd = rectColStart + g_rectSelection.width - 1;
+            if (byteInRow == rectColEnd && rectColEnd > rectColStart) {
+                applyRightEdgeShift = true;
+            }
+        }
+        if (applyRightEdgeShift) {
+            const int totalDigits = std::max(hexedit::digitsPerCell(mode), 1);
+            caretX += static_cast<CGFloat>(totalDigits - pos.digitInCell) * glyphWidth;
+        }
     } else {
         const NSInteger tableColumn = [self columnWithIdentifier:@"ascii"];
         if (tableColumn < 0) {
@@ -1071,11 +1994,136 @@ static HexTableDataSource *hexTableDataSource = nil;
         const CGFloat charWidth = monospacedGlyphWidth(font);
         const size_t asciiColumnIndex = drawAsciiCaretAtLineEnd ? caretBpr : (caretByteOffset % caretBpr);
         caretX = asciiGlyphLeft(self, tableColumn, row) + static_cast<CGFloat>(asciiColumnIndex) * charWidth;
+
+        // Same right-edge shift logic as the hex pane (linear drag flush
+        // and rect right-corner). ASCII has one glyph per byte, so the
+        // shift is exactly one charWidth. drawAsciiCaretAtLineEnd already
+        // landed the caret at column index = caretBpr above (visually the
+        // end of the row), so don't double-shift in that case.
+        if (!drawAsciiCaretAtLineEnd) {
+            bool applyAsciiRightEdgeShift = useLinearDragCaretByte;
+            if (hasRectSelection() && !applyAsciiRightEdgeShift) {
+                const size_t rectColStart = g_rectSelection.originOffset % caretBpr;
+                const size_t rectColEnd = rectColStart + g_rectSelection.width - 1;
+                const size_t activeCol = caretByteOffset % caretBpr;
+                if (activeCol == rectColEnd && rectColEnd > rectColStart) {
+                    applyAsciiRightEdgeShift = true;
+                }
+            }
+            if (applyAsciiRightEdgeShift) {
+                caretX += charWidth;
+            }
+        }
     }
 
     NSRect caretRect = NSMakeRect(caretX, NSMinY(cellFrame) + 2.0, HEX_CARET_WIDTH, std::max<CGFloat>(NSHeight(cellFrame) - 4.0, 1.0));
     [[NSColor selectedContentBackgroundColor] setFill];
     NSRectFill(caretRect);
+    // Stash the caret's last-rendered X / row / cell origin for the
+    // diagnostic AX surface so UI tests can assert that a known cursor /
+    // rect-selection state translates into the expected pixel placement.
+    // This is the only signal the test harness has of where the caret was
+    // drawn (custom NSRectFill output is invisible to AX).
+    g_caretLastRenderedX = caretX;
+    g_caretLastRenderedRow = row;
+    g_caretLastRenderedCellMinX = NSMinX(cellFrame);
+    g_caretLastRenderedValid = true;
+
+    // Mirror cursor: indicate the byte in the OPPOSITE pane that the
+    // caret is currently associated with. Cross-references hex digits
+    // with their ASCII characters at a glance, so the user doesn't
+    // have to count columns to find the matching glyph in the other
+    // pane.
+    //
+    // Two visual styles, selected by the Font tab's "Mirror Cursor as
+    // Rect" toggle (g_mirrorAsciiCursor):
+    //   • toggle ON  → hollow rectangle around the byte/char.
+    //   • toggle OFF → 2-pixel underline under the byte/char.
+    //                 (Windows-source parity — when the rectangle option
+    //                 is off, Windows draws the bottom edge of the rect
+    //                 only, giving a subtle "current byte" hint.)
+    //
+    // Suppressed whenever any selection is active (linear or rect): the
+    // selection wash already gives the user a visual cross-reference
+    // (both panes show the highlighted bytes); an extra rectangle or
+    // underline on top would clutter rather than aid navigation. Also
+    // skipped when caretByteOffset is past the last visible byte —
+    // a forward-linear post-mouseUp caret at byte "selEnd" can be
+    // exactly at totalLength, with no byte to indicate.
+    if (caretByteOffset < previewTotalLength
+        && !hasByteSelection() && !hasRectSelection()) {
+        NSColor *indicatorColor = [[NSColor selectedContentBackgroundColor] colorWithAlphaComponent:0.55];
+        const size_t byteInRow = caretByteOffset % caretBpr;
+        // Compute the rect that bounds the byte/char in the opposite pane.
+        // Both styles (rect outline + underline) share the same bounds
+        // calc; only the drawing primitive differs.
+        NSRect mirrorRect = NSZeroRect;
+        bool haveMirrorRect = false;
+        if (activeCursorField == HexCursorField::Hex) {
+            // Indicator goes in the ASCII pane: outline (or underline)
+            // the one ASCII char corresponding to the caret byte.
+            const NSInteger asciiCol = [self columnWithIdentifier:@"ascii"];
+            if (asciiCol >= 0) {
+                NSRect asciiCellFrame = [self frameOfCellAtColumn:asciiCol row:row];
+                const CGFloat asciiOriginX = asciiGlyphLeft(self, asciiCol, row);
+                const CGFloat charWidth = monospacedGlyphWidth(font);
+                mirrorRect = NSMakeRect(asciiOriginX + static_cast<CGFloat>(byteInRow) * charWidth,
+                                        NSMinY(asciiCellFrame) + 1.0,
+                                        charWidth,
+                                        std::max<CGFloat>(NSHeight(asciiCellFrame) - 2.0, 1.0));
+                haveMirrorRect = true;
+            }
+        } else {
+            // Indicator goes in the hex pane: outline (or underline)
+            // JUST the caret byte's digits within its hex cell. For
+            // bpc > 1 the cell holds multiple bytes; we pick the byte
+            // at the cell's little/big-endian-aware sub-position so
+            // the indicator tracks the actual visible digits in the
+            // displayed order.
+            const hexedit::ViewMode mode = currentViewMode();
+            const hexedit::DisplayPosition pos = hexedit::displayPositionForByte(byteInRow, 0, mode);
+            const NSInteger hexCol = [self columnWithIdentifier:[NSString stringWithFormat:@"cell%02zu", pos.cellIndex]];
+            if (hexCol >= 0) {
+                NSRect hexCellFrame = [self frameOfCellAtColumn:hexCol row:row];
+                const CGFloat hexGlyphLeftX = cellGlyphLeft(self, hexCol, row, font);
+                const CGFloat glyphWidth = monospacedGlyphWidth(font);
+                const int totalDigits = std::max(hexedit::digitsPerCell(mode), 1);
+                const int bpc = std::max(mode.bytesPerCell, 1);
+                const int digitsPerByte = totalDigits / bpc;
+                // pos.digitInCell is the first digit of the *active*
+                // sub-byte (we asked with subInByte=0). Its position
+                // already accounts for endianness via the displayed-byte
+                // mapping in displayPositionForByte.
+                const CGFloat byteX = hexGlyphLeftX + static_cast<CGFloat>(pos.digitInCell) * glyphWidth;
+                mirrorRect = NSMakeRect(byteX,
+                                        NSMinY(hexCellFrame) + 1.0,
+                                        static_cast<CGFloat>(digitsPerByte) * glyphWidth,
+                                        std::max<CGFloat>(NSHeight(hexCellFrame) - 2.0, 1.0));
+                haveMirrorRect = true;
+            }
+        }
+        if (haveMirrorRect) {
+            if (g_mirrorAsciiCursor) {
+                [indicatorColor setStroke];
+                NSFrameRectWithWidth(mirrorRect, 1.0);
+                g_mirrorLastRenderedHeight = NSHeight(mirrorRect);
+            } else {
+                // Underline = solid 2px line at the bottom of the rect.
+                // 2px tracks Windows-source's PatBlt(... bottom-2, ...
+                // height=2 ...) — a single pixel reads too thin at
+                // typical hex-view font sizes.
+                [indicatorColor setFill];
+                const CGFloat underlineHeight = 2.0;
+                NSRect underlineRect = NSMakeRect(NSMinX(mirrorRect),
+                                                   NSMaxY(mirrorRect) - underlineHeight,
+                                                   NSWidth(mirrorRect),
+                                                   underlineHeight);
+                NSRectFill(underlineRect);
+                g_mirrorLastRenderedHeight = underlineHeight;
+            }
+            g_mirrorLastRenderedWidth = NSWidth(mirrorRect);
+        }
+    }
 }
 
 - (NSPoint)currentScrollOrigin
@@ -1103,7 +2151,12 @@ static HexTableDataSource *hexTableDataSource = nil;
     size_t byteOffset = 0;
     NSInteger nibble = 0;
     HexCursorField field = activeCursorField;
-    if ([self byteOffsetAtPoint:point offset:&byteOffset nibble:&nibble field:&field] && !hasByteSelection()) {
+    // Only reposition the caret on right-click when nothing is selected. With a
+    // linear OR rectangular selection active, a right-click that moved the caret
+    // would let the user lose track of which bytes Cut/Copy/Delete will operate
+    // on — the menu fires on the still-active selection, not on the right-click
+    // point.
+    if ([self byteOffsetAtPoint:point offset:&byteOffset nibble:&nibble field:&field] && !hasAnyByteSelection()) {
         if (field == HexCursorField::Hex) {
             setActiveHexCursor(byteOffset, nibble);
         } else {
@@ -1118,14 +2171,36 @@ static HexTableDataSource *hexTableDataSource = nil;
     NSMenuItem *redoItem = [menu addItemWithTitle:L(@"menu.context.redo") action:@selector(redo:) keyEquivalent:@""];
     redoItem.target = self;
     [menu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *cutItem = [menu addItemWithTitle:L(@"menu.context.cut") action:@selector(hexCut:) keyEquivalent:@""];
+    // Cmd-X / Cmd-C / Cmd-V shortcuts shown in the context menu so the user
+    // sees the binding next to each item. The actual key dispatch is handled
+    // in HexTableView.performKeyEquivalent: — these strings exist primarily
+    // for display, but AppKit will also dispatch the shortcut to these items
+    // if the menu is the receiving responder, which is harmless redundancy.
+    NSMenuItem *cutItem = [menu addItemWithTitle:L(@"menu.context.cut") action:@selector(hexCut:) keyEquivalent:@"x"];
     cutItem.target = self;
-    NSMenuItem *copyItem = [menu addItemWithTitle:L(@"menu.context.copy") action:@selector(hexCopy:) keyEquivalent:@""];
+    NSMenuItem *copyItem = [menu addItemWithTitle:L(@"menu.context.copy") action:@selector(hexCopy:) keyEquivalent:@"c"];
     copyItem.target = self;
-    NSMenuItem *pasteItem = [menu addItemWithTitle:L(@"menu.context.paste") action:@selector(hexPaste:) keyEquivalent:@""];
+    NSMenuItem *pasteItem = [menu addItemWithTitle:L(@"menu.context.paste") action:@selector(hexPaste:) keyEquivalent:@"v"];
     pasteItem.target = self;
     NSMenuItem *deleteItem = [menu addItemWithTitle:L(@"menu.context.delete") action:@selector(hexDelete:) keyEquivalent:@""];
     deleteItem.target = self;
+    [menu addItem:[NSMenuItem separatorItem]];
+    // Selection helpers — Select All is wired to Cmd+A through the
+    // responder-chain selectAll: action; Select to Start / End use the
+    // Cmd+UpArrow / Cmd+DownArrow shortcuts (the macOS-native chord that
+    // works on MacBook keyboards which lack dedicated Home/End keys).
+    // Surfacing them in the context menu makes the keyboard shortcuts
+    // discoverable — a user right-clicks to look up the chord rather
+    // than guessing.
+    NSMenuItem *selectAllItem = [menu addItemWithTitle:L(@"menu.context.selectAll") action:@selector(selectAll:) keyEquivalent:@"a"];
+    selectAllItem.target = self;
+    selectAllItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+    NSMenuItem *selectToStartItem = [menu addItemWithTitle:L(@"menu.context.selectToStart") action:@selector(hexSelectToStart:) keyEquivalent:[NSString stringWithFormat:@"%C", (unichar)NSUpArrowFunctionKey]];
+    selectToStartItem.target = self;
+    selectToStartItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+    NSMenuItem *selectToEndItem = [menu addItemWithTitle:L(@"menu.context.selectToEnd") action:@selector(hexSelectToEnd:) keyEquivalent:[NSString stringWithFormat:@"%C", (unichar)NSDownArrowFunctionKey]];
+    selectToEndItem.target = self;
+    selectToEndItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
     [menu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *cutBinaryItem = [menu addItemWithTitle:L(@"menu.context.cutBinary") action:@selector(hexCutBinary:) keyEquivalent:@""];
     cutBinaryItem.target = self;
@@ -1246,19 +2321,43 @@ static HexTableDataSource *hexTableDataSource = nil;
     if (action == @selector(cut:) || action == @selector(copy:) || action == @selector(delete:) ||
         action == @selector(hexCut:) || action == @selector(hexCopy:) || action == @selector(hexDelete:) ||
         action == @selector(hexCutBinary:) || action == @selector(hexCopyBinary:)) {
-        size_t offset = 0;
-        size_t byteCount = 0;
-        selectedOrCurrentRange(&offset, &byteCount);
-        return byteCount > 0;
+        // Only enable when there is an actual selection (linear range or rect).
+        // Previously this also returned YES whenever the cursor sat on any byte
+        // inside the buffer — selectedOrCurrentRange falls back to a 1-byte
+        // range at the cursor when no real selection exists — which made
+        // Cut/Copy permanently enabled and surprised users into thinking the
+        // commands had no useful no-op state.
+        return hasByteSelection() || hasRectSelection();
     }
     if (action == @selector(paste:) || action == @selector(hexPaste:) || action == @selector(hexPasteBinary:)) {
+        // First: do we own a fresh in-process snapshot? That's authoritative
+        // — the bytes are right there in HexClipboardOwner._bytes — and works
+        // regardless of whether AppKit decides to materialize the promised
+        // pasteboard types for a validation read. Without this short-circuit,
+        // calling dataForType: against our own promised public.data during
+        // menu validation returned nil on macOS 26 (the promise isn't
+        // materialized until an actual paste-action read), so Paste appeared
+        // disabled immediately after our own Cmd-C — and a subsequent
+        // keyboard Cmd-V went through performKeyEquivalent but pasteboard
+        // reads still came back empty, so the paste silently no-op'd.
+        if (currentlyOwnedHexSnapshot() != nil) {
+            return YES;
+        }
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
         return [pasteboard dataForType:NSPasteboardTypeString] != nil ||
             [pasteboard dataForType:@"public.data"] != nil ||
+            [pasteboard dataForType:kHexRectPasteboardType] != nil ||
             [pasteboard stringForType:NSPasteboardTypeString] != nil;
     }
-    if (action == @selector(selectAll:)) {
-        return !previewBytes.empty();
+    if (action == @selector(selectAll:) ||
+        action == @selector(hexSelectToStart:) ||
+        action == @selector(hexSelectToEnd:)) {
+        // Selection helpers all need at least one byte in the buffer.
+        // We don't bother gating them on cursor position (e.g. Select to
+        // Start when cursor is already at 0 is a no-op) because the menu
+        // would then flicker enabled/disabled on every cursor move,
+        // which is more confusing than a no-op click.
+        return !hexBufferEmpty();
     }
     return YES;
 }
@@ -1281,6 +2380,20 @@ static HexTableDataSource *hexTableDataSource = nil;
 - (void)hexDelete:(id)sender
 {
     deleteHexSelection();
+}
+
+- (void)hexSelectToStart:(id)sender
+{
+    NSPoint scrollOrigin = [self currentScrollOrigin];
+    extendByteSelectionToOffset(0);
+    [self reloadDataPreservingScrollOrigin:scrollOrigin];
+}
+
+- (void)hexSelectToEnd:(id)sender
+{
+    NSPoint scrollOrigin = [self currentScrollOrigin];
+    extendByteSelectionToOffset(previewTotalLength);
+    [self reloadDataPreservingScrollOrigin:scrollOrigin];
 }
 
 - (void)hexCutBinary:(id)sender
@@ -1458,10 +2571,34 @@ static HexTableDataSource *hexTableDataSource = nil;
     selectedByteStart = std::min(selectionAnchorByte, byteOffset);
     selectedByteEnd = std::max(selectionAnchorByte, byteOffset) + 1;
     activeCursorField = field;
-    activeByteOffset = selectedByteEnd;
+    // Caret follows the mouse cursor: forward drag (byteOffset >= anchor)
+    // ⇒ caret at selectedByteEnd (one past the rightmost byte, the
+    // existing end-of-selection convention; the during-drag flush in
+    // drawRect: visually plants it on the right edge of byte
+    // selectedByteEnd-1). Backward drag (byteOffset < anchor) ⇒ caret
+    // at selectedByteStart (= byteOffset, the byte the user is currently
+    // hovering over), which renders at that byte's left edge — visually
+    // before the first selected byte. Matches the rect-mode convention
+    // where the caret tracks the dragged-to corner regardless of which
+    // side of the anchor the user is on.
+    activeByteOffset = (byteOffset >= selectionAnchorByte) ? selectedByteEnd : selectedByteStart;
     activeHexNibble = 0;
     clampActiveCursor();
     [self setNeedsDisplay:YES];
+}
+
+// Modifier-mask comparison helper. We accept either Option-drag or
+// Shift+Option-drag for rectangular selection — both are NPP conventions and
+// users come from either muscle-memory background. Cmd or Ctrl in the mix
+// means "something else" and disqualifies. Caps Lock and other irrelevant
+// flags are filtered out by masking down to the four meaningful bits.
+- (BOOL)hexEventStartsRectDrag:(NSEvent *)event
+{
+    const NSEventModifierFlags relevant = event.modifierFlags &
+        (NSEventModifierFlagShift | NSEventModifierFlagControl |
+         NSEventModifierFlagOption | NSEventModifierFlagCommand);
+    return relevant == NSEventModifierFlagOption ||
+           relevant == (NSEventModifierFlagOption | NSEventModifierFlagShift);
 }
 
 - (void)mouseDown:(NSEvent *)event
@@ -1471,11 +2608,15 @@ static HexTableDataSource *hexTableDataSource = nil;
     const NSInteger row = [self rowAtPoint:point];
     const NSInteger column = [self columnAtPoint:point];
 
+    const BOOL isRectModifier = [self hexEventStartsRectDrag:event];
+
     if (row >= 0 && column >= 0) {
         NSTableColumn *tableColumn = self.tableColumns[column];
         NSString *identifier = tableColumn.identifier;
 
         if ([identifier isEqualToString:@"offset"]) {
+            // Address column: not selectable. Click (with or without modifiers) toggles
+            // a bookmark on the row.
             toggleBookmarkRow(static_cast<size_t>(row));
             [self setNeedsDisplayInRect:[self rectOfRow:row]];
             return;
@@ -1485,7 +2626,18 @@ static HexTableDataSource *hexTableDataSource = nil;
         NSInteger nibble = 0;
         HexCursorField field = HexCursorField::Hex;
         if ([self byteOffsetAtPoint:point offset:&byteOffset nibble:&nibble field:&field]) {
-            clearByteSelection();
+            if (isRectModifier) {
+                // Byte-pane or ASCII-pane rect drag — cell granular.
+                clearAllByteSelections();
+                g_rectAnchorOffset = byteOffset;
+                g_rectOriginField = field;
+                g_isSelectingRect = true;
+                updateRectSelectionToOffset(byteOffset);
+                [self.window makeFirstResponder:self];
+                [self reloadDataPreservingScrollOrigin:scrollOrigin];
+                return;
+            }
+            clearAllByteSelections();
             selectionAnchorByte = byteOffset;
             isSelectingBytes = true;
             if (field == HexCursorField::Hex) {
@@ -1504,6 +2656,26 @@ static HexTableDataSource *hexTableDataSource = nil;
 
 - (void)mouseDragged:(NSEvent *)event
 {
+    if (g_isSelectingRect) {
+        NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
+        const NSInteger row = [self rowAtPoint:point];
+
+        size_t byteOffset = 0;
+        NSInteger nibble = 0;
+        HexCursorField field = g_rectOriginField;
+        if ([self byteOffsetAtPoint:point offset:&byteOffset nibble:&nibble field:&field]) {
+            updateRectSelectionToOffset(byteOffset);
+        } else if (row >= 0) {
+            // Pointer is past the right edge of the byte / ASCII panes — clamp to the
+            // row's last byte so the rect extends across the full visible row width.
+            const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+            const size_t rowEnd = static_cast<size_t>(row) * bpr + (bpr - 1);
+            updateRectSelectionToOffset(std::min(rowEnd,
+                previewTotalLength > 0 ? previewTotalLength - 1 : static_cast<size_t>(0)));
+        }
+        return;
+    }
+
     if (!isSelectingBytes) {
         [super mouseDragged:event];
         return;
@@ -1520,7 +2692,34 @@ static HexTableDataSource *hexTableDataSource = nil;
 
 - (void)mouseUp:(NSEvent *)event
 {
+    // Drag finished. For rect drags where the active corner sits on the
+    // rect's right column, advance activeByteOffset by one byte so the
+    // post-drag caret renders at the *next* byte's left edge instead of
+    // staying on the dragged-to byte's right edge. Mirror the linear
+    // convention ("after a drag, the cursor is at the start of the next
+    // byte"). The during-drag right-edge shift in drawRect: only fires
+    // while activeByteOffset's column equals rectColEnd, so advancing
+    // past that turns it off automatically — no extra render-side flag
+    // needed.
+    if (g_isSelectingRect && g_rectActive && previewTotalLength > 0) {
+        const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+        if (bpr > 0) {
+            const size_t rectColStart = g_rectSelection.originOffset % bpr;
+            const size_t rectColEnd = rectColStart + g_rectSelection.width - 1;
+            const size_t activeCol = activeByteOffset % bpr;
+            if (activeCol == rectColEnd && rectColEnd > rectColStart) {
+                const size_t advanced = activeByteOffset + 1;
+                // Stay on the rect's row (don't wrap into the next row);
+                // bpr > 0 above guards the modulo.
+                if ((advanced / bpr) == (activeByteOffset / bpr)) {
+                    activeByteOffset = advanced;
+                    [self setNeedsDisplay:YES];
+                }
+            }
+        }
+    }
     isSelectingBytes = false;
+    g_isSelectingRect = false;
     [super mouseUp:event];
 }
 
@@ -1537,19 +2736,73 @@ static HexTableDataSource *hexTableDataSource = nil;
     const NSEventModifierFlags modifiers = event.modifierFlags;
     const NSEventModifierFlags commandOrControl = modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagControl);
     if (commandOrControl != 0) {
-        // Cmd+Home / Cmd+End jump to document start/end. This mirrors the Notepad++
-        // Windows shortcut and lets editing reach EOF on documents larger than one row.
+        // Document-start / document-end keyboard shortcuts. Two routes are
+        // wired so both Apple-keyboard users and full-keyboard users find
+        // a shortcut that works:
+        //
+        //   • Cmd+Home / Cmd+End     — Windows / external-keyboard route.
+        //                              Notepad++ Windows shortcut.
+        //   • Cmd+UpArrow / Cmd+Down — macOS-native route. Mirrors what
+        //                              Pages / TextEdit / Mail use, and
+        //                              works on MacBook keyboards which
+        //                              have no dedicated Home/End keys.
+        //
+        // With Shift held, both routes extend the linear byte selection
+        // instead of clearing + jumping — matches macOS text-view
+        // convention so a user can select a range from the cursor to
+        // either end of the document in one chord.
         if ((modifiers & NSEventModifierFlagCommand) != 0) {
-            if (character == NSHomeFunctionKey) {
-                clearByteSelection();
-                writeBackCursor(hexedit::cursorToDocumentStart(currentCursor()));
-                [self reloadDataPreservingScrollOrigin:scrollOrigin];
+            const bool shiftHeld = (modifiers & NSEventModifierFlagShift) != 0;
+            const bool isStartKey = character == NSHomeFunctionKey || character == NSUpArrowFunctionKey;
+            const bool isEndKey = character == NSEndFunctionKey || character == NSDownArrowFunctionKey;
+            if (isStartKey) {
+                if (shiftHeld) {
+                    extendByteSelectionToOffset(0);
+                } else {
+                    clearByteSelection();
+                    writeBackCursor(hexedit::cursorToDocumentStart(currentCursor()));
+                }
+                // Document-jump shortcuts deliberately do NOT preserve
+                // scroll position — the user wants the new cursor row in
+                // view, not the previous viewport. reloadData picks up
+                // any selection-extent change, then scrollHexTableToActiveOffset
+                // brings the new caret row on-screen.
+                [self reloadData];
+                scrollHexTableToActiveOffset();
                 return;
             }
-            if (character == NSEndFunctionKey) {
-                clearByteSelection();
-                writeBackCursor(hexedit::cursorToDocumentEnd(currentCursor(), currentDocumentView()));
-                [self reloadDataPreservingScrollOrigin:scrollOrigin];
+            if (isEndKey) {
+                if (shiftHeld) {
+                    extendByteSelectionToOffset(previewTotalLength);
+                } else {
+                    clearByteSelection();
+                    writeBackCursor(hexedit::cursorToDocumentEnd(currentCursor(), currentDocumentView()));
+                }
+                [self reloadData];
+                scrollHexTableToActiveOffset();
+                return;
+            }
+            // Cmd+LeftArrow / Cmd+RightArrow → cursor to start/end of
+            // current row (the hex-view analogue of "start/end of line"
+            // in macOS text views). Holding Shift extends the selection
+            // to that row boundary instead of clearing.
+            const bool isRowStartKey = (character == NSLeftArrowFunctionKey);
+            const bool isRowEndKey = (character == NSRightArrowFunctionKey);
+            if ((isRowStartKey || isRowEndKey) && previewTotalLength > 0) {
+                const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+                const size_t rowStart = (activeByteOffset / bpr) * bpr;
+                const size_t rowEnd = std::min(rowStart + bpr, previewTotalLength);
+                const size_t target = isRowStartKey ? rowStart : rowEnd;
+                if (shiftHeld) {
+                    extendByteSelectionToOffset(target);
+                } else {
+                    clearByteSelection();
+                    activeByteOffset = target;
+                    activeHexNibble = 0;
+                    clampActiveCursor();
+                }
+                [self reloadData];
+                scrollHexTableToActiveOffset();
                 return;
             }
             // Cmd+L → Go to Offset (matches the macOS browser/Pages convention for jump-to-location).
@@ -1586,42 +2839,221 @@ static HexTableDataSource *hexTableDataSource = nil;
         return;
     }
 
+    // Shift+<rect-modifier>+arrow grows or shrinks a rectangular selection. If no rect
+    // is active, this starts one anchored at the current caret. The "current" corner —
+    // tracked by activeByteOffset — moves by one byte (Left/Right) or one row (Up/Down)
+    // and the rect is rebuilt around the unchanged anchor. Right at the end of a row
+    // and Left at the start of a row are clamped so column-edge arrow presses don't
+    // accidentally jump rows and corrupt the rectangle's geometry.
+    // Keyboard rect extend: Shift+Option+arrow grows the active rect from
+    // its anchor. Same modifier combo regardless of whether the rect was
+    // initiated with Option-drag or Shift+Option-drag (both are accepted
+    // for the start; this is the canonical extend gesture).
+    const NSEventModifierFlags rectExtendFlags = NSEventModifierFlagShift | NSEventModifierFlagOption;
+    const NSEventModifierFlags relevantMods = modifiers &
+        (NSEventModifierFlagShift | NSEventModifierFlagControl |
+         NSEventModifierFlagOption | NSEventModifierFlagCommand);
+    const bool isRectExtend = (relevantMods == rectExtendFlags) &&
+        (character == NSLeftArrowFunctionKey || character == NSRightArrowFunctionKey ||
+         character == NSUpArrowFunctionKey || character == NSDownArrowFunctionKey);
+    if (isRectExtend && previewTotalLength > 0) {
+        const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+        if (!hasRectSelection()) {
+            // Bootstrap a 1×1 rect at the caret on first extension.
+            clearByteSelection();
+            g_rectAnchorOffset = activeByteOffset;
+            g_rectOriginField = activeCursorField;
+            updateRectSelectionToOffset(activeByteOffset);
+        }
+        const size_t rowStart = (activeByteOffset / bpr) * bpr;
+        const size_t rowEnd = std::min(rowStart + bpr, previewTotalLength);
+        size_t target = activeByteOffset;
+        switch (character) {
+        case NSLeftArrowFunctionKey:
+            if (target > rowStart) target -= 1;
+            break;
+        case NSRightArrowFunctionKey:
+            if (target + 1 < rowEnd) target += 1;
+            break;
+        case NSUpArrowFunctionKey:
+            if (target >= bpr) target -= bpr;
+            break;
+        case NSDownArrowFunctionKey:
+            if (target + bpr < previewTotalLength) target += bpr;
+            else if (previewTotalLength > 0) target = previewTotalLength - 1;
+            break;
+        }
+        updateRectSelectionToOffset(target);
+        [self reloadDataPreservingScrollOrigin:scrollOrigin];
+        return;
+    }
+
+    // Linear shift-arrow extend (no Option, no Cmd, no Control). Mac
+    // text-view convention: Shift+Left/Right extends one character at
+    // a time; Shift+Up/Down extends one line at a time. Hex-view
+    // analogue: byte-by-byte (Left/Right) or row-by-row (Up/Down).
+    // Without these the arrow handlers below clear selection on every
+    // press, leaving no keyboard route to grow a sized linear selection.
+    const NSEventModifierFlags shiftOnlyArrow = NSEventModifierFlagShift;
+    if (relevantMods == shiftOnlyArrow && previewTotalLength > 0) {
+        const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+        size_t target = activeByteOffset;
+        bool isExtendArrow = true;
+        switch (character) {
+        case NSLeftArrowFunctionKey:
+            target = (target > 0) ? (target - 1) : 0;
+            break;
+        case NSRightArrowFunctionKey:
+            target = std::min(target + 1, previewTotalLength);
+            break;
+        case NSUpArrowFunctionKey:
+            target = (target >= bpr) ? (target - bpr) : 0;
+            break;
+        case NSDownArrowFunctionKey:
+            target = std::min(target + bpr, previewTotalLength);
+            break;
+        default:
+            isExtendArrow = false;
+            break;
+        }
+        if (isExtendArrow) {
+            extendByteSelectionToOffset(target);
+            [self reloadData];
+            scrollHexTableToActiveOffset();
+            return;
+        }
+    }
+
+    // All bare cursor-navigation keys below use `reloadData +
+    // scrollHexTableToActiveOffset` so the viewport follows the cursor
+    // off-screen — text-view convention, also what the user expects
+    // from a hex editor (pre-fix the Up/Down keys moved cursor but did
+    // NOT scroll the viewport, so cursor disappeared off-screen and
+    // typing Down at the bottom of the viewport had no visible effect).
     switch (character) {
     case NSBackspaceCharacter:
     case NSLeftArrowFunctionKey:
-        clearByteSelection();
-        writeBackCursor(hexedit::navigateLeft(currentCursor(), currentDocumentView(),
-                                               currentViewMode(), currentBytesPerRow()));
-        [self reloadDataPreservingScrollOrigin:scrollOrigin];
+        // Plain Left with active selection collapses the selection to
+        // its left edge — matches Windows-source HexEditor behavior plus
+        // standard macOS text-view convention. Only navigate one byte
+        // further when there's no selection to collapse.
+        if (hasByteSelection()) {
+            const size_t collapseTarget = selectedByteStart;
+            clearAllByteSelections();
+            activeByteOffset = collapseTarget;
+            activeHexNibble = 0;
+            clampActiveCursor();
+        } else {
+            clearAllByteSelections();
+            writeBackCursor(hexedit::navigateLeft(currentCursor(), currentDocumentView(),
+                                                   currentViewMode(), currentBytesPerRow()));
+        }
+        [self reloadData];
+        scrollHexTableToActiveOffset();
         return;
     case NSRightArrowFunctionKey:
-        clearByteSelection();
-        writeBackCursor(hexedit::navigateRight(currentCursor(), currentDocumentView(),
-                                                currentViewMode(), currentBytesPerRow()));
-        [self reloadDataPreservingScrollOrigin:scrollOrigin];
+        // Plain Right with active selection collapses the selection to
+        // its right edge — Windows + macOS convention.
+        if (hasByteSelection()) {
+            const size_t collapseTarget = selectedByteEnd;
+            clearAllByteSelections();
+            activeByteOffset = collapseTarget;
+            activeHexNibble = 0;
+            clampActiveCursor();
+        } else {
+            clearAllByteSelections();
+            writeBackCursor(hexedit::navigateRight(currentCursor(), currentDocumentView(),
+                                                    currentViewMode(), currentBytesPerRow()));
+        }
+        [self reloadData];
+        scrollHexTableToActiveOffset();
         return;
     case NSUpArrowFunctionKey:
-        clearByteSelection();
+        clearAllByteSelections();
         moveActiveCursor(-16);
-        [self reloadDataPreservingScrollOrigin:scrollOrigin];
+        [self reloadData];
+        scrollHexTableToActiveOffset();
         return;
     case NSDownArrowFunctionKey:
-        clearByteSelection();
+        clearAllByteSelections();
         moveActiveCursor(16);
-        [self reloadDataPreservingScrollOrigin:scrollOrigin];
+        [self reloadData];
+        scrollHexTableToActiveOffset();
         return;
     case NSHomeFunctionKey:
-        clearByteSelection();
+        clearAllByteSelections();
         writeBackCursor(hexedit::cursorToLineStart(currentCursor()));
-        [self reloadDataPreservingScrollOrigin:scrollOrigin];
+        [self reloadData];
+        scrollHexTableToActiveOffset();
         return;
     case NSEndFunctionKey:
-        clearByteSelection();
+        clearAllByteSelections();
         writeBackCursor(hexedit::cursorToLineEnd(currentCursor(), currentDocumentView()));
-        [self reloadDataPreservingScrollOrigin:scrollOrigin];
+        [self reloadData];
+        scrollHexTableToActiveOffset();
         return;
+    case NSPageUpFunctionKey:
+    case NSPageDownFunctionKey: {
+        // Page Up / Page Down — Windows-source parity, plus the macOS
+        // chord Fn+UpArrow/Fn+DownArrow which the system translates to
+        // the same NSPageUp/DownFunctionKey events. Without modifier:
+        // jump cursor by one viewport-page-of-rows. With Shift: extend
+        // selection. Computed page size from the visible viewport so it
+        // tracks user resize / font changes.
+        const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+        if (bpr == 0 || previewTotalLength == 0) {
+            return;
+        }
+        NSScrollView *scrollView = self.enclosingScrollView;
+        const CGFloat viewportHeight = scrollView ? NSHeight(scrollView.contentView.bounds) : 0;
+        const CGFloat rowHeight = self.rowHeight + self.intercellSpacing.height;
+        // At least one row of jump even when the viewport calc is bogus
+        // (e.g. mid-layout). Subtract one row so a Page Down keeps
+        // continuity — the row that was at the bottom is now at the top.
+        size_t pageRows = 1;
+        if (rowHeight > 0 && viewportHeight > 0) {
+            const NSInteger rowsPerPage = std::max<NSInteger>(1, static_cast<NSInteger>(viewportHeight / rowHeight) - 1);
+            pageRows = static_cast<size_t>(rowsPerPage);
+        }
+        const long jumpBytes = static_cast<long>(pageRows * bpr);
+        const bool isUp = (character == NSPageUpFunctionKey);
+        size_t target = activeByteOffset;
+        if (isUp) {
+            target = (jumpBytes >= 0 && static_cast<size_t>(jumpBytes) <= activeByteOffset)
+                ? activeByteOffset - static_cast<size_t>(jumpBytes)
+                : 0;
+        } else {
+            target = std::min(activeByteOffset + static_cast<size_t>(jumpBytes), previewTotalLength);
+        }
+        if ((modifiers & NSEventModifierFlagShift) != 0) {
+            extendByteSelectionToOffset(target);
+        } else {
+            clearByteSelection();
+            activeByteOffset = target;
+            activeHexNibble = 0;
+            clampActiveCursor();
+        }
+        [self reloadData];
+        // Scroll viewport by one full page in the same direction the
+        // cursor moved — Windows-style Page Up/Down model. The helper
+        // also clamps by one row so an active selection stays visible
+        // even when cursor lands at the edge.
+        scrollHexTableByPage(isUp);
+        return;
+    }
     default:
         break;
+    }
+
+    // A typed character with an active rect: clear the rect (visual signal that we're
+    // switching back to keyboard editing) and apply the edit at the cursor as usual.
+    // Rectangular replacement of the rect's bytes is intentionally limited to Delete
+    // (zero-fill, chunk 4) and Pattern Replace — typing a single byte across a 2D rect
+    // has no obvious meaning, so the safest UX is to dismiss and let the type land at
+    // the caret.
+    if (hasRectSelection()) {
+        clearRectSelection();
+        [self setNeedsDisplay:YES];
     }
 
     const bool selectionWasActive = hasByteSelection();
@@ -1675,8 +3107,41 @@ static CGFloat preciseTextWidth(NSString *text, NSFont *font);
 static CGFloat textWidth(NSString *text, NSFont *font);
 static NSFont *hexTableFont()
 {
-    const CGFloat fontSize = std::clamp(editorBaseFontSize + static_cast<CGFloat>(hexFontZoomDelta), HEX_MIN_FONT_SIZE, HEX_MAX_FONT_SIZE);
-    return [NSFont monospacedSystemFontOfSize:fontSize weight:NSFontWeightRegular];
+    // Base size: the user's explicit Font tab choice (g_fontSize). The
+    // Cmd+/Cmd− zoom delta still adds on top so that existing zoom
+    // muscle memory keeps working — pinch and ⌘+/− move proportionally
+    // around whatever size the dialog set.
+    const CGFloat baseSize = (g_fontSize > 0) ? static_cast<CGFloat>(g_fontSize) : editorBaseFontSize;
+    const CGFloat fontSize = std::clamp(baseSize + static_cast<CGFloat>(hexFontZoomDelta),
+                                          HEX_MIN_FONT_SIZE, HEX_MAX_FONT_SIZE);
+
+    // Family: g_fontName, falling back to the system monospaced font if the
+    // requested family isn't installed (renamed, deleted, or system ships
+    // a different default). This is the safety net behind the popup's
+    // fixed-pitch filter — even if the popup shipped a name we couldn't
+    // resolve, rendering still has SOMETHING monospaced to draw with.
+    NSFont *base = nil;
+    if (g_fontName.length > 0) {
+        base = [NSFont fontWithName:g_fontName size:fontSize];
+    }
+    if (base == nil) {
+        base = [NSFont monospacedSystemFontOfSize:fontSize weight:NSFontWeightRegular];
+    }
+
+    // Traits: bold / italic via NSFontDescriptor's symbolic-traits API.
+    // One descriptor call applies both bits at once. If the family doesn't
+    // have a bold or italic face installed (some monospaced display fonts
+    // omit one or the other), `fontWithDescriptor:` returns nil and we
+    // keep the untraited base so the user at least sees their family.
+    NSFontDescriptorSymbolicTraits traits = 0;
+    if (g_fontBold)   traits |= NSFontDescriptorTraitBold;
+    if (g_fontItalic) traits |= NSFontDescriptorTraitItalic;
+    if (traits != 0) {
+        NSFontDescriptor *traited = [base.fontDescriptor fontDescriptorWithSymbolicTraits:traits];
+        NSFont *withTraits = [NSFont fontWithDescriptor:traited size:fontSize];
+        if (withTraits != nil) base = withTraits;
+    }
+    return base;
 }
 
 static CGFloat preciseTextWidth(NSString *text, NSFont *font)
@@ -1712,47 +3177,196 @@ static CGFloat asciiGlyphLeft(NSTableView *tableView, NSInteger column, NSIntege
     return NSMinX(textDrawingRect(tableView, column, row));
 }
 
-// Semantic NSColor values throughout — they auto-flip in dark mode and follow the
-// user's accent colour. Replaced four hardcoded calibratedRGB values whose previous
-// contrast was correct only in light mode. The host (Notepad++ macOS) inherits dark
-// mode via NSAppearance with no plugin-side toggle, so we follow suit.
-static NSColor *hexCurrentLineColor()
+// Factory-default colours for the Colors tab. Hard-coded sRGB values for two
+// modes: Light is the upstream Windows HexEditor plugin's palette verbatim
+// (see macos/design/options-dialog-reference.md); Dark is a parallel set
+// chosen to keep equivalent visual semantics against a dark background.
+// Each factory function picks at call time based on NSApp.effectiveAppearance,
+// so live rendering tracks Light/Dark switches automatically. The dialog's
+// Reset path snapshots whichever set is current when the user clicks Reset
+// (and Apply commits the snapshot — re-Reset in the other mode if needed).
+//
+// Why hard-coded rather than NSColor.labelColor / textBackgroundColor:
+// dynamic NSColors resolve based on whatever effective appearance is in
+// scope when the conversion runs, which is unstable across the dialog ↔
+// hex-view boundary and produced a white-on-white commit at one point.
+// Hard-coded values are predictable in every appearance context.
+
+static BOOL hexEffectiveAppearanceIsDark()
 {
-    return [NSColor unemphasizedSelectedContentBackgroundColor];
+    NSAppearanceName best = [NSApp.effectiveAppearance bestMatchFromAppearancesWithNames:@[
+        NSAppearanceNameAqua,
+        NSAppearanceNameDarkAqua,
+    ]];
+    return [best isEqualToString:NSAppearanceNameDarkAqua];
+}
+
+// Light = Windows HexEditor defaults, taken verbatim from
+// HexEditor/src/Hex.cpp:412-420 (the upstream `prop.colorProp.rgb*` ini
+// fallbacks). Earlier values used the design-doc approximations
+// (#B0B5FF / #FFA0A0 / #E0E0E0) which differed from the actual Windows
+// initialisers (#8888FF / #FF8888 / #DFDFDF) by enough that the dialog's
+// Reset-to-Defaults didn't visually match the Windows reference.
+static NSColor *hexFactoryRegularTextFgLight() { return [NSColor colorWithSRGBRed:0.0       green:0.0       blue:0.0       alpha:1.0]; } // #000000
+static NSColor *hexFactoryRegularTextBgLight() { return [NSColor colorWithSRGBRed:1.0       green:1.0       blue:1.0       alpha:1.0]; } // #FFFFFF
+static NSColor *hexFactorySelectionFgLight()   { return [NSColor colorWithSRGBRed:1.0       green:1.0       blue:1.0       alpha:1.0]; } // #FFFFFF
+static NSColor *hexFactorySelectionBgLight()   { return [NSColor colorWithSRGBRed:0x88/255.0 green:0x88/255.0 blue:0xFF/255.0 alpha:1.0]; } // #8888FF
+static NSColor *hexFactoryCompareFgLight()     { return [NSColor colorWithSRGBRed:1.0       green:1.0       blue:1.0       alpha:1.0]; } // #FFFFFF
+static NSColor *hexFactoryCompareBgLight()     { return [NSColor colorWithSRGBRed:1.0       green:0x88/255.0 blue:0x88/255.0 alpha:1.0]; } // #FF8888
+static NSColor *hexFactoryBookmarkFgLight()    { return [NSColor colorWithSRGBRed:1.0       green:1.0       blue:1.0       alpha:1.0]; } // #FFFFFF
+static NSColor *hexFactoryBookmarkBgLight()    { return [NSColor colorWithSRGBRed:1.0       green:0.0       blue:0.0       alpha:1.0]; } // #FF0000
+static NSColor *hexFactoryCurrentLineBgLight() { return [NSColor colorWithSRGBRed:0xDF/255.0 green:0xDF/255.0 blue:0xDF/255.0 alpha:1.0]; } // #DFDFDF
+
+// Dark = parallel set keeping equivalent visual semantics against a dark
+// background. Bookmark red is shared with Light because pure red has good
+// contrast in both modes; everything else is a darker / lower-saturation
+// analogue so highlights remain readable on a near-black canvas.
+static NSColor *hexFactoryRegularTextFgDark() { return [NSColor colorWithSRGBRed:0xEB/255.0 green:0xEB/255.0 blue:0xEB/255.0 alpha:1.0]; } // #EBEBEB
+static NSColor *hexFactoryRegularTextBgDark() { return [NSColor colorWithSRGBRed:0x1E/255.0 green:0x1E/255.0 blue:0x1E/255.0 alpha:1.0]; } // #1E1E1E
+static NSColor *hexFactorySelectionFgDark()   { return [NSColor colorWithSRGBRed:1.0       green:1.0       blue:1.0       alpha:1.0]; } // #FFFFFF
+static NSColor *hexFactorySelectionBgDark()   { return [NSColor colorWithSRGBRed:0x48/255.0 green:0x58/255.0 blue:0xE0/255.0 alpha:1.0]; } // #4858E0 — keeps Windows 240° hue at higher saturation so the highlight reads as blue against #1E1E1E rather than as another dark patch
+static NSColor *hexFactoryCompareFgDark()     { return [NSColor colorWithSRGBRed:1.0       green:1.0       blue:1.0       alpha:1.0]; } // #FFFFFF
+static NSColor *hexFactoryCompareBgDark()     { return [NSColor colorWithSRGBRed:0x80/255.0 green:0x30/255.0 blue:0x30/255.0 alpha:1.0]; } // #803030
+static NSColor *hexFactoryBookmarkFgDark()    { return [NSColor colorWithSRGBRed:1.0       green:1.0       blue:1.0       alpha:1.0]; } // #FFFFFF
+static NSColor *hexFactoryBookmarkBgDark()    { return [NSColor colorWithSRGBRed:1.0       green:0.0       blue:0.0       alpha:1.0]; } // #FF0000 (shared)
+static NSColor *hexFactoryCurrentLineBgDark() { return [NSColor colorWithSRGBRed:0x4D/255.0 green:0x4D/255.0 blue:0x4D/255.0 alpha:1.0]; } // #4D4D4D — bumped from #3F3F3F (and originally #2D2D2D) so the gap above text bg #1E1E1E is wide enough to clearly read as a row highlight
+
+static NSColor *hexFactoryRegularTextFg()  { return hexEffectiveAppearanceIsDark() ? hexFactoryRegularTextFgDark()  : hexFactoryRegularTextFgLight();  }
+static NSColor *hexFactoryRegularTextBg()  { return hexEffectiveAppearanceIsDark() ? hexFactoryRegularTextBgDark()  : hexFactoryRegularTextBgLight();  }
+static NSColor *hexFactorySelectionFg()    { return hexEffectiveAppearanceIsDark() ? hexFactorySelectionFgDark()    : hexFactorySelectionFgLight();    }
+static NSColor *hexFactorySelectionBg()    { return hexEffectiveAppearanceIsDark() ? hexFactorySelectionBgDark()    : hexFactorySelectionBgLight();    }
+static NSColor *hexFactoryCompareFg()      { return hexEffectiveAppearanceIsDark() ? hexFactoryCompareFgDark()      : hexFactoryCompareFgLight();      }
+static NSColor *hexFactoryCompareBg()      { return hexEffectiveAppearanceIsDark() ? hexFactoryCompareBgDark()      : hexFactoryCompareBgLight();      }
+static NSColor *hexFactoryBookmarkFg()     { return hexEffectiveAppearanceIsDark() ? hexFactoryBookmarkFgDark()     : hexFactoryBookmarkFgLight();     }
+static NSColor *hexFactoryBookmarkBg()     { return hexEffectiveAppearanceIsDark() ? hexFactoryBookmarkBgDark()     : hexFactoryBookmarkBgLight();     }
+static NSColor *hexFactoryCurrentLineBg()  { return hexEffectiveAppearanceIsDark() ? hexFactoryCurrentLineBgDark()  : hexFactoryCurrentLineBgLight();  }
+
+// Each helper consults the matching mode-specific override first; nil
+// falls back to the factory default for the current mode. Live rendering
+// re-evaluates on every paint, so the right mode's value is always used
+// (no need to refresh anything when NppThemeManager flips Light↔Dark —
+// the next draw picks up the new mode automatically). The helpers
+// alongside (`hexFactory*()`) also branch on appearance, so once the
+// override is nil the factory does the mode switch internally.
+
+static NSColor *hexRegularTextColor()
+{
+    NSColor *override = hexEffectiveAppearanceIsDark() ? g_colorRegularTextFgDark : g_colorRegularTextFgLight;
+    return override ?: hexFactoryRegularTextFg();
+}
+
+static NSColor *hexRegularTextBackgroundColor()
+{
+    NSColor *override = hexEffectiveAppearanceIsDark() ? g_colorRegularTextBgDark : g_colorRegularTextBgLight;
+    return override ?: hexFactoryRegularTextBg();
+}
+
+static NSColor *hexSelectionTextColor()
+{
+    NSColor *override = hexEffectiveAppearanceIsDark() ? g_colorSelectionFgDark : g_colorSelectionFgLight;
+    return override ?: hexFactorySelectionFg();
 }
 
 static NSColor *hexSelectionColor()
 {
-    // 0.6 alpha keeps the byte text readable on top of the selection wash regardless
-    // of accent colour intensity.
-    return [[NSColor selectedContentBackgroundColor] colorWithAlphaComponent:0.6];
+    NSColor *override = hexEffectiveAppearanceIsDark() ? g_colorSelectionBgDark : g_colorSelectionBgLight;
+    return override ?: hexFactorySelectionBg();
 }
 
 static NSColor *hexCurrentLineSelectionColor()
 {
-    // Lighter wash for "selected and on the current line" — the same accent colour
-    // but a softer alpha so the row highlight underneath is still discernible.
-    return [[NSColor selectedContentBackgroundColor] colorWithAlphaComponent:0.85];
+    // Lighter wash for "selected and on the current line" — the selection
+    // colour at reduced alpha so the row highlight underneath stays
+    // discernible.
+    return [hexSelectionColor() colorWithAlphaComponent:0.6];
+}
+
+static NSColor *hexCurrentLineColor()
+{
+    NSColor *override = hexEffectiveAppearanceIsDark() ? g_colorCurrentLineBgDark : g_colorCurrentLineBgLight;
+    return override ?: hexFactoryCurrentLineBg();
 }
 
 static NSColor *hexCompareDiffColor()
 {
-    // System red adapts in dark mode; matching the bookmark highlight semantic.
-    return [NSColor systemRedColor];
+    NSColor *override = hexEffectiveAppearanceIsDark() ? g_colorCompareBgDark : g_colorCompareBgLight;
+    return override ?: hexFactoryCompareBg();
+}
+
+static NSColor *hexCompareDiffTextColor()
+{
+    NSColor *override = hexEffectiveAppearanceIsDark() ? g_colorCompareFgDark : g_colorCompareFgLight;
+    return override ?: hexFactoryCompareFg();
+}
+
+static NSColor *hexBookmarkBackgroundColor()
+{
+    NSColor *override = hexEffectiveAppearanceIsDark() ? g_colorBookmarkBgDark : g_colorBookmarkBgLight;
+    return override ?: hexFactoryBookmarkBg();
+}
+
+static NSColor *hexBookmarkTextColor()
+{
+    NSColor *override = hexEffectiveAppearanceIsDark() ? g_colorBookmarkFgDark : g_colorBookmarkFgLight;
+    return override ?: hexFactoryBookmarkFg();
 }
 
 static CGFloat paddedTextWidth(NSString *text, NSFont *font)
 {
-    return textWidth(text, font) + HEX_CELL_HORIZONTAL_PADDING;
+    return textWidth(text, font) +
+        ceil(monospacedGlyphWidth(font) * HEX_CELL_HORIZONTAL_PADDING_GLYPHS);
+}
+
+// Width an NSTableHeaderCell needs to render `title` without ellipsizing — text in
+// the header font plus the cell's own internal insets. Using NSTableHeaderCell.cellSize
+// (rather than a hand-picked padding constant) means the column is exactly as wide as
+// macOS's own header rendering needs, no more.
+static CGFloat headerCellNaturalWidth(NSString *title)
+{
+    static NSTableHeaderCell *probe = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        probe = [[NSTableHeaderCell alloc] init];
+    });
+    probe.stringValue = title;
+    return ceil([probe cellSize].width);
+}
+
+// Widest cell-column header across all 256 possible "%02zx" indices ("00".."ff").
+// Per-glyph metrics make "00" the widest in some fonts, "04" or "ee" in others —
+// measure them all and take the real max so the cell width is right for every
+// rendered title regardless of font / locale / bytesPerRow.
+static CGFloat widestHexHeaderWidth()
+{
+    CGFloat maxWidth = 0.0;
+    for (int i = 0; i < 256; ++i) {
+        NSString *candidate = [NSString stringWithFormat:@"%02x", i];
+        maxWidth = std::max(maxWidth, headerCellNaturalWidth(candidate));
+    }
+    return maxWidth;
+}
+
+// Width of the spacer column between the address pane and the first hex byte.
+// A real column (rather than padding inside the offset column) gives the address
+// pane a visible frame-edge gap from the hex grid. Glyph-width-relative so the
+// gap stays proportional under pinch-zoom.
+static CGFloat offsetTrailingPadding(NSFont *font)
+{
+    return ceil(monospacedGlyphWidth(font) * HEX_OFFSET_TRAILING_GLYPHS);
+}
+
+// Width of the spacer column between the last hex cell and the ASCII pane.
+// Glyph-width-relative for the same scaling reason.
+static CGFloat asciiSeparatorWidth(NSFont *font)
+{
+    return ceil(monospacedGlyphWidth(font) * HEX_ASCII_SEPARATOR_GLYPHS);
 }
 
 static CGFloat offsetColumnWidth(NSFont *font)
 {
     const int width = std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH);
     NSString *sample = [@"" stringByPaddingToLength:static_cast<NSUInteger>(width) withString:@"0" startingAtIndex:0];
-    // Measure against the localized header so wider translations (e.g. a future
-    // "Adresse" / "Adresák" in some language) don't clip.
-    return std::max(paddedTextWidth(sample, font), paddedTextWidth(L(@"table.header.offset"), font));
+    return std::max(paddedTextWidth(sample, font), headerCellNaturalWidth(L(@"table.header.offset")));
 }
 
 static CGFloat cellColumnWidth(NSFont *font, const hexedit::ViewMode &mode)
@@ -1761,7 +3375,9 @@ static CGFloat cellColumnWidth(NSFont *font, const hexedit::ViewMode &mode)
     NSString *sample = [@"" stringByPaddingToLength:static_cast<NSUInteger>(std::max(digits, 1))
                                           withString:@"0"
                                      startingAtIndex:0];
-    return std::max(paddedTextWidth(sample, font), paddedTextWidth(@"0F", font));
+    return std::max({paddedTextWidth(sample, font),
+                     paddedTextWidth(@"0F", font),
+                     widestHexHeaderWidth()});
 }
 
 static CGFloat cellGlyphLeft(NSTableView *tableView, NSInteger column, NSInteger row, NSFont *font)
@@ -1777,14 +3393,14 @@ static CGFloat asciiColumnWidth(NSFont *font)
 {
     const int bpr = std::max(currentBytesPerRow(), 1);
     NSString *sample = [@"" stringByPaddingToLength:static_cast<NSUInteger>(bpr) withString:@"." startingAtIndex:0];
-    return std::max(paddedTextWidth(sample, font), paddedTextWidth(L(@"table.header.ascii"), font));
+    return std::max(paddedTextWidth(sample, font), headerCellNaturalWidth(L(@"table.header.ascii")));
 }
 
 static CGFloat tableContentWidth(NSFont *font)
 {
     const hexedit::ViewMode mode = currentViewMode();
     const int cells = std::max(currentCellsPerRow(), 1);
-    return offsetColumnWidth(font) + (static_cast<CGFloat>(cells) * cellColumnWidth(font, mode)) + HEX_MID_BYTE_SEPARATOR_WIDTH + HEX_ASCII_SEPARATOR_WIDTH + asciiColumnWidth(font);
+    return offsetColumnWidth(font) + offsetTrailingPadding(font) + (static_cast<CGFloat>(cells) * cellColumnWidth(font, mode)) + asciiSeparatorWidth(font) + asciiColumnWidth(font);
 }
 
 static CGFloat tableContainerWidth(NSFont *font)
@@ -1811,6 +3427,80 @@ static NppHandle getCurrentScintilla()
 static uintptr_t getCurrentBufferId()
 {
     return static_cast<uintptr_t>(nppData._sendMessage(nppData._nppHandle, NPPM_GETCURRENTBUFFERID, 0, 0));
+}
+
+// Returns the absolute path of the buffer with the given ID, or nil if NPP
+// can't resolve one (e.g. the buffer is an untitled new document with no
+// on-disk file). NPP-Mac fills the lParam buffer as UTF-8 narrow chars
+// (NppPluginManager.mm: strlcpy(buf, ed.filePath.UTF8String, 1024)); the
+// upstream Windows API uses wide chars. Don't get this wrong — reading a
+// UTF-8 byte stream as unichar gives garbage that never matches anything.
+static NSString *getFullPathFromBufferId(uintptr_t bufferId)
+{
+    if (bufferId == 0) return nil;
+    constexpr size_t kMaxPath = 4096;
+    NSMutableData *out = [NSMutableData dataWithLength:kMaxPath];
+    char *buf = static_cast<char *>(out.mutableBytes);
+    buf[0] = '\0';  // NPP returns 0 for untitled buffers without writing
+    nppData._sendMessage(nppData._nppHandle,
+                         NPPM_GETFULLPATHFROMBUFFERID,
+                         static_cast<uintptr_t>(bufferId),
+                         reinterpret_cast<intptr_t>(buf));
+    if (buf[0] == '\0') return nil;
+    return [NSString stringWithUTF8String:buf];
+}
+
+// True iff the path's tail (case-insensitive) matches any space-separated
+// token in g_autoExtensions. Tokens may include or omit the leading dot;
+// "log .bin" matches both "foo.log" and "data.bin".
+static bool autoExtensionMatches(NSString *path)
+{
+    if (path.length == 0) return false;
+    NSString *list = g_autoExtensions ?: @"";
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    for (NSString *raw in [list componentsSeparatedByCharactersInSet:ws]) {
+        NSString *token = [raw stringByTrimmingCharactersInSet:ws];
+        if (token.length == 0) continue;
+        NSString *needle = [token hasPrefix:@"."] ? token : [@"." stringByAppendingString:token];
+        if ([path.lowercaseString hasSuffix:needle.lowercaseString]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// True iff the first ~1 MB of `handle`'s buffer contains at least
+// (sample * percent / 100) control bytes (< 0x20 except tab/CR/LF). Mirrors
+// the Windows IsPercentReached. Skips when the buffer starts with a UTF
+// BOM — those buffers are intentionally text and would skew the heuristic.
+static bool autoControlCharThresholdReached(NppHandle handle, int percent)
+{
+    if (percent <= 0 || percent >= 100 || handle == 0) return false;
+    const uintptr_t length = static_cast<uintptr_t>(
+        nppData._sendMessage(handle, SCI_GETLENGTH, 0, 0));
+    if (length == 0) return false;
+    const NSUInteger sample = std::min<NSUInteger>(length, HEX_AUTOSTART_SAMPLE_BYTES);
+    NSMutableData *buf = [NSMutableData dataWithLength:sample + 1];
+    Sci_TextRangeFull range = {};
+    range.chrg.cpMin = 0;
+    range.chrg.cpMax = static_cast<intptr_t>(sample);
+    range.lpstrText = static_cast<char *>(buf.mutableBytes);
+    nppData._sendMessage(handle, SCI_GETTEXTRANGEFULL, 0, reinterpret_cast<intptr_t>(&range));
+    const std::uint8_t *bytes = static_cast<const std::uint8_t *>(buf.bytes);
+    // Skip text-leading BOMs (UTF-16 LE/BE, UTF-8). A buffer that opens
+    // with a BOM is declared text by the file producer; we trust that.
+    if (sample >= 2 && ((bytes[0] == 0xFF && bytes[1] == 0xFE) ||
+                        (bytes[0] == 0xFE && bytes[1] == 0xFF))) return false;
+    if (sample >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) return false;
+    const NSUInteger threshold = (HEX_AUTOSTART_SAMPLE_BYTES * static_cast<NSUInteger>(percent)) / 100;
+    NSUInteger ctrlCount = 0;
+    for (NSUInteger i = 0; i < sample; ++i) {
+        const std::uint8_t b = bytes[i];
+        if (b < 0x20 && b != '\t' && b != '\r' && b != '\n') {
+            if (++ctrlCount >= threshold) return true;
+        }
+    }
+    return false;
 }
 
 static bool isPreviewBufferActive()
@@ -1915,25 +3605,139 @@ static void scrollHexTableToActiveOffset()
         resetHexTableScrollOrigin();
         return;
     }
-    const auto rowForOffset = ^NSInteger {
+    const auto scrollOnce = ^{
         const size_t bpr = static_cast<size_t>(currentBytesPerRow());
-        if (bpr == 0) {
-            return 0;
-        }
-        const NSInteger raw = static_cast<NSInteger>(activeByteOffset / bpr);
+        if (bpr == 0) return;
         const NSInteger maxRow = std::max<NSInteger>(hexTableView.numberOfRows - 1, 0);
-        return std::clamp<NSInteger>(raw, 0, maxRow);
+        const NSInteger cursorRow = std::clamp<NSInteger>(
+            static_cast<NSInteger>(activeByteOffset / bpr), 0, maxRow);
+        [hexTableView scrollRowToVisible:cursorRow];
+        // Selection-visible safety net: when the cursor sits on a row
+        // PAST the selection's edge (e.g. after Cmd-A — cursor lands
+        // at byte == totalLength on the trailing-empty row that's not
+        // in the selection — or after row-aligned Shift+arrow extends
+        // where the cursor row is the boundary just past the last
+        // selected byte), `scrollRowToVisible(cursorRow)` alone leaves
+        // the entire selection off-screen above (or below) the
+        // viewport. Ensuring the row at the selection edge nearest the
+        // cursor is also visible is a one-row clamp that keeps at
+        // least one selected row in view — the user's "I can still
+        // tell I'm in selection mode" requirement.
+        if (hasByteSelection() && selectedByteEnd > selectedByteStart) {
+            const NSInteger selStartRow = static_cast<NSInteger>(selectedByteStart / bpr);
+            const NSInteger selLastRow = static_cast<NSInteger>((selectedByteEnd - 1) / bpr);
+            NSInteger nearestSel = cursorRow;
+            if (cursorRow < selStartRow) {
+                nearestSel = selStartRow;
+            } else if (cursorRow > selLastRow) {
+                nearestSel = selLastRow;
+            }
+            nearestSel = std::clamp<NSInteger>(nearestSel, 0, maxRow);
+            [hexTableView scrollRowToVisible:nearestSel];
+        }
     };
-    [hexTableView scrollRowToVisible:rowForOffset()];
+    scrollOnce();
     dispatch_async(dispatch_get_main_queue(), ^{
         if (hexTableView != nil && hexTableView.numberOfRows > 0) {
-            [hexTableView scrollRowToVisible:rowForOffset()];
+            scrollOnce();
+        }
+    });
+}
+
+// Page-jump scroll: move the viewport by one full page in the given
+// direction (the natural Windows / NSScrollView Page Up/Down model),
+// then clamp by one line if needed so at least one SELECTED row stays
+// visible. User's 2026-05-05 preference: "scroll a whole page but
+// just limit the scroll up or down by one line if the scroll would
+// result in the selected text no longer being visible at all."
+//
+// Why "selected row visible" not "cursor row visible": when the user
+// has selected entire rows and continued the selection one row further
+// (e.g. with Shift+Down at row N's end), the cursor lands on row N+1
+// column 0 — i.e. the cursor row is JUST PAST the selection, not in
+// it. Ensuring only the cursor row is visible would leave the entire
+// selection off-screen above (or below). Instead we find the row in
+// the selection nearest the cursor and ensure THAT row is visible.
+//
+// Manual scrollToPoint on the clipView for the page move (rather than
+// NSScrollView's scrollPageUp:/scrollPageDown:, which weren't
+// reliably moving the viewport in our test runs).
+static void scrollHexTableByPage(bool up)
+{
+    if (hexTableView == nil || hexTableView.numberOfRows == 0) {
+        resetHexTableScrollOrigin();
+        return;
+    }
+    NSScrollView *sv = hexTableView.enclosingScrollView;
+    if (sv == nil) {
+        return;
+    }
+    NSClipView *cv = sv.contentView;
+    const CGFloat rowHeight = hexTableView.rowHeight + hexTableView.intercellSpacing.height;
+    const CGFloat viewportHeight = NSHeight(cv.bounds);
+    if (rowHeight <= 0 || viewportHeight <= 0) {
+        return;
+    }
+    // One-page scroll = viewport rows minus one row of overlap, so the
+    // last row of the previous page is at the top (or bottom) of the
+    // new page.
+    const NSInteger pageRows = std::max<NSInteger>(1, static_cast<NSInteger>(viewportHeight / rowHeight) - 1);
+    const CGFloat pageDelta = static_cast<CGFloat>(pageRows) * rowHeight;
+    const CGFloat currentY = cv.bounds.origin.y;
+    CGFloat newY = up ? (currentY - pageDelta) : (currentY + pageDelta);
+    const CGFloat docHeight = static_cast<CGFloat>(hexTableView.numberOfRows) * rowHeight;
+    const CGFloat maxY = std::max<CGFloat>(0, docHeight - viewportHeight);
+    newY = std::clamp<CGFloat>(newY, 0, maxY);
+    [cv scrollToPoint:NSMakePoint(cv.bounds.origin.x, newY)];
+    [sv reflectScrolledClipView:cv];
+
+    // Safety net — ensure that an active selection has at least one
+    // row visible, and that the cursor row is also visible. Two
+    // scrollRowToVisible calls; NSTableView no-ops the call whose row
+    // is already inside the viewport, so this is the "clamp by one
+    // line if needed" the user asked for.
+    const auto fixUp = ^{
+        const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+        if (bpr == 0) return;
+        const NSInteger maxRow = std::max<NSInteger>(hexTableView.numberOfRows - 1, 0);
+        const NSInteger cursorRow = std::clamp<NSInteger>(static_cast<NSInteger>(activeByteOffset / bpr), 0, maxRow);
+        [hexTableView scrollRowToVisible:cursorRow];
+        if (hasByteSelection() && selectedByteEnd > selectedByteStart) {
+            const NSInteger selStartRow = static_cast<NSInteger>(selectedByteStart / bpr);
+            const NSInteger selLastRow = static_cast<NSInteger>((selectedByteEnd - 1) / bpr);
+            // Pick the selected row nearest the cursor — the one most
+            // likely already in the viewport, so the scroll is a no-op
+            // in the common case and only adjusts by one row when the
+            // selection's edge fell just off-screen.
+            NSInteger nearestSel = cursorRow;
+            if (cursorRow < selStartRow) {
+                nearestSel = selStartRow;
+            } else if (cursorRow > selLastRow) {
+                nearestSel = selLastRow;
+            }
+            nearestSel = std::clamp<NSInteger>(nearestSel, 0, maxRow);
+            [hexTableView scrollRowToVisible:nearestSel];
+        }
+    };
+    fixUp();
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (hexTableView != nil && hexTableView.numberOfRows > 0) {
+            fixUp();
         }
     });
 }
 
 static void redrawHexTablePreservingScroll(NSPoint origin)
 {
+    // reloadData (not just setNeedsDisplay) so NSTableView re-queries the
+    // row count. Every caller of this helper sits after a buffer-length
+    // change (delete, paste, insert, replace), and setNeedsDisplay alone
+    // only repaints currently-known rows — leaving NSTableView's cached
+    // row count stale. Symptom when this was missing: pasting 1.5 GB into
+    // an empty hex view rendered only the first row, because the table
+    // still believed it had 1 row from the pre-paste empty state.
+    // reloadData is cheap on a virtual table and cheaper than the bug.
+    [hexTableView reloadData];
     [hexTableView setNeedsDisplay:YES];
     restoreHexTableScrollOrigin(origin);
     restoreHexTableScrollOriginLater(origin);
@@ -2016,38 +3820,72 @@ static CGFloat readEditorFontSize()
     return std::clamp(size, HEX_MIN_FONT_SIZE, HEX_MAX_FONT_SIZE);
 }
 
-static std::vector<uint8_t> readCurrentBuffer(size_t *totalLength)
+// Concrete SciReader for the live host-side Scintilla. Buffer-shape logic is
+// in hexedit::readPreviewBuffer (HexCore) so it's exercised by ASan-instrumented
+// unit tests via a FakeScintilla that obeys the same SCI_GETTEXTRANGEFULL
+// contract. Anything that goes wrong with buffer sizing / NUL handling is
+// caught at <1 ms unit-test feedback rather than via the 25-minute UI suite.
+class LiveSciReader final : public hexedit::SciReader {
+public:
+    explicit LiveSciReader(NppHandle handle) : handle_(handle) {}
+
+    std::size_t documentLength() const override
+    {
+        if (!handle_) {
+            return 0;
+        }
+        const intptr_t length = sci(handle_, SCI_GETLENGTH);
+        return length > 0 ? static_cast<std::size_t>(length) : 0;
+    }
+
+    void readRange(std::size_t cpMin, std::size_t cpMax, char *dest) const override
+    {
+        Sci_TextRangeFull range = {};
+        range.chrg.cpMin = static_cast<Sci_Position>(cpMin);
+        range.chrg.cpMax = static_cast<Sci_Position>(cpMax);
+        range.lpstrText = dest;
+        sci(handle_, SCI_GETTEXTRANGEFULL, 0, reinterpret_cast<intptr_t>(&range));
+    }
+
+private:
+    NppHandle handle_ = 0;
+};
+
+// Bind / rebind g_hexBuffer to the active Scintilla. Replaces the legacy
+// `previewBytes = readCurrentBuffer(...)` write sites — instead of copying
+// the (capped) document into a vector, we wrap the live editor in a
+// SciReader and a page-cached source. previewTotalLength stays as a cached
+// length for legacy display code; it mirrors g_hexBuffer->length().
+//
+// Destruction order matters: g_hexBuffer holds a reference into *g_hexReader,
+// so we reset g_hexBuffer *before* replacing g_hexReader.
+static void bindHexBufferToActiveScintilla()
 {
     NppHandle editor = previewScintillaHandle ? previewScintillaHandle : getCurrentScintilla();
     if (!editor) {
-        if (totalLength) {
-            *totalLength = 0;
-        }
-        return {};
+        g_hexBuffer.reset();
+        g_hexReader.reset();
+        previewTotalLength = 0;
+        return;
     }
+    g_hexBuffer.reset();
+    g_hexReader = std::make_unique<LiveSciReader>(editor);
+    g_hexBuffer = std::make_unique<hexedit::WindowedScintillaByteSource>(*g_hexReader);
+    previewTotalLength = g_hexBuffer->length();
+}
 
-    const intptr_t length = sci(editor, SCI_GETLENGTH);
-    if (length <= 0) {
-        if (totalLength) {
-            *totalLength = 0;
-        }
-        return {};
+// Drop cached pages without rebuilding the SciReader. Use this after a known-
+// in-place mutation (SCN_MODIFIED) of the same buffer we're already bound to.
+// length() is queried on every call so the freshly-changed document length
+// is observed without an explicit refresh.
+static void invalidateHexBuffer()
+{
+    if (g_hexBuffer) {
+        g_hexBuffer->invalidate();
+        previewTotalLength = g_hexBuffer->length();
+    } else {
+        bindHexBufferToActiveScintilla();
     }
-
-    const size_t byteCount = static_cast<size_t>(length);
-    const size_t bytesToRead = std::min(byteCount, PREVIEW_LIMIT);
-    std::vector<uint8_t> bytes;
-    bytes.reserve(bytesToRead);
-
-    for (size_t offset = 0; offset < bytesToRead; ++offset) {
-        bytes.push_back(static_cast<uint8_t>(sci(editor, SCI_GETCHARAT, offset, 0) & 0xff));
-    }
-
-    if (totalLength) {
-        *totalLength = byteCount;
-    }
-
-    return bytes;
 }
 
 static NSInteger cellColumnIndex(NSString *identifier)
@@ -2074,9 +3912,26 @@ static BOOL isSelectedByte(size_t offset)
     return hasByteSelection() && offset >= selectedByteStart && offset < selectedByteEnd;
 }
 
+static BOOL hasRectSelection()
+{
+    return g_rectActive ? YES : NO;
+}
+
+// Linear OR rectangular — the broad question editors care about ("is anything selected?").
+static BOOL hasAnyByteSelection()
+{
+    return hasByteSelection() || hasRectSelection();
+}
+
 static size_t currentHighlightRow()
 {
     const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+    if (hasRectSelection()) {
+        // For a rectangle, highlight the row containing the cursor (which tracks the
+        // dragged-to / arrow-extended corner) so the focus indicator follows the user's
+        // hand rather than always sitting at the rect's geometric end.
+        return activeByteOffset / bpr;
+    }
     if (hasByteSelection()) {
         return (selectedByteEnd - 1) / bpr;
     }
@@ -2088,6 +3943,75 @@ static void clearByteSelection()
 {
     selectedByteStart = 0;
     selectedByteEnd = 0;
+}
+
+static void clearRectSelection()
+{
+    g_rectActive = false;
+    g_rectSelection = hexedit::RectSelection{};
+    g_isSelectingRect = false;
+    g_rectAnchorOffset = 0;
+    g_rectOriginField = HexCursorField::Hex;
+}
+
+static void clearAllByteSelections()
+{
+    clearByteSelection();
+    clearRectSelection();
+}
+
+// Extend (or create) a linear byte selection to span [anchor, target],
+// then move the cursor to `target`. If a selection already exists, the
+// anchor is the end of that selection opposite the cursor — same
+// convention macOS text views use for shift-extend gestures. If no
+// selection exists, the current cursor becomes the anchor and a new
+// selection is created from there. Caller is responsible for redraw.
+//
+// Used by the Shift+Cmd+Home / Shift+Cmd+End handlers (extend selection
+// to document start / end without a long arrow-key drag) and any future
+// shift-modified large-jump gestures. `target` is clamped to the
+// editable range; rect selections are cleared (linear extend wins).
+static void extendByteSelectionToOffset(size_t target)
+{
+    target = std::min(target, previewTotalLength);
+    clearRectSelection();
+    size_t anchor;
+    if (hasByteSelection()) {
+        // Anchor is whichever end of the existing selection isn't at the
+        // current cursor. If the cursor sits exactly between (degenerate),
+        // pick the start so the extension is well-defined.
+        anchor = (activeByteOffset == selectedByteEnd) ? selectedByteStart : selectedByteEnd;
+    } else {
+        anchor = activeByteOffset;
+    }
+    selectedByteStart = std::min(anchor, target);
+    selectedByteEnd = std::max(anchor, target);
+    selectionAnchorByte = anchor;
+    activeByteOffset = target;
+    activeHexNibble = 0;
+    clampActiveCursor();
+}
+
+// Build/update the rectangle from the stored anchor + a new endpoint.
+static void updateRectSelectionToOffset(size_t endOffset)
+{
+    const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+    if (bpr == 0) {
+        return;
+    }
+    g_rectSelection = hexedit::makeRectSelection(g_rectAnchorOffset, endOffset, bpr, previewTotalLength);
+    g_rectActive = g_rectSelection.active();
+    if (g_rectActive) {
+        // Track the active cursor at the dragged-to corner so the caret indicator
+        // stays under the user's pointer / arrow keys.
+        activeByteOffset = std::min(endOffset, previewTotalLength > 0 ? previewTotalLength - 1 : 0);
+        activeHexNibble = 0;
+        activeCursorField = g_rectOriginField;
+        clampActiveCursor();
+    }
+    if (hexTableView) {
+        [hexTableView setNeedsDisplay:YES];
+    }
 }
 
 static void captureScintillaSelection()
@@ -2122,11 +4046,11 @@ static void captureScintillaSelection()
 
     activeCursorField = HexCursorField::Hex;
     activeHexNibble = 0;
-    activeByteOffset = std::min(upper, previewBytes.size());
+    activeByteOffset = std::min(upper, hexBufferLength());
 
     if (start != end) {
-        selectedByteStart = std::min(lower, previewBytes.size());
-        selectedByteEnd = std::min(upper, previewBytes.size());
+        selectedByteStart = std::min(lower, hexBufferLength());
+        selectedByteEnd = std::min(upper, hexBufferLength());
         if (selectedByteEnd <= selectedByteStart) {
             clearByteSelection();
         }
@@ -2181,8 +4105,8 @@ static void moveActiveCursor(NSInteger delta)
 static hexedit::DocumentView currentDocumentView()
 {
     hexedit::DocumentView view;
-    view.bytes = previewBytes.empty() ? nullptr : previewBytes.data();
-    view.visibleByteCount = previewBytes.size();
+    view.source = g_hexBuffer.get();
+    view.visibleByteCount = hexBufferLength();
     view.totalLength = previewTotalLength;
     return view;
 }
@@ -2253,7 +4177,7 @@ static bool applyEditorByteTransaction(size_t offset, const uint8_t *bytes, size
     sci(editor, SCI_ENDUNDOACTION);
     suppressModificationRefresh = false;
 
-    previewBytes = readCurrentBuffer(&previewTotalLength);
+    bindHexBufferToActiveScintilla();
     clampActiveCursor();
     if (hexStatusLabel) {
         hexStatusLabel.stringValue = makeStatusText();
@@ -2263,7 +4187,7 @@ static bool applyEditorByteTransaction(size_t offset, const uint8_t *bytes, size
 
 static void refreshHexViewFromScintilla(size_t preferredCursorOffset, NSPoint scrollOrigin)
 {
-    previewBytes = readCurrentBuffer(&previewTotalLength);
+    bindHexBufferToActiveScintilla();
     activeByteOffset = std::min(preferredCursorOffset, previewTotalLength);
     activeHexNibble = 0;
     clearByteSelection();
@@ -2310,52 +4234,427 @@ static void selectedOrCurrentRange(size_t *offset, size_t *byteCount)
     *byteCount = range.byteCount;
 }
 
+// Adapter that wraps hexedit::encodeRectPayload (pure C++) into an NSData. Kept
+// here rather than inline at the call site so the AppKit / Foundation dependency
+// stays out of the C++ core layer, where the encoder is unit-tested + fuzzed.
+static NSData *rectPayloadEncode(HexRectClipboardKind kind,
+                                 std::uint32_t width,
+                                 std::uint32_t height,
+                                 const std::uint8_t *data,
+                                 std::uint32_t dataLength)
+{
+    std::vector<std::uint8_t> payload =
+        hexedit::encodeRectPayload(kind, width, height, data, dataLength);
+    return [NSData dataWithBytes:payload.data() length:payload.size()];
+}
+
+// Adapter for hexedit::decodeRectPayload. Returns NO on malformed input (bad
+// magic, version mismatch, truncated header, dataLength > buffer size) — all
+// validation logic lives in the core function so libFuzzer can exercise it
+// without an AppKit dependency.
+static BOOL rectPayloadDecode(NSData *data,
+                              HexRectClipboardKind *outKind,
+                              std::uint32_t *outWidth,
+                              std::uint32_t *outHeight,
+                              const std::uint8_t **outDataPtr,
+                              std::uint32_t *outDataLength)
+{
+    if (data == nil) {
+        return NO;
+    }
+    hexedit::RectPayload payload;
+    if (!hexedit::decodeRectPayload(static_cast<const std::uint8_t *>(data.bytes),
+                                     data.length, payload)) {
+        return NO;
+    }
+    if (outKind) *outKind = payload.kind;
+    if (outWidth) *outWidth = payload.width;
+    if (outHeight) *outHeight = payload.height;
+    if (outDataPtr) *outDataPtr = payload.data;
+    if (outDataLength) *outDataLength = payload.dataLength;
+    return YES;
+}
+
+// Promised-type pasteboard owner for hex-view cut/copy. Replaces the old
+// eager `[pasteboard setData:forType:]` path: instead of materializing every
+// representation (raw bytes, hex-text, rect-UTI) at copy time, we declare
+// the supported types and stash one byte snapshot inside the owner. When
+// some consumer (this plugin, another HexEditor instance, TextEdit, anything
+// reading the pasteboard) actually pastes, AppKit's pasteboard server calls
+// back to `pasteboard:provideDataForType:` and we synthesize the requested
+// representation lazily. Cross-process consumers get the callback via pbs
+// IPC for free.
+//
+// Lifetime: a single static owner instance lives for the plugin's lifetime;
+// `snapshotLinear:` / `snapshotRect:...` reassign its held bytes on each
+// new cut/copy, replacing whatever was there. AppKit notifies us via
+// `pasteboardChangedOwner:` when another app takes the pasteboard, at
+// which point we drop the snapshot — there's no consumer left to deliver
+// to.
+//
+// hex-text caps: rendering an N-byte selection as space-separated hex
+// expands to ~3N bytes of UTF-8. For a multi-GB cut that's a multi-GB
+// allocation just to hand to a text-paste consumer that probably can't
+// handle it anyway. Above kHexClipboardTextRawCap we substitute a short
+// human-readable placeholder so a stray paste into TextEdit shows
+// "<2.0 GB hex-editor selection> Paste in HEX view to receive." instead
+// of a multi-GB string allocation.
+constexpr NSUInteger kHexClipboardTextRawCap = 16 * 1024 * 1024;
+
+@interface HexClipboardOwner : NSObject <NSPasteboardTypeOwner>
+- (void)snapshotLinear:(NSData *)bytes;
+- (void)snapshotRect:(NSData *)bytes
+                kind:(HexRectClipboardKind)kind
+               width:(std::uint32_t)width
+              height:(std::uint32_t)height;
+- (void)clearSnapshot;
+- (BOOL)hasSnapshot;
+- (NSUInteger)snapshotByteCount;
+// In-process readers — let pasteBytesFromPasteboard short-circuit pbs IPC
+// for hex→hex paste in the same NPP process. pbs's IPC transport breaks
+// down somewhere in the multi-100-MB range; the snapshot lives in this
+// process's heap and is readable instantly regardless of size.
+- (NSData *)snapshotBytes;
+- (BOOL)snapshotIsRect;
+- (HexRectClipboardKind)snapshotRectKind;
+- (std::uint32_t)snapshotRectWidth;
+- (std::uint32_t)snapshotRectHeight;
+@end
+
+// changeCount returned by `[pasteboard declareTypes:owner:]` at the moment
+// we took ownership of the general pasteboard. Stays valid until any other
+// process or any other in-process pasteboard write bumps the count.
+// Compared against `pasteboard.changeCount` in the paste path: if it still
+// matches, our snapshot is authoritative and we can read directly from it
+// instead of going through pbs IPC (which silently drops public.data
+// payloads in the multi-100-MB range — see comment in
+// pasteFromInProcessSnapshotIfOwner). Sentinel -1 means "we never owned
+// the pasteboard," which is impossible to match an actual changeCount
+// (those start at 1 and only increase).
+static NSInteger g_hexClipboardChangeCount = -1;
+
+@implementation HexClipboardOwner {
+    NSData *_bytes;
+    BOOL _isRect;
+    HexRectClipboardKind _rectKind;
+    std::uint32_t _rectWidth;
+    std::uint32_t _rectHeight;
+}
+
+- (void)snapshotLinear:(NSData *)bytes
+{
+    _bytes = [bytes copy];
+    _isRect = NO;
+    _rectKind = HexRectClipboardKind::Bytes;
+    _rectWidth = 0;
+    _rectHeight = 0;
+}
+
+- (void)snapshotRect:(NSData *)bytes
+                kind:(HexRectClipboardKind)kind
+               width:(std::uint32_t)width
+              height:(std::uint32_t)height
+{
+    _bytes = [bytes copy];
+    _isRect = YES;
+    _rectKind = kind;
+    _rectWidth = width;
+    _rectHeight = height;
+}
+
+- (void)clearSnapshot
+{
+    _bytes = nil;
+    _isRect = NO;
+    _rectKind = HexRectClipboardKind::Bytes;
+    _rectWidth = 0;
+    _rectHeight = 0;
+}
+
+- (BOOL)hasSnapshot
+{
+    return _bytes != nil;
+}
+
+- (NSUInteger)snapshotByteCount
+{
+    return _bytes.length;
+}
+
+- (NSData *)snapshotBytes
+{
+    return _bytes;
+}
+
+- (BOOL)snapshotIsRect
+{
+    return _isRect;
+}
+
+- (HexRectClipboardKind)snapshotRectKind
+{
+    return _rectKind;
+}
+
+- (std::uint32_t)snapshotRectWidth
+{
+    return _rectWidth;
+}
+
+- (std::uint32_t)snapshotRectHeight
+{
+    return _rectHeight;
+}
+
+// AppKit calls this once per requested type per paste, possibly cross-
+// process via pbs IPC. We synthesize the rendering on demand from the
+// held snapshot — no upfront materialization, no duplicate copies.
+- (void)pasteboard:(NSPasteboard *)pasteboard provideDataForType:(NSPasteboardType)type
+{
+    if (_bytes == nil) {
+        return;
+    }
+
+    if ([type isEqualToString:NSPasteboardTypeString]) {
+        if (_bytes.length > kHexClipboardTextRawCap) {
+            // Above the hex-text cap: emit a placeholder so a text-paste
+            // consumer sees a clear "this came from HEX-Editor — paste in
+            // HEX view to receive" sentence rather than a multi-GB string.
+            NSString *placeholder = [NSString stringWithFormat:
+                @"<%.1f MB hex-editor selection> Paste into HEX view to receive.",
+                (double)_bytes.length / (1024.0 * 1024.0)];
+            [pasteboard setString:placeholder forType:type];
+            return;
+        }
+        std::string text;
+        if (_isRect && _rectWidth > 0 && _rectHeight > 0) {
+            // Rect: row-separated hex via the existing core formatter.
+            // The snapshot is densely packed (bytesPerRow == width).
+            hexedit::SpanByteSource source(
+                static_cast<const std::uint8_t *>(_bytes.bytes), _bytes.length);
+            hexedit::RectSelection rect;
+            rect.originOffset = 0;
+            rect.width = _rectWidth;
+            rect.height = _rectHeight;
+            rect.bytesPerRow = _rectWidth;
+            text = hexedit::formatRectClipboardHex(source, rect);
+        } else {
+            text = hexedit::formatHexClipboardText(
+                static_cast<const std::uint8_t *>(_bytes.bytes), _bytes.length);
+        }
+        NSString *string = [NSString stringWithUTF8String:text.c_str()];
+        if (string != nil) {
+            [pasteboard setString:string forType:type];
+        }
+        return;
+    }
+
+    if ([type isEqualToString:@"public.data"]) {
+        [pasteboard setData:_bytes forType:type];
+        return;
+    }
+
+    if ([type isEqualToString:kHexRectPasteboardType] && _isRect) {
+        NSData *encoded = rectPayloadEncode(_rectKind, _rectWidth, _rectHeight,
+            static_cast<const std::uint8_t *>(_bytes.bytes),
+            static_cast<std::uint32_t>(_bytes.length));
+        if (encoded != nil) {
+            [pasteboard setData:encoded forType:type];
+        }
+        return;
+    }
+}
+
+// AppKit notifies us when ownership lapses (some other app declared types).
+// Drop the snapshot — there's no consumer left to deliver to.
+- (void)pasteboardChangedOwner:(NSPasteboard *)sender
+{
+    (void)sender;
+    [self clearSnapshot];
+    // Invalidate the change-count sentinel too, so the in-process
+    // short-circuit in pasteFromInProcessSnapshotIfOwner can't read a
+    // stale snapshot if some path forgets to call clearSnapshot.
+    g_hexClipboardChangeCount = -1;
+}
+@end
+
+// Single static instance, lazily created on first cut/copy. Rebuilt only
+// across plugin loads, never per-cut.
+static HexClipboardOwner *g_hexClipboardOwner = nil;
+
+static HexClipboardOwner *sharedHexClipboardOwner()
+{
+    if (g_hexClipboardOwner == nil) {
+        g_hexClipboardOwner = [[HexClipboardOwner alloc] init];
+    }
+    return g_hexClipboardOwner;
+}
+
+// Office/Word pattern: when we hold an outstanding pasteboard promise at
+// process quit, the bytes vanish unless we materialize them onto the
+// pasteboard before exit. For small snapshots (≤ this threshold) we
+// materialize silently — no user friction. For larger snapshots, we ask
+// the user whether to keep them on the clipboard or let them go.
+constexpr NSUInteger kHexClipboardSilentMaterializeCap = 16 * 1024 * 1024;
+
+// Iterate the declared types and resolve each by calling the owner's
+// provideDataForType:. After this returns, the pasteboard holds actual
+// data (not a promise), so the data survives our process exit.
+static void resolveAllHexClipboardPromises()
+{
+    HexClipboardOwner *owner = g_hexClipboardOwner;
+    if (owner == nil || ![owner hasSnapshot]) {
+        return;
+    }
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    NSArray<NSPasteboardType> *types = pasteboard.types;
+    for (NSPasteboardType type in types) {
+        [owner pasteboard:pasteboard provideDataForType:type];
+    }
+}
+
+static void materializeHexClipboardOnQuitIfNeeded()
+{
+    HexClipboardOwner *owner = g_hexClipboardOwner;
+    if (owner == nil || ![owner hasSnapshot]) {
+        return;
+    }
+    const NSUInteger byteCount = [owner snapshotByteCount];
+    if (byteCount == 0) {
+        return;
+    }
+    if (byteCount <= kHexClipboardSilentMaterializeCap) {
+        // Small enough to materialize without bothering the user.
+        resolveAllHexClipboardPromises();
+        return;
+    }
+
+    // Show the user the size in human-readable form (MB / GB depending on
+    // scale) so the modal communicates the cost concretely.
+    NSString *sizeText = nil;
+    constexpr double kGB = 1024.0 * 1024.0 * 1024.0;
+    if (byteCount >= static_cast<NSUInteger>(kGB)) {
+        sizeText = [NSString stringWithFormat:@"%.1f GB", (double)byteCount / kGB];
+    } else {
+        sizeText = [NSString stringWithFormat:@"%.1f MB",
+                    (double)byteCount / (1024.0 * 1024.0)];
+    }
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = L(@"clipboard.saveOnQuit.title");
+    alert.informativeText = [NSString stringWithFormat:L(@"clipboard.saveOnQuit.body"),
+                             sizeText];
+    [alert addButtonWithTitle:L(@"clipboard.saveOnQuit.keepButton")];
+    [alert addButtonWithTitle:L(@"clipboard.saveOnQuit.discardButton")];
+    if ([alert runModal] == NSAlertFirstButtonReturn) {
+        resolveAllHexClipboardPromises();
+    }
+    // If "Discard": the promise lapses on process exit; the pasteboard
+    // returns no data for our types after we're gone.
+}
+
+// Copy the active rectangular selection to the system pasteboard. Always emits the
+// custom UTI (so paste-back into this plugin gets the exact shape) plus a public-text
+// fallback (space-separated hex bytes per row) for external apps. The source-pane tag
+// distinguishes Bytes vs. Ascii so paste-back can preserve which pane drove the copy,
+// but the text representation is identical (hex bytes always — ASCII characters can
+// include unprintable bytes that would render as dots and lose the original data).
+static bool copyRectToPasteboard()
+{
+    if (!hasRectSelection()) {
+        return false;
+    }
+    const HexRectClipboardKind kind = (g_rectOriginField == HexCursorField::Ascii)
+        ? HexRectClipboardKind::Ascii
+        : HexRectClipboardKind::Bytes;
+
+    const hexedit::ByteSource &bufferSource = hexBufferSource();
+    std::vector<std::uint8_t> payloadBytes;
+    hexedit::extractRectBytes(bufferSource, g_rectSelection, payloadBytes);
+
+    NSData *bytesNS = [NSData dataWithBytes:(payloadBytes.empty() ? nullptr : payloadBytes.data())
+                                     length:payloadBytes.size()];
+    HexClipboardOwner *owner = sharedHexClipboardOwner();
+    [owner snapshotRect:bytesNS
+                   kind:kind
+                  width:static_cast<std::uint32_t>(g_rectSelection.width)
+                 height:static_cast<std::uint32_t>(g_rectSelection.height)];
+
+    // Promise types — pbs will call provideDataForType: on the owner when
+    // some consumer pastes. No bytes hit the pasteboard upfront. Capture
+    // the changeCount so an in-process paste can recognize that we still
+    // own the pasteboard and read the snapshot directly (bypassing pbs).
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    g_hexClipboardChangeCount =
+        [pasteboard declareTypes:@[NSPasteboardTypeString, kHexRectPasteboardType] owner:owner];
+    return true;
+}
+
 static bool copyHexSelectionToPasteboard()
 {
+    if (hasRectSelection()) {
+        return copyRectToPasteboard();
+    }
+
     size_t offset = 0;
     size_t byteCount = 0;
     selectedOrCurrentRange(&offset, &byteCount);
-    if (byteCount == 0 || offset >= previewBytes.size()) {
+    if (byteCount == 0 || offset >= hexBufferLength()) {
         return false;
     }
 
-    byteCount = std::min(byteCount, previewBytes.size() - offset);
-    const std::uint8_t *src = previewBytes.data() + offset;
+    byteCount = std::min(byteCount, hexBufferLength() - offset);
+    // Snapshot the selection into a contiguous NSMutableData. We can't take
+    // a raw pointer into the page-cached source because pages may evict
+    // during the read; copying into NSMutableData snapshots the selection
+    // at copy time, which is what the pasteboard owner needs anyway.
+    NSMutableData *selectionBytes = [NSMutableData dataWithLength:byteCount];
+    hexBytesIn(offset, byteCount, static_cast<std::uint8_t *>(selectionBytes.mutableBytes));
+
+    HexClipboardOwner *owner = sharedHexClipboardOwner();
+    [owner snapshotLinear:selectionBytes];
+
+    // Promise types — pbs will call provideDataForType: on the owner when
+    // some consumer pastes. The hex-text and raw-bytes renderings are
+    // synthesized lazily inside the owner from the snapshot. Capture the
+    // changeCount so an in-process paste can recognize that we still own
+    // the pasteboard and read the snapshot directly (bypassing pbs IPC,
+    // which truncates public.data above ~few hundred MB).
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
-    [pasteboard clearContents];
-
-    if (activeCursorField == HexCursorField::Ascii) {
-        NSString *string = [[NSString alloc] initWithBytes:src length:byteCount encoding:NSUTF8StringEncoding];
-        if (string == nil) {
-            string = [[NSString alloc] initWithBytes:src length:byteCount encoding:NSWindowsCP1252StringEncoding];
-        }
-        if (string != nil) {
-            [pasteboard setString:string forType:NSPasteboardTypeString];
-        }
-    } else {
-        std::string hexText = hexedit::formatHexClipboardText(src, byteCount);
-        NSString *string = [NSString stringWithUTF8String:hexText.c_str()];
-        if (string != nil) {
-            [pasteboard setString:string forType:NSPasteboardTypeString];
-        }
-    }
-
-    NSData *bytes = [NSData dataWithBytes:src length:byteCount];
-    [pasteboard setData:bytes forType:@"public.data"];
+    g_hexClipboardChangeCount =
+        [pasteboard declareTypes:@[NSPasteboardTypeString, @"public.data"] owner:owner];
     return true;
 }
 
 static bool copyHexSelectionAsBinary()
 {
+    if (hasRectSelection()) {
+        // Binary copy of a rect: same payload as text copy (custom UTI preserves
+        // shape) plus the contiguous raw bytes on `public.data` for external apps.
+        // Source-pane tag stays whatever the rect's drag origin was.
+        if (!copyRectToPasteboard()) {
+            return false;
+        }
+        const hexedit::ByteSource &bufferSource = hexBufferSource();
+        std::vector<std::uint8_t> rectBytes;
+        if (hexedit::extractRectBytes(bufferSource, g_rectSelection, rectBytes) && !rectBytes.empty()) {
+            NSData *raw = [NSData dataWithBytes:rectBytes.data() length:rectBytes.size()];
+            NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+            [pasteboard setData:raw forType:@"public.data"];
+        }
+        return true;
+    }
+
     size_t offset = 0;
     size_t byteCount = 0;
     selectedOrCurrentRange(&offset, &byteCount);
-    if (byteCount == 0 || offset >= previewBytes.size()) {
+    if (byteCount == 0 || offset >= hexBufferLength()) {
         return false;
     }
 
-    byteCount = std::min(byteCount, previewBytes.size() - offset);
-    NSData *bytes = [NSData dataWithBytes:previewBytes.data() + offset length:byteCount];
+    byteCount = std::min(byteCount, hexBufferLength() - offset);
+    NSMutableData *bytes = [NSMutableData dataWithLength:byteCount];
+    hexBytesIn(offset, byteCount, static_cast<std::uint8_t *>(bytes.mutableBytes));
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
     [pasteboard clearContents];
     [pasteboard setData:bytes forType:NSPasteboardTypeString];
@@ -2363,8 +4662,31 @@ static bool copyHexSelectionAsBinary()
     return true;
 }
 
+// Zero-fill the bytes inside the active rectangle. Preserves file size (offsets do
+// not shift) — that's the user's spec from the chunk-3 plan: "Block delete semantics
+// — zero-fill (preserve offsets)". Leaves the rect itself selected so a second
+// Delete (or Cut) is a no-op rather than a footgun.
+static bool deleteRectSelection()
+{
+    if (!hasRectSelection()) {
+        return false;
+    }
+    std::vector<std::uint8_t> zeros(g_rectSelection.totalBytes(), 0);
+    if (!applyRectBytesPaste(g_rectSelection, zeros.data(), zeros.size())) {
+        return false;
+    }
+    if (hexTableView) {
+        [hexTableView setNeedsDisplay:YES];
+    }
+    return true;
+}
+
 static bool deleteHexSelection()
 {
+    if (hasRectSelection()) {
+        return deleteRectSelection();
+    }
+
     hexedit::ByteEditOperation op;
     if (!hexedit::planDeleteEdit(currentDocumentView(), currentCursor(), currentSelection(), op)) {
         return false;
@@ -2420,8 +4742,186 @@ static bool applyBytesPaste(const std::uint8_t *bytes, size_t byteCount)
     return true;
 }
 
+// Apply a paste-time rectangle: write `bytes` (length width*height) into the rows
+// of `dest` row-by-row, replacing existing bytes. Out-of-range tail rows are clipped
+// to file end (we do not auto-extend the file). Caller has already verified shape
+// matches, so this never partially writes — either every row succeeds or none.
+static bool applyRectBytesPaste(const hexedit::RectSelection &dest,
+                                const std::uint8_t *bytes,
+                                std::size_t byteCount)
+{
+    if (!dest.active() || bytes == nullptr || byteCount != dest.totalBytes()) {
+        return false;
+    }
+    // Build one combined edit op from the per-row writes by emitting a single
+    // contiguous transaction whose extent is the rect's bounding-box bytes within
+    // each row. Easier: apply each row separately. This may produce N undo records
+    // but matches how Insert Columns / Pattern Replace already work.
+    suppressModificationRefresh = true;
+    bool ok = true;
+    for (std::size_t r = 0; r < dest.height; ++r) {
+        const std::size_t rowStartOffset = dest.originOffset + r * dest.bytesPerRow;
+        if (rowStartOffset >= previewTotalLength) {
+            // Remaining rows are entirely past EOF; we don't extend the file, so stop.
+            break;
+        }
+        const std::size_t available = previewTotalLength - rowStartOffset;
+        const std::size_t take = std::min(dest.width, available);
+        if (!replaceEditorBytes(rowStartOffset, bytes + r * dest.width, take, take)) {
+            ok = false;
+            break;
+        }
+    }
+    suppressModificationRefresh = false;
+    if (hexTableView) {
+        [hexTableView reloadData];
+        [hexTableView setNeedsDisplay:YES];
+    }
+    return ok;
+}
+
+// Returns the owner if we still hold the general pasteboard and have a
+// live snapshot — i.e., the most recent declareTypes:owner: call was ours
+// AND no other writer has bumped the changeCount since. In that case the
+// caller can read snapshotBytes directly and skip pbs IPC, which silently
+// truncates public.data above ~few-hundred-MB and is the root cause of
+// hex→hex paste failing for multi-GB selections.
+static HexClipboardOwner *currentlyOwnedHexSnapshot()
+{
+    HexClipboardOwner *owner = g_hexClipboardOwner;
+    if (owner == nil || ![owner hasSnapshot]) {
+        return nil;
+    }
+    if (g_hexClipboardChangeCount < 0) {
+        return nil;
+    }
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    if (pasteboard.changeCount != g_hexClipboardChangeCount) {
+        return nil;
+    }
+    return owner;
+}
+
+// Strict-shape rectangular paste path. Returns true when the paste landed (success
+// OR a user-facing error dialog was presented), false to fall through to the linear
+// paste path. The matrix:
+//   - Source kind = Addresses → reject.
+//   - Destination is not a rect → reject (must be rect).
+//   - Destination is rect but shape mismatches → reject (must be exactly w×h).
+//   - Destination is rect and shape matches → write bytes.
+// If no custom-UTI payload is present but the public-text payload parses as a rect
+// per Q2.b, treat it as a kind=Bytes payload and apply the same rules.
+static bool tryRectPasteFromPasteboard()
+{
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+
+    HexRectClipboardKind kind = HexRectClipboardKind::Bytes;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    const std::uint8_t *dataPtr = nullptr;
+    std::uint32_t dataLength = 0;
+    std::vector<std::uint8_t> textParsedBytes;
+
+    // In-process short-circuit: if we still own the pasteboard and our
+    // snapshot is a rect, read it directly. The owner outlives this
+    // function (static), so dataPtr stays valid through applyRectBytesPaste.
+    HexClipboardOwner *ownedSnapshot = currentlyOwnedHexSnapshot();
+    BOOL haveStructured = NO;
+    if (ownedSnapshot != nil && [ownedSnapshot snapshotIsRect]) {
+        NSData *snapshot = [ownedSnapshot snapshotBytes];
+        kind = [ownedSnapshot snapshotRectKind];
+        width = [ownedSnapshot snapshotRectWidth];
+        height = [ownedSnapshot snapshotRectHeight];
+        dataPtr = static_cast<const std::uint8_t *>(snapshot.bytes);
+        dataLength = static_cast<std::uint32_t>(snapshot.length);
+        haveStructured = YES;
+    } else {
+        NSData *encoded = [pasteboard dataForType:kHexRectPasteboardType];
+        haveStructured = rectPayloadDecode(encoded, &kind, &width, &height, &dataPtr, &dataLength);
+    }
+
+    if (!haveStructured) {
+        // Q2.b — try parsing public-text as a `\n`-separated rect.
+        NSString *text = [pasteboard stringForType:NSPasteboardTypeString];
+        if (text == nil || text.length == 0) {
+            return false;
+        }
+        std::size_t parsedW = 0;
+        std::size_t parsedH = 0;
+        if (!hexedit::parseRectClipboardText(std::string([text UTF8String]),
+                                              textParsedBytes, parsedW, parsedH)) {
+            return false;
+        }
+        if (textParsedBytes.empty() || parsedH < 2) {
+            // Single-line text isn't a rectangle — defer to the linear paste path.
+            return false;
+        }
+        kind = HexRectClipboardKind::Bytes;
+        width = static_cast<std::uint32_t>(parsedW);
+        height = static_cast<std::uint32_t>(parsedH);
+        dataPtr = textParsedBytes.data();
+        dataLength = static_cast<std::uint32_t>(textParsedBytes.size());
+    }
+
+    if (!hasRectSelection()) {
+        // Destination is a caret or linear selection — strict matrix rejects this
+        // for any rect-typed payload. Tell the user what shape they need.
+        presentHexValidationError([NSString stringWithFormat:L(@"paste.rect.errorNeedsRectDestination"),
+            (unsigned long)width, (unsigned long)height]);
+        return true;
+    }
+
+    if (g_rectSelection.width != width || g_rectSelection.height != height) {
+        presentHexValidationError([NSString stringWithFormat:L(@"paste.rect.errorShapeMismatch"),
+            (unsigned long)width, (unsigned long)height]);
+        return true;
+    }
+
+    // Guard the dataLength == width × height check against uint32 overflow:
+    // a crafted payload with width = 0xFFFFFFFE, height = 2 wraps the product
+    // to 0xFFFFFFFC, which a forged dataLength of the same value would slip
+    // past — and the downstream applyRectBytesPaste would then index as
+    // size_t (no overflow) into an attacker-sized region. Promote to uint64
+    // before multiplying so the overflow surfaces here instead.
+    const std::uint64_t expectedDataBytes =
+        static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height);
+    if (dataPtr == nullptr || expectedDataBytes != dataLength) {
+        presentHexValidationError([NSString stringWithFormat:L(@"paste.rect.errorShapeMismatch"),
+            (unsigned long)width, (unsigned long)height]);
+        return true;
+    }
+
+    if (applyRectBytesPaste(g_rectSelection, dataPtr, dataLength)) {
+        // Keep the rect selected after paste so the user can repeat or visually
+        // confirm. (Symmetric with how Pattern Replace clears its selection — see
+        // chunk 4 — but for paste, leaving the selection feels less surprising.)
+        if (hexTableView) {
+            [hexTableView setNeedsDisplay:YES];
+        }
+    }
+    return true;
+}
+
 static bool pasteBytesFromPasteboard()
 {
+    if (tryRectPasteFromPasteboard()) {
+        return true;
+    }
+
+    // In-process short-circuit: if we own the pasteboard and have a
+    // linear snapshot, read it directly. Bypasses pbs IPC, which silently
+    // drops public.data payloads in the multi-100-MB range and would
+    // otherwise force a fall-through to the placeholder string at
+    // multi-GB sizes.
+    HexClipboardOwner *ownedSnapshot = currentlyOwnedHexSnapshot();
+    if (ownedSnapshot != nil && ![ownedSnapshot snapshotIsRect]) {
+        NSData *snapshot = [ownedSnapshot snapshotBytes];
+        if (snapshot.length > 0) {
+            return applyBytesPaste(static_cast<const std::uint8_t *>(snapshot.bytes),
+                                   snapshot.length);
+        }
+    }
+
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
 
     NSData *raw = [pasteboard dataForType:@"public.data"];
@@ -2452,6 +4952,20 @@ static bool pasteBytesFromPasteboard()
 
 static bool pasteBinaryFromPasteboard()
 {
+    if (tryRectPasteFromPasteboard()) {
+        return true;
+    }
+
+    // In-process short-circuit — see pasteBytesFromPasteboard for why.
+    HexClipboardOwner *ownedSnapshot = currentlyOwnedHexSnapshot();
+    if (ownedSnapshot != nil && ![ownedSnapshot snapshotIsRect]) {
+        NSData *snapshot = [ownedSnapshot snapshotBytes];
+        if (snapshot.length > 0) {
+            return applyBytesPaste(static_cast<const std::uint8_t *>(snapshot.bytes),
+                                   snapshot.length);
+        }
+    }
+
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
 
     NSData *raw = [pasteboard dataForType:@"public.data"];
@@ -2478,7 +4992,7 @@ static bool pasteBinaryFromPasteboard()
 static void selectAllHexBytes()
 {
     selectedByteStart = 0;
-    selectedByteEnd = previewBytes.size();
+    selectedByteEnd = hexBufferLength();
     activeCursorField = HexCursorField::Hex;
     activeByteOffset = selectedByteEnd;
     activeHexNibble = 0;
@@ -2649,9 +5163,13 @@ static NSString *promptHexGotoExpression(NSString *defaultText, std::size_t curr
     @autoreleasepool {
         NSAlert *alert = [[NSAlert alloc] init];
         alert.messageText = L(@"goto.title");
-        alert.informativeText = [NSString stringWithFormat:L(@"goto.message"),
-            std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH), currentOffset,
-            std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH), totalLength];
+        // Pre-format the two hex address strings here so the localized template only sees
+        // simple %@ slots — translators don't have to know about printf's "%0*zx"
+        // dynamic-width syntax, and they can reorder the two values across languages.
+        const int addrWidth = std::clamp(g_addressWidth, HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH);
+        NSString *currentHex = [NSString stringWithFormat:g_uppercaseHex ? @"%0*zX" : @"%0*zx", addrWidth, currentOffset];
+        NSString *endHex = [NSString stringWithFormat:g_uppercaseHex ? @"%0*zX" : @"%0*zx", addrWidth, totalLength];
+        alert.informativeText = [NSString stringWithFormat:L(@"goto.message"), currentHex, endHex];
         [alert addButtonWithTitle:L(@"goto.button")];
         [alert addButtonWithTitle:L(@"button.cancel")];
 
@@ -2684,7 +5202,11 @@ static void gotoHexOffset(std::size_t offset)
     activeByteOffset = offset;
     activeHexNibble = 0;
     activeCursorField = HexCursorField::Hex;
-    clearByteSelection();
+    // Goto is an unambiguous "jump the cursor here" navigation, so it collapses
+    // both linear and rectangular selections — leaving a rect anchored to the
+    // pre-Goto position would let the next Shift+Option+arrow extension treat
+    // the new cursor as the rect's far corner, producing a wildly wrong shape.
+    clearAllByteSelections();
 
     // Use scrollHexTableToActiveOffset() instead of a one-shot scrollRowToVisible.
     // The latter ran synchronously inside the modal-dismissal callstack, where
@@ -2731,16 +5253,17 @@ static bool executeHexFindNext(hexedit::SearchDirection direction, NSString **er
     std::size_t startOffset = 0;
     if (direction == hexedit::SearchDirection::Forward) {
         if (hasByteSelection()) {
-            startOffset = std::min(selectedByteStart + 1, previewBytes.size());
+            startOffset = std::min(selectedByteStart + 1, hexBufferLength());
         } else {
-            startOffset = std::min(activeByteOffset + 1, previewBytes.size());
+            startOffset = std::min(activeByteOffset + 1, hexBufferLength());
         }
     } else {
         startOffset = hasByteSelection() ? selectedByteStart : activeByteOffset;
     }
 
+    const hexedit::ByteSource &bufferSource = hexBufferSource();
     std::size_t found = 0;
-    if (!hexedit::findBytePattern(previewBytes.data(), previewBytes.size(), pattern,
+    if (!hexedit::findBytePattern(bufferSource, pattern,
                                    startOffset, direction, g_findWrap, found)) {
         if (errorMessage) *errorMessage = L(@"find.errorNotFound");
         return false;
@@ -2790,11 +5313,12 @@ static int executeHexReplaceAll(NSString *findText, NSString *replaceText, bool 
     }
 
     // Collect all non-overlapping match offsets, forward, no wrap.
+    const hexedit::ByteSource &bufferSource = hexBufferSource();
     std::vector<std::size_t> matches;
     std::size_t cursor = 0;
-    while (cursor + findPattern.bytes.size() <= previewBytes.size()) {
+    while (cursor + findPattern.bytes.size() <= hexBufferLength()) {
         std::size_t at = 0;
-        if (!hexedit::findBytePattern(previewBytes.data(), previewBytes.size(), findPattern,
+        if (!hexedit::findBytePattern(bufferSource, findPattern,
                                        cursor, hexedit::SearchDirection::Forward, false, at)) {
             break;
         }
@@ -2825,7 +5349,7 @@ static int executeHexReplaceAll(NSString *findText, NSString *replaceText, bool 
     sci(editor, SCI_ENDUNDOACTION);
     suppressModificationRefresh = false;
 
-    previewBytes = readCurrentBuffer(&previewTotalLength);
+    bindHexBufferToActiveScintilla();
     clampActiveCursor();
     clearByteSelection();
     if (hexTableView) {
@@ -2870,7 +5394,7 @@ static bool executeHexReplaceCurrentSelection(NSString *findText, NSString *repl
         return false;
     }
 
-    activeByteOffset = std::min(selectedByteStart + replacePattern.bytes.size(), previewBytes.size());
+    activeByteOffset = std::min(selectedByteStart + replacePattern.bytes.size(), hexBufferLength());
     activeHexNibble = 0;
     activeCursorField = HexCursorField::Hex;
     clearByteSelection();
@@ -3015,8 +5539,8 @@ static int executeHexCompareWithFile(NSString *otherFilePath, NSString **errorMe
     const std::uint8_t *otherBytes = static_cast<const std::uint8_t *>(otherData.bytes);
     const std::size_t otherLen = otherData.length;
 
-    g_compareDiffs = hexedit::computeByteDiffs(previewBytes.data(), previewBytes.size(),
-                                                otherBytes, otherLen);
+    hexedit::SpanByteSource otherSource(otherBytes, otherLen);
+    g_compareDiffs = hexedit::computeByteDiffs(hexBufferSource(), otherSource);
     g_compareOtherPath = [otherFilePath copy];
 
     if (hexTableView) {
@@ -3154,7 +5678,7 @@ static int executeInsertColumns(NSString *patternText, int count, int position, 
         if (errorMessage) *errorMessage = L(@"insertColumns.errorRowSize");
         return -1;
     }
-    const std::size_t totalLength = previewBytes.size();
+    const std::size_t totalLength = hexBufferLength();
     // Number of rows to insert into is the number of fully-populated rows. A trailing
     // partial row gets padding inserted up to the position too — match Windows which
     // iterates HEXM_GETLINECNT, the count of rendered rows including the trailing one.
@@ -3184,7 +5708,7 @@ static int executeInsertColumns(NSString *patternText, int count, int position, 
     g_columns = currentColumns + count;
     saveHexPrefs();
 
-    previewBytes = readCurrentBuffer(&previewTotalLength);
+    bindHexBufferToActiveScintilla();
     clampActiveCursor();
     clearByteSelection();
     applyHexViewMode();
@@ -3270,7 +5794,7 @@ static int executePatternReplace(NSString *patternText, NSString **errorMessage)
         if (errorMessage) *errorMessage = L(@"patternReplace.openHexFirst");
         return -1;
     }
-    if (!hasByteSelection() || selectedByteEnd <= selectedByteStart) {
+    if (!hasAnyByteSelection()) {
         if (errorMessage) *errorMessage = L(@"patternReplace.requireSelection");
         return -1;
     }
@@ -3283,6 +5807,33 @@ static int executePatternReplace(NSString *patternText, NSString **errorMessage)
     if (!hexedit::parseHexClipboardText(std::string([patternText UTF8String]), patternBytes) || patternBytes.empty()) {
         if (errorMessage) *errorMessage = L(@"patternReplace.errorParsePattern");
         return -1;
+    }
+
+    if (hasRectSelection()) {
+        // Rectangular fill: each row starts fresh from pattern[0]. Build a row-major
+        // (width × height) buffer whose row r col c = pattern[c % pattern.size()],
+        // then use applyRectBytesPaste — same per-row clipping it already does for
+        // paste so a rect overhanging EOF fills only the in-file rows / columns.
+        std::vector<std::uint8_t> filler(g_rectSelection.totalBytes());
+        for (std::size_t r = 0; r < g_rectSelection.height; ++r) {
+            for (std::size_t c = 0; c < g_rectSelection.width; ++c) {
+                filler[r * g_rectSelection.width + c] = patternBytes[c % patternBytes.size()];
+            }
+        }
+        // Compute the actual number of bytes that will be written (clipped at EOF).
+        std::size_t bytesWritten = 0;
+        for (const auto &range : hexedit::rectToRanges(g_rectSelection, previewTotalLength)) {
+            bytesWritten += range.byteCount;
+        }
+        if (!applyRectBytesPaste(g_rectSelection, filler.data(), filler.size())) {
+            if (errorMessage) *errorMessage = L(@"patternReplace.errorFailed");
+            return -1;
+        }
+        // Leave the rect selected so the user can repeat (matches Paste behaviour).
+        if (hexTableView) {
+            [hexTableView setNeedsDisplay:YES];
+        }
+        return static_cast<int>(bytesWritten);
     }
 
     const std::size_t length = selectedByteEnd - selectedByteStart;
@@ -3313,16 +5864,24 @@ static void presentPatternReplaceDialog()
         showMessage(L(@"app.title"), L(@"patternReplace.openHexFirst"));
         return;
     }
-    if (!hasByteSelection() || selectedByteEnd <= selectedByteStart) {
+    if (!hasAnyByteSelection()) {
         showMessage(L(@"app.title"), L(@"patternReplace.requireSelection"));
         return;
     }
 
     @autoreleasepool {
-        const std::size_t length = selectedByteEnd - selectedByteStart;
         NSAlert *alert = [[NSAlert alloc] init];
         alert.messageText = L(@"patternReplace.title");
-        alert.informativeText = [NSString stringWithFormat:L(@"patternReplace.message"), length];
+        if (hasRectSelection()) {
+            // Rect-specific message — explains the per-row restart so the user knows
+            // the pattern won't run continuously across rows like the linear path.
+            alert.informativeText = [NSString stringWithFormat:L(@"patternReplace.messageRect"),
+                (unsigned long)g_rectSelection.width,
+                (unsigned long)g_rectSelection.height];
+        } else {
+            const std::size_t length = selectedByteEnd - selectedByteStart;
+            alert.informativeText = [NSString stringWithFormat:L(@"patternReplace.message"), length];
+        }
         [alert addButtonWithTitle:L(@"patternReplace.button")];
         [alert addButtonWithTitle:L(@"button.cancel")];
 
@@ -3331,6 +5890,13 @@ static void presentPatternReplaceDialog()
         patternField.accessibilityIdentifier = @"hex-editor.patternreplace.pattern";
         alert.accessoryView = patternField;
         [alert.window setInitialFirstResponder:patternField];
+
+        // Capture rect shape before runModal — executePatternReplace leaves the
+        // selection in place but we still want the summary to mention the original
+        // dimensions even if a future change shifts that.
+        const bool wasRect = hasRectSelection();
+        const std::size_t rectW = g_rectSelection.width;
+        const std::size_t rectH = g_rectSelection.height;
 
         const NSModalResponse response = [alert runModal];
         if (response != NSAlertFirstButtonReturn) {
@@ -3344,12 +5910,56 @@ static void presentPatternReplaceDialog()
             presentHexValidationError(err ?: L(@"patternReplace.errorFailed"));
             return;
         }
-        NSString *summary = (bytesWritten == 1)
-            ? L(@"patternReplace.summarySingular")
-            : [NSString stringWithFormat:L(@"patternReplace.summaryPlural"), bytesWritten];
+        NSString *summary = nil;
+        if (wasRect) {
+            summary = [NSString stringWithFormat:L(@"patternReplace.summaryRect"),
+                (unsigned long)rectW,
+                (unsigned long)rectH,
+                (unsigned long)bytesWritten];
+        } else if (bytesWritten == 1) {
+            summary = L(@"patternReplace.summarySingular");
+        } else {
+            summary = [NSString stringWithFormat:L(@"patternReplace.summaryPlural"), bytesWritten];
+        }
         showMessage(L(@"app.title"), summary);
     }
 }
+
+// Vertically-center the cell text. Default NSTextFieldCell anchors the
+// glyphs near the top of the cell rect, so the row's extra padding (the
+// `+4` in rowHeight) all ends up *below* the text — looks lopsided when
+// the row highlight or selection wash extends to row edges. Centering
+// splits that padding evenly above and below the glyph baseline.
+@interface HexCenteredTextCell : NSTextFieldCell
+@end
+@implementation HexCenteredTextCell
+- (NSRect)drawingRectForBounds:(NSRect)theRect
+{
+    NSRect r = [super drawingRectForBounds:theRect];
+    const NSSize textSize = [self cellSizeForBounds:theRect];
+    const CGFloat extraVertical = r.size.height - textSize.height;
+    if (extraVertical > 0) {
+        // NSTableView is flipped (origin top-left). Pushing origin.y down
+        // by half the slack moves the glyphs toward the row's vertical
+        // midline; trimming size.height by the same amount keeps the
+        // bottom edge stable.
+        r.origin.y += floor(extraVertical / 2.0);
+        r.size.height -= extraVertical;
+    }
+    return r;
+}
+@end
+
+// NSTableView's cell-based AX traversal honors the legacy informal-protocol
+// method `accessibilityIsIgnored` (NSAccessibility), not the newer
+// setAccessibilityElement:. Override both for belt-and-suspenders coverage so
+// these spacer cells don't appear as indexable static texts in XCUI.
+@interface HexSpacerCell : HexCenteredTextCell
+@end
+@implementation HexSpacerCell
+- (BOOL)accessibilityIsIgnored { return YES; }
+- (NSAccessibilityRole)accessibilityRole { return NSAccessibilityUnknownRole; }
+@end
 
 static void configureTableColumn(NSTableView *tableView, NSString *identifier, NSString *title, CGFloat width, NSFont *font)
 {
@@ -3359,11 +5969,54 @@ static void configureTableColumn(NSTableView *tableView, NSString *identifier, N
     column.minWidth = width;
     column.resizingMask = NSTableColumnNoResizing;
 
-    NSTextFieldCell *cell = [[NSTextFieldCell alloc] init];
+    const NSTextAlignment alignment = [identifier hasPrefix:@"cell"] ? NSTextAlignmentCenter : NSTextAlignmentLeft;
+
+    // Spacer columns ("offsetSpacer" between address and bytes, "spacer" between
+    // bytes and ASCII) are pure visual gutters with empty values. Use the
+    // AX-ignored cell subclass so they don't become indexable static texts —
+    // this keeps `row.staticTexts.element(boundBy:N)` mapped to byte N-1
+    // uniformly across the row, regardless of how many spacer columns we add.
+    const BOOL isSpacer = [identifier isEqualToString:@"offsetSpacer"] || [identifier isEqualToString:@"spacer"];
+    NSTextFieldCell *cell = isSpacer ? [[HexSpacerCell alloc] init] : [[HexCenteredTextCell alloc] init];
     cell.font = font;
     cell.lineBreakMode = NSLineBreakByClipping;
-    cell.alignment = [identifier hasPrefix:@"cell"] ? NSTextAlignmentCenter : NSTextAlignmentLeft;
+    cell.alignment = alignment;
     column.dataCell = cell;
+
+    // Match the header's alignment to the data cell's so the column index ("00", "01",
+    // ...) sits visually centered above the centered byte values, and "Offset" / "ASCII"
+    // stay left-aligned over their left-aligned data.
+    //
+    // We set alignment via TWO mechanisms because each plays a different role:
+    //
+    //   - `headerCell.alignment` — semantic property. Reported by the AX
+    //     diagnostic (`hdrAlignMatch`) and observable by anything that reads
+    //     the cell's intended alignment. NSTableHeaderCell *renders* the title
+    //     buggily when this property is non-left (clips to a horizontal sliver
+    //     of pixels that looks like "_"), but the property itself is fine to
+    //     set and read back.
+    //
+    //   - `headerCell.attributedStringValue` with NSParagraphStyle.alignment —
+    //     drives the actual draw. AppKit honors the paragraph attributes when
+    //     rendering attributed-string-based titles, bypassing the buggy
+    //     alignment-property code path. This is what produces the correctly
+    //     drawn centered "00" / "0f" headers.
+    //
+    // Setting only one fails: alignment-only renders as dashes; attributed-only
+    // leaves the cell's alignment property as the default left, breaking the
+    // hdrAlignMatch assertion.
+    column.headerCell.alignment = alignment;
+    NSMutableParagraphStyle *headerParagraph = [[NSMutableParagraphStyle defaultParagraphStyle] mutableCopy];
+    headerParagraph.alignment = alignment;
+    headerParagraph.lineBreakMode = NSLineBreakByClipping;
+    NSFont *headerFont = hexHeaderFontFor(font);
+    column.headerCell.font = headerFont;
+    column.headerCell.attributedStringValue = [[NSAttributedString alloc]
+        initWithString:title
+            attributes:@{
+                NSFontAttributeName: headerFont,
+                NSParagraphStyleAttributeName: headerParagraph,
+            }];
 
     [tableView addTableColumn:column];
 }
@@ -3373,22 +6026,24 @@ static void addHexCellColumns(NSTableView *table, NSFont *font)
     const hexedit::ViewMode mode = currentViewMode();
     const int cells = std::max(currentCellsPerRow(), 1);
     const CGFloat cellWidth = cellColumnWidth(font, mode);
-    const int midpoint = cells / 2;  // 8 for bpc=1, 4 for bpc=2, 2 for bpc=4, 1 for bpc=8
 
     configureTableColumn(table, @"offset", L(@"table.header.offset"), offsetColumnWidth(font), font);
+    // Empty spacer column between offset and the first hex byte. Real column
+    // (not padding inside offset) so the visible gap is reflected in the AX
+    // frame geometry the spacing test asserts on. AX-hidden inside
+    // configureTableColumn so this column does not become an indexable
+    // staticTexts entry — keeps `boundBy:N = byte N-1` for tests.
+    configureTableColumn(table, @"offsetSpacer", @"", offsetTrailingPadding(font), font);
     for (int column = 0; column < cells; ++column) {
         const std::size_t firstByte = static_cast<std::size_t>(column) * static_cast<std::size_t>(g_bytesPerCell);
         configureTableColumn(
             table,
             [NSString stringWithFormat:@"cell%02d", column],
-            [NSString stringWithFormat:@"%02zx", firstByte],
+            [NSString stringWithFormat:g_uppercaseHex ? @"%02zX" : @"%02zx", firstByte],
             cellWidth,
             font);
-        if (cells >= 2 && column == midpoint - 1) {
-            configureTableColumn(table, @"midspacer", @"", HEX_MID_BYTE_SEPARATOR_WIDTH, font);
-        }
     }
-    configureTableColumn(table, @"spacer", @"", HEX_ASCII_SEPARATOR_WIDTH, font);
+    configureTableColumn(table, @"spacer", @"", asciiSeparatorWidth(font), font);
     configureTableColumn(table, @"ascii", L(@"table.header.ascii"), asciiColumnWidth(font), font);
 }
 
@@ -3425,12 +6080,16 @@ static void setHexViewBytesPerCell(int bytesPerCell)
         return;
     }
     g_bytesPerCell = bytesPerCell;
-    if (g_bytesPerCell == 1) {
-        // Endianness is meaningless for single-byte cells (matches Windows isLittle reset
-        // when bits drops back to HEX_BYTE).
-        g_littleEndian = false;
-    }
+    // Don't reset g_littleEndian when dropping to 1-byte cells: the
+    // setting is benign at bpc=1 (formatCell only honours littleEndian
+    // for bpc > 1) and the user's preference should survive a temporary
+    // switch to 8-bit. Earlier behaviour reset the flag to mirror the
+    // Windows plugin's isLittle reset on HEX_BYTE; we deliberately
+    // diverge so the preference is persistent across column-width
+    // changes — this is what the user sees in the Options dialog.
     g_columns = defaultColumnsForBytesPerCell(g_bytesPerCell);
+    // Rect geometry is anchored to the row width; that width just changed.
+    clearRectSelection();
     saveHexPrefs();
     applyHexViewMode();
 }
@@ -3477,6 +6136,8 @@ static void setHexColumns(int columns)
         return;
     }
     g_columns = clamped;
+    // Rect geometry is anchored to the row width; that width just changed.
+    clearRectSelection();
     saveHexPrefs();
     applyHexViewMode();
 }
@@ -3504,6 +6165,15 @@ static NSFont *statusLabelFontFor(NSFont *gridFont)
     return [NSFont systemFontOfSize:std::max<CGFloat>(gridFont.pointSize - 2.0, 9.0)];
 }
 
+// Header font tracks the cell font so column titles (`00 01 02…`) scale
+// proportionately with the cells beneath them under zoom (Cmd+/Cmd-/pinch).
+// Sized 2 points smaller for visual hierarchy — matches the existing
+// status-label pattern. 9pt floor for legibility at minimum zoom.
+static NSFont *hexHeaderFontFor(NSFont *gridFont)
+{
+    return [NSFont systemFontOfSize:std::max<CGFloat>(gridFont.pointSize - 2.0, 9.0)];
+}
+
 static void applyHexTableLayout(NSTableView *table, NSTextField *statusLabel)
 {
     if (!table) {
@@ -3516,6 +6186,7 @@ static void applyHexTableLayout(NSTableView *table, NSTextField *statusLabel)
 
     const hexedit::ViewMode mode = currentViewMode();
     const CGFloat cellWidth = cellColumnWidth(font, mode);
+    NSFont *headerFont = hexHeaderFontFor(font);
     for (NSTableColumn *column in table.tableColumns) {
         NSString *identifier = column.identifier;
         CGFloat width = 0.0;
@@ -3524,10 +6195,10 @@ static void applyHexTableLayout(NSTableView *table, NSTextField *statusLabel)
             width = offsetColumnWidth(font);
         } else if ([identifier isEqualToString:@"ascii"]) {
             width = asciiColumnWidth(font);
-        } else if ([identifier isEqualToString:@"midspacer"]) {
-            width = HEX_MID_BYTE_SEPARATOR_WIDTH;
+        } else if ([identifier isEqualToString:@"offsetSpacer"]) {
+            width = offsetTrailingPadding(font);
         } else if ([identifier isEqualToString:@"spacer"]) {
-            width = HEX_ASCII_SEPARATOR_WIDTH;
+            width = asciiSeparatorWidth(font);
         } else {
             width = cellWidth;
         }
@@ -3536,6 +6207,37 @@ static void applyHexTableLayout(NSTableView *table, NSTextField *statusLabel)
         column.minWidth = width;
         NSTextFieldCell *cell = static_cast<NSTextFieldCell *>(column.dataCell);
         cell.font = font;
+
+        // Refresh header font + attributed title so the column-index headers
+        // (`00 01 02 …` and `Offset` / `ASCII`) scale with the cell font
+        // under zoom. Mutate the existing headerCell rather than replacing
+        // it: replacing column.headerCell during AppKit's draw cycle (which
+        // can call into this layout via setNeedsDisplay → live-resize
+        // chains) leaves the header view holding a freed pointer mid-draw
+        // and crashes NPP under XCUITest's rapid menu interactions.
+        const NSTextAlignment alignment = column.headerCell.alignment;
+        NSMutableParagraphStyle *headerParagraph = [[NSMutableParagraphStyle defaultParagraphStyle] mutableCopy];
+        headerParagraph.alignment = alignment;
+        headerParagraph.lineBreakMode = NSLineBreakByClipping;
+        column.headerCell.font = headerFont;
+        column.headerCell.attributedStringValue = [[NSAttributedString alloc]
+            initWithString:(column.title ?: @"")
+                attributes:@{
+                    NSFontAttributeName: headerFont,
+                    NSParagraphStyleAttributeName: headerParagraph,
+                }];
+    }
+    // Header row height tracks the scaled header font's metrics so big-zoom
+    // headers don't clip vertically. Note that the visual width of the
+    // header's background fill is constrained to the column span — see
+    // HexTableHeaderView's drawRect: — so growing the row height doesn't
+    // expose the empty area to the right of the ASCII pane.
+    if (NSTableHeaderView *headerView = table.headerView) {
+        const CGFloat headerRowHeight = ceil(headerFont.ascender - headerFont.descender + 6.0);
+        NSRect frame = headerView.frame;
+        frame.size.height = std::max(headerRowHeight, 17.0);
+        headerView.frame = frame;
+        [headerView setNeedsDisplay:YES];
     }
 
     if (statusLabel) {
@@ -3544,10 +6246,15 @@ static void applyHexTableLayout(NSTableView *table, NSTextField *statusLabel)
 
         NSView *rootView = statusLabel.superview;
         if (rootView) {
-            const CGFloat tableWidth = tableContainerWidth(font);
-            NSRect rootFrame = rootView.frame;
-            rootFrame.size.width = tableWidth;
-            rootView.frame = rootFrame;
+            // Use the rootView's *actual* size (set by NPP based on the editor
+            // view dimensions), not HEX_TABLE_HEIGHT — that constant is only
+            // valid when the host's editor area happens to be 640pt tall. When
+            // NPP allocates a taller editor (e.g. 688pt), the old code positioned
+            // the status label at y=619 (HEX_TABLE_HEIGHT-based), leaving a dark
+            // band of empty space above the status, between the host's tab bar
+            // and our hex view's top.
+            const CGFloat rootHeight = NSHeight(rootView.frame);
+            const CGFloat rootWidth = NSWidth(rootView.frame);
 
             // Status row height tracks the font's full ascender+descender extent,
             // plus a 4 pt margin above the row, so descender glyphs never clip.
@@ -3556,10 +6263,10 @@ static void applyHexTableLayout(NSTableView *table, NSTextField *statusLabel)
             const CGFloat labelHeight = textFrameHeightForFont(labelFont);
             const CGFloat topMargin = 4.0;
             const CGFloat statusAreaHeight = labelHeight + topMargin;
-            statusLabel.frame = NSMakeRect(8, HEX_TABLE_HEIGHT - topMargin - labelHeight,
-                                           tableWidth - 16, labelHeight);
-            table.enclosingScrollView.frame = NSMakeRect(0, 0, tableWidth,
-                                                         HEX_TABLE_HEIGHT - statusAreaHeight);
+            statusLabel.frame = NSMakeRect(8, rootHeight - topMargin - labelHeight,
+                                           rootWidth - 16, labelHeight);
+            table.enclosingScrollView.frame = NSMakeRect(0, 0, rootWidth,
+                                                         rootHeight - statusAreaHeight);
         }
     }
 }
@@ -3570,6 +6277,20 @@ static NSView *createHexTableView(NSTableView **tableView, NSTextField **statusL
     const CGFloat tableWidth = tableContainerWidth(font);
     NSView *rootView = [[HexTableContainerView alloc] initWithFrame:NSMakeRect(0, 0, tableWidth, HEX_TABLE_HEIGHT)];
     rootView.accessibilityIdentifier = kHexEditorRootAccessibilityID;
+    // Without autoresizing, the rootView stays a fixed 640pt tall regardless
+    // of the dock-panel space NPP allocates around it — when NPP gives more
+    // vertical room, the difference shows up as a dark band above (or below)
+    // the rootView. Subviews (status label sticks to top via MinYMargin, scroll
+    // view fills the rest via HeightSizable) already adapt; the rootView itself
+    // just needs the same flexibility to inherit the parent's actual size.
+    rootView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    // Pin the entire hex chrome left-to-right under any locale — hex dumps
+    // are universally LTR (Offset on left, ASCII on right) regardless of
+    // whether the user reads Hebrew, Arabic, or any other script. Without
+    // this, AppKit would flip column order under -AppleLanguages '(he)' and
+    // every Hebrew/Arabic-speaking developer would be confused. Surrounding
+    // dialog chrome (menus, NSAlerts, the Options dialog) still flips.
+    rootView.userInterfaceLayoutDirection = NSUserInterfaceLayoutDirectionLeftToRight;
 
     NSTextField *label = [NSTextField labelWithString:@""];
     NSFont *labelFont = statusLabelFontFor(font);
@@ -3586,13 +6307,31 @@ static NSView *createHexTableView(NSTableView **tableView, NSTextField **statusL
 
     NSScrollView *scrollView = [[HexTableScrollView alloc] initWithFrame:NSMakeRect(0, 0, tableWidth, HEX_TABLE_HEIGHT - statusAreaHeight)];
     scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    // Belt-and-suspenders LTR pin (rootView already pins, but child scroll
+    // views can override their parent's direction in some macOS versions).
+    scrollView.userInterfaceLayoutDirection = NSUserInterfaceLayoutDirectionLeftToRight;
     scrollView.hasVerticalScroller = YES;
     scrollView.hasHorizontalScroller = YES;
     scrollView.borderType = NSNoBorder;
+    // Same windowBackgroundColor as the table so any area the table doesn't
+    // cover (under the horizontal scroller, beneath the last row) blends
+    // in. Intentionally NOT honouring `g_colorRegularTextBg` here — that
+    // would set an opaque table.backgroundColor that NSTableView paints
+    // over the current-line / selection highlight rectangles in
+    // drawRect:, killing the highlight. Wiring the Regular Text Background
+    // well needs a drawBackgroundInClipRect: override so the highlight is
+    // composited on top of the canvas bg before row drawing — TODO.
+    scrollView.drawsBackground = YES;
+    scrollView.backgroundColor = [NSColor windowBackgroundColor];
 
     NSTableView *table = [[HexTableView alloc] initWithFrame:scrollView.contentView.bounds];
     table.accessibilityIdentifier = kHexEditorTableAccessibilityID;
     table.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    // Pin the table's column ordering LTR — without this, NSTableView
+    // would render columns right-to-left under RTL locales and the
+    // Offset / hex bytes / ASCII layout would be mirrored, defeating the
+    // canonical hex-dump form.
+    table.userInterfaceLayoutDirection = NSUserInterfaceLayoutDirectionLeftToRight;
     table.usesAlternatingRowBackgroundColors = NO;
     table.gridStyleMask = NSTableViewGridNone;
     table.rowHeight = 18.0;
@@ -3602,6 +6341,21 @@ static NSView *createHexTableView(NSTableView **tableView, NSTextField **statusL
     table.allowsMultipleSelection = NO;
     table.allowsEmptySelection = YES;
     table.selectionHighlightStyle = NSTableViewSelectionHighlightStyleNone;
+    // Match the surrounding NPP editor pane's background.
+    // windowBackgroundColor is dynamic — light gray in light mode, dark
+    // gray in dark mode — so the hex view blends with the pane
+    // automatically. Honouring g_colorRegularTextBg here would obscure
+    // the current-line / selection highlights drawn in drawRect:, see
+    // the matching note on the scroll view above.
+    table.backgroundColor = [NSColor windowBackgroundColor];
+    // Replace the default header view with our column-span-clipped variant
+    // so growing the header row under zoom doesn't expose a wide empty fill
+    // to the right of the ASCII pane. Frame matches the default's so layout
+    // is unchanged.
+    if (NSTableHeaderView *defaultHeader = table.headerView) {
+        HexTableHeaderView *clippedHeader = [[HexTableHeaderView alloc] initWithFrame:defaultHeader.frame];
+        table.headerView = clippedHeader;
+    }
 
     if (!hexTableDataSource) {
         hexTableDataSource = [[HexTableDataSource alloc] init];
@@ -3636,16 +6390,29 @@ static NSView *createHexTableView(NSTableView **tableView, NSTextField **statusL
 
 static NSString *makeStatusText()
 {
-    if (previewBytes.empty()) {
+    if (hexBufferEmpty()) {
         return L(@"status.empty");
     }
 
-    if (previewBytes.size() < previewTotalLength) {
-        return [NSString stringWithFormat:L(@"status.showingTruncated"),
-            previewBytes.size(), previewTotalLength];
+    // hexBufferLength() and previewTotalLength now both reflect the full
+    // Scintilla document length — there's no longer a cap that requires a
+    // separate "truncated" status line. The branch is preserved as a single
+    // "Showing N bytes." path; the previous truncation banner was retired
+    // in Step 2d (page-cached lazy reader removes the need for the cap).
+    NSString *baseText = [NSString stringWithFormat:L(@"status.showing"), hexBufferLength()];
+
+    if (hasRectSelection()) {
+        // Rectangle status reads e.g. "Rectangle: 4 × 3 (12 bytes)" — the totalBytes
+        // value is the unclipped product so the user sees the rectangle's nominal size
+        // even when its trailing row runs past EOF.
+        NSString *rectText = [NSString stringWithFormat:L(@"status.rectangle"),
+            (unsigned long)g_rectSelection.width,
+            (unsigned long)g_rectSelection.height,
+            (unsigned long)g_rectSelection.totalBytes()];
+        return [NSString stringWithFormat:@"%@  %@", baseText, rectText];
     }
 
-    return [NSString stringWithFormat:L(@"status.showing"), previewBytes.size()];
+    return baseText;
 }
 
 static void refreshHexTable(NSTableView *tableView, NSTextField *statusLabel)
@@ -3702,7 +6469,7 @@ static void showHexPreview()
     }
 
     editorBaseFontSize = readEditorFontSize();
-    previewBytes = readCurrentBuffer(&previewTotalLength);
+    bindHexBufferToActiveScintilla();
     bookmarkedRows.clear();
     activeByteOffset = 0;
     activeHexNibble = 0;
@@ -3740,13 +6507,22 @@ static void showHexPreview()
     // which for a real selection is the END of the selection.
     scrollHexTableToActiveOffset();
     [hexTableView.window makeFirstResponder:hexTableView];
+    // Remember that the user wants hex view on this buffer so a tab-switch
+    // round-trip restores it (instead of relying on the Startup auto-engage
+    // heuristic, which only fires for files matching the configured rules).
+    recordHexIntent(previewBufferId);
     updateHexMenuCheck(true);
 }
 
 static void toggleHexPreview()
 {
     if (isHexViewActive() && isPreviewBufferActive()) {
+        // User explicitly toggled hex view OFF for this buffer. Drop intent
+        // so it stays off across tab switches too. Capture the bufferId
+        // before hideHexPreview clears previewBufferId.
+        const uintptr_t bufId = previewBufferId;
         hideHexPreview();
+        clearHexIntent(bufId);
         return;
     }
 
@@ -3770,9 +6546,12 @@ static void hideHexPreview()
             [hiddenScintillaView.window makeFirstResponder:hiddenScintillaView];
         }
 
-        previewBytes.clear();
+        // Drop the byte-source first so its reference into g_hexReader is
+        // released before g_hexReader itself is reset.
+        g_hexBuffer.reset();
+        g_hexReader.reset();
         bookmarkedRows.clear();
-        clearByteSelection();
+        clearAllByteSelections();
         previewTotalLength = 0;
         previewScintillaHandle = 0;
         previewBufferId = 0;
@@ -3784,8 +6563,14 @@ static void hideHexPreview()
 
 static void showAbout()
 {
-    NSString *body = [NSString stringWithFormat:@"%@\n\n%@",
-                      L(@"about.body"), L(@"about.localeTag")];
+    NSString *versionLine = [NSString stringWithFormat:L(@"about.version"),
+                             [NSString stringWithUTF8String:HEX_PLUGIN_VERSION]];
+    NSString *body = [NSString stringWithFormat:@"%@\n\n%@\n%@\n\n%@\n%@",
+                      L(@"about.body"),
+                      versionLine,
+                      L(@"about.url"),
+                      L(@"about.localeTag"),
+                      L(@"about.localizationGuide")];
     showMessage(L(@"app.titleMac"), body);
 }
 
@@ -3817,6 +6602,1392 @@ static void patternReplacePreview()
     presentPatternReplaceDialog();
 }
 
+// MARK: - Help popovers
+
+// Round bezel-style "?" button (NSBezelStyleHelpButton) that owns its own NSPopover
+// and toggles it on click. Each instance is self-contained — it retains the popover
+// (which retains its content controller and view), so callers only need to keep the
+// button itself in the view hierarchy.
+//
+// Dismiss-on-outside-click implementation: NSPopoverBehaviorTransient is supposed
+// to auto-dismiss when the user interacts outside the popover, but in practice a
+// click on another AppKit control inside the same window often gets consumed by
+// that control's tracking loop before the popover sees it. The monitor below
+// catches every left-mouse-down at the application level and closes the popover
+// whenever the click lands outside the popover's window — except when it hits the
+// help button itself (the button's own action handler handles toggle semantics
+// without re-entrant close-then-reopen).
+@interface HexHelpButton : NSButton <NSPopoverDelegate>
+@property (nonatomic, strong) NSPopover *popover;
+@property (nonatomic, strong) id outsideClickMonitor;
+- (void)hexShowHelpPopover:(id)sender;
+@end
+
+@implementation HexHelpButton
+
+- (void)hexShowHelpPopover:(id)sender
+{
+    if (self.popover.shown) {
+        [self.popover close];
+        return;
+    }
+    self.popover.delegate = self;
+    [self.popover showRelativeToRect:self.bounds
+                              ofView:self
+                       preferredEdge:NSRectEdgeMaxY];
+    [self installOutsideClickMonitor];
+}
+
+- (void)installOutsideClickMonitor
+{
+    if (self.outsideClickMonitor != nil) {
+        return;
+    }
+    // This file is MRC (no ARC). __unsafe_unretained gives the block a
+    // non-retaining reference to break the retain cycle: button retains the
+    // monitor (via the property), the monitor's block would otherwise retain
+    // the button. Safe because -dealloc removes the monitor before the button
+    // is freed, so the block never fires with a dangling pointer.
+    __unsafe_unretained HexHelpButton *unsafeSelf = self;
+    self.outsideClickMonitor =
+        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown
+                                              handler:^NSEvent *(NSEvent *event) {
+        if (!unsafeSelf.popover.shown) {
+            return event;
+        }
+        NSWindow *popoverWindow = unsafeSelf.popover.contentViewController.view.window;
+        if (event.window == popoverWindow) {
+            return event;   // click inside the popover content — leave it
+        }
+        if (event.window == unsafeSelf.window) {
+            // Don't close on a click of the help button itself; the action
+            // handler will toggle the popover. Otherwise we'd close-then-reopen.
+            const NSPoint locInButton = [unsafeSelf convertPoint:event.locationInWindow fromView:nil];
+            if (NSPointInRect(locInButton, unsafeSelf.bounds)) {
+                return event;
+            }
+        }
+        [unsafeSelf.popover close];
+        return event;   // pass the click through to its target as well
+    }];
+}
+
+- (void)popoverDidClose:(NSNotification *)notification
+{
+    if (self.outsideClickMonitor != nil) {
+        [NSEvent removeMonitor:self.outsideClickMonitor];
+        self.outsideClickMonitor = nil;
+    }
+}
+
+- (void)dealloc
+{
+    if (_outsideClickMonitor != nil) {
+        [NSEvent removeMonitor:_outsideClickMonitor];
+    }
+    [super dealloc];
+}
+@end
+
+// View controller whose loadView produces a soft-padded wrapping label sized to the
+// given preferred width. Manual frame layout (no Auto Layout) to match the rest of
+// this file, and so the popover knows its exact final size at first show.
+@interface HexHelpPopoverController : NSViewController
+@property (nonatomic, copy) NSString *helpText;
+@property (nonatomic, assign) CGFloat preferredWidth;
+@end
+
+@implementation HexHelpPopoverController
+- (void)loadView
+{
+    const CGFloat horizPad = 12.0;
+    const CGFloat vertPad = 12.0;
+    const CGFloat innerWidth = self.preferredWidth - 2.0 * horizPad;
+
+    NSTextField *label = [NSTextField wrappingLabelWithString:self.helpText ?: @""];
+    label.preferredMaxLayoutWidth = innerWidth;
+    label.selectable = YES;     // allows VoiceOver / copy of help text
+    const NSSize labelSize = label.intrinsicContentSize;
+    label.frame = NSMakeRect(horizPad, vertPad, innerWidth, ceil(labelSize.height));
+
+    NSView *root = [[NSView alloc] initWithFrame:NSMakeRect(0, 0,
+                                                            self.preferredWidth,
+                                                            ceil(labelSize.height) + 2.0 * vertPad)];
+    [root addSubview:label];
+    self.view = root;
+}
+@end
+
+// Build a help button that pops `helpText` (already-localized) on click. Caller is
+// responsible for placing the returned button (frame is initialised at the AppKit
+// standard 22×22; reposition with `button.frame = ...` after creation).
+static HexHelpButton *makeHexHelpButton(NSString *helpText, NSString *accessibilityId)
+{
+    HexHelpButton *button = [[HexHelpButton alloc] initWithFrame:NSMakeRect(0, 0, 22, 22)];
+    button.bezelStyle = NSBezelStyleHelpButton;
+    button.title = @"";
+    button.bordered = YES;
+    if (accessibilityId.length > 0) {
+        button.accessibilityIdentifier = accessibilityId;
+    }
+    // Help button visible label for VoiceOver (the "?" glyph alone reads as
+    // unhelpful "help button" without this).
+    button.accessibilityLabel = L(@"help.button.axLabel");
+
+    HexHelpPopoverController *controller = [[HexHelpPopoverController alloc] init];
+    controller.helpText = helpText;
+    controller.preferredWidth = 320.0;
+
+    NSPopover *popover = [[NSPopover alloc] init];
+    popover.contentViewController = controller;
+    popover.behavior = NSPopoverBehaviorTransient;
+    popover.animates = YES;
+    button.popover = popover;
+
+    button.target = button;
+    button.action = @selector(hexShowHelpPopover:);
+    return button;
+}
+
+// MARK: - Options dialog
+
+// Tags returned by the option-dialog buttons via [NSApp stopModalWithCode:].
+// Why an NSWindow (rather than NSAlert): AppKit's NSAlert intercepts events
+// through its own modal session, so an inline NSPopover anchored to a help
+// button never receives the outside-click signal that would normally dismiss
+// it. Building the dialog as a regular NSWindow + [NSApp runModalForWindow:]
+// gives popovers the standard event flow they need to behave correctly. It
+// also gives us a real window to host an NSTabView when the Options dialog
+// grows the four-tab Windows-parity layout (Start Layout / Startup / Colors /
+// Font).
+// The "OK" button is the commit-and-close action; named "OK" rather than
+// "Save" in the UI because this is a hex editor and "Save" would imply saving
+// the document. Internal symbols match the user-visible label for clarity.
+static const NSInteger kHexOptionsResultOk     = 1;
+static const NSInteger kHexOptionsResultReset  = 2;
+static const NSInteger kHexOptionsResultCancel = 3;
+static const NSInteger kHexOptionsResultApply  = 4;
+
+// Target object that bridges NSButton actions in the modal window to
+// [NSApp stopModalWithCode:]. Lives only for the lifetime of presentOptionsDialog.
+//
+// Also hosts placeholder action selectors for the Start Layout tab's three
+// radio groups. AppKit groups radio buttons that share a superview AND an
+// action selector, with at most one selected per group; passing target=nil
+// action=nil to NSButton.radioButtonWithTitle: silently breaks the
+// grouping (radios go additive instead of mutually exclusive). Each
+// group's selector is unique so the three groups don't collapse into one.
+// The methods themselves are no-ops — we read the radio state in the
+// dialog's commit block, not here.
+@interface HexOptionsButtonTarget : NSObject
+- (void)hexOptionsOk:(id)sender;
+- (void)hexOptionsReset:(id)sender;
+- (void)hexOptionsCancel:(id)sender;
+- (void)hexOptionsApply:(id)sender;
+- (void)hexOptionsBitsRadio:(id)sender;
+- (void)hexOptionsBaseRadio:(id)sender;
+- (void)hexOptionsEndianRadio:(id)sender;
+@end
+
+@implementation HexOptionsButtonTarget
+- (void)hexOptionsOk:(id)sender     { [NSApp stopModalWithCode:kHexOptionsResultOk];     }
+- (void)hexOptionsReset:(id)sender  { [NSApp stopModalWithCode:kHexOptionsResultReset];  }
+- (void)hexOptionsCancel:(id)sender { [NSApp stopModalWithCode:kHexOptionsResultCancel]; }
+- (void)hexOptionsApply:(id)sender  { [NSApp stopModalWithCode:kHexOptionsResultApply];  }
+- (void)hexOptionsBitsRadio:(id)sender   {}
+- (void)hexOptionsBaseRadio:(id)sender   {}
+- (void)hexOptionsEndianRadio:(id)sender {}
+@end
+
+// NSColorWell subclass that exposes its current colour as a stable AX value.
+// Default NSColorWell doesn't surface the chosen colour to XCUI — only role
+// and identifier — so a UI test can't tell whether Reset actually changed
+// the well. We override accessibilityValue to return a lowercase 6-digit
+// hex string ("ff0000") taken from the well's sRGB-converted colour. The
+// dialog already round-trips wells through sRGB on every assignment (see
+// makeWell + applyDefaults / commit) so the conversion here is a no-op
+// accessor, not a colour-space change. Used only for the Options dialog's
+// nine colour wells; everywhere else NSColorWell is unaffected.
+@interface HexAxColorWell : NSColorWell
+@end
+
+@implementation HexAxColorWell
+- (NSString *)accessibilityValue
+{
+    NSColor *c = [self.color colorUsingColorSpace:[NSColorSpace sRGBColorSpace]] ?: self.color;
+    if (!c) return @"";
+    const int r = (int)round([c redComponent]   * 255.0);
+    const int g = (int)round([c greenComponent] * 255.0);
+    const int b = (int)round([c blueComponent]  * 255.0);
+    return [NSString stringWithFormat:@"%02x%02x%02x", r, g, b];
+}
+@end
+
+// RTL helpers for the Options-tab manual-frame layouts. Each tab below
+// uses NSMakeRect placement (labels at innerMargin, help buttons at
+// size.width - innerMargin - helpButtonSize, etc.) which is direction-
+// agnostic — AppKit doesn't auto-flip absolute frame coordinates under
+// `userInterfaceLayoutDirection`. Under Hebrew / Arabic we want the
+// trailing-edge content (help buttons, hint labels) to land on the
+// physical-leading edge and vice versa, so we mirror x-coords manually.
+//
+// hexFlippedX is the basic mirror: `containerWidth - naturalX -
+// elementWidth` reflects an element about the container's vertical
+// midline so its trailing edge under LTR maps to the leading edge under
+// RTL with the same gap.
+//
+// hexFlippedAlignment swaps NSTextAlignmentRight ↔ NSTextAlignmentLeft so
+// labels that were "right-aligned to hug the input field on their right"
+// under LTR become "left-aligned to hug the (now-mirrored) input field
+// on their left" under RTL. NSTextAlignmentNatural / Center / Justified
+// pass through unchanged.
+//
+// Together these let each tab function declare a single `BOOL isRTL` at
+// the top, wrap every NSMakeRect's x with hexFlippedX, and any explicit
+// NSTextAlignmentRight/Left with hexFlippedAlignment. The pattern keeps
+// the manual-frame code intact (no Auto-Layout rewrite) while delivering
+// proper RTL mirroring under Hebrew / Arabic locales.
+static inline CGFloat hexFlippedX(CGFloat naturalX, CGFloat elementWidth, CGFloat containerWidth, BOOL isRTL)
+{
+    return isRTL ? (containerWidth - naturalX - elementWidth) : naturalX;
+}
+
+static inline NSTextAlignment hexFlippedAlignment(NSTextAlignment alignment, BOOL isRTL)
+{
+    if (!isRTL) return alignment;
+    if (alignment == NSTextAlignmentRight) return NSTextAlignmentLeft;
+    if (alignment == NSTextAlignmentLeft) return NSTextAlignmentRight;
+    return alignment;
+}
+
+// Determine whether the plugin should render its dialog content in RTL
+// orientation. We follow the SAME language preference the .strings
+// cascade uses (HEX_EDITOR_LANG_OVERRIDE → CFPreferencesCopyAppValue →
+// system) rather than NSApp.userInterfaceLayoutDirection alone, so the
+// plugin flips correctly under both:
+//   1. Production: user sets system language to Hebrew → NSApp is RTL,
+//      hexUserPreferredLanguages() returns "he", direction matches.
+//   2. Plugin-scoped override: user keeps system English but runs
+//      `defaults write org.notepadplusplus.mac AppleLanguages -array he`
+//      to localize this plugin only → NSApp is LTR (host hasn't
+//      changed) but the plugin renders Hebrew strings, and we want the
+//      layout to flip too so the form looks right.
+//   3. Test harness: HEX_EDITOR_LANG_OVERRIDE forces a language for
+//      XCUITest (system defaults are sandbox-redirected), and again
+//      we want the layout to follow the override.
+//
+// The list below covers BCP-47 base tags for RTL scripts: Hebrew (he,
+// iw legacy), Arabic (ar), Persian/Farsi (fa), Urdu (ur), Yiddish
+// (yi), Central Kurdish/Sorani (ckb), Kashmiri (ks), Pashto (ps),
+// Sindhi (sd), Uyghur (ug). NSLocale's characterDirection lookup
+// would also work but we don't need its richness here.
+static inline BOOL hexCurrentLayoutIsRTL(void)
+{
+    // The plugin is built MRR (no ARC). `+setWithObjects:` returns an
+    // autoreleased set, which would be dealloc'd at the end of the
+    // first caller's autorelease pool — leaving rtlBases dangling for
+    // every subsequent call and crashing on the next invocation.
+    // Use `-initWithObjects:` instead so the set is owned with +1
+    // retain that never goes away, matching dispatch_once's once-per-
+    // process initialization contract.
+    static NSSet<NSString *> *rtlBases = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        rtlBases = [[NSSet alloc] initWithObjects:
+            @"he", @"iw", @"ar", @"fa", @"ur", @"yi",
+            @"ckb", @"ks", @"ps", @"sd", @"ug", nil];
+    });
+    NSString *first = [hexUserPreferredLanguages() firstObject];
+    if (first.length > 0) {
+        NSString *base = [[first componentsSeparatedByString:@"-"] firstObject];
+        if (base != nil && [rtlBases containsObject:base]) return YES;
+    }
+    return [NSApp userInterfaceLayoutDirection] == NSUserInterfaceLayoutDirectionRightToLeft;
+}
+
+// Build the Startup tab. Two prefs: an extensions list (space-separated)
+// and a control-char-density percent threshold. NPPN_BUFFERACTIVATED reads
+// these globals and decides whether to auto-open the hex view for the new
+// buffer. Mirrors the Windows reference's IDD_OPTION_DLG layout.
+//
+// applyDefaults / commit blocks: same contract as makeStartLayoutTab.
+static NSView *makeStartupTab(NSSize size,
+                               void (^*outApplyDefaults)(void),
+                               void (^*outCommit)(void))
+{
+    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, size.width, size.height)];
+
+    const CGFloat innerMargin = 16.0;
+    const CGFloat helpButtonSize = 18.0;
+    const CGFloat helpButtonGap = 4.0;
+    const CGFloat fieldRowHeight = 22.0;
+    const CGFloat blockGap = 18.0;
+    const CGFloat hintGap = 4.0;
+    const BOOL isRTL = hexCurrentLayoutIsRTL();
+
+    CGFloat y = size.height - innerMargin;
+
+    // Extensions row -----------------------------------------------------
+    // Label "Extensions:" on the leading edge, hint "e.g.: .dat …" on the
+    // trailing edge of the same line, full-width text field below. Under
+    // RTL all x-coords mirror about the container midline so the label
+    // ends up on the right (leading-physical) and the hint+help on the
+    // left (trailing-physical).
+    y -= fieldRowHeight;
+    NSTextField *extLabel = [NSTextField labelWithString:L(@"options.startup.extensions.label")];
+    [extLabel sizeToFit];
+    extLabel.frame = NSMakeRect(hexFlippedX(innerMargin, NSWidth(extLabel.frame), size.width, isRTL),
+                                  y, NSWidth(extLabel.frame), fieldRowHeight);
+    [view addSubview:extLabel];
+
+    NSTextField *extHint = [NSTextField labelWithString:L(@"options.startup.extensions.hint")];
+    extHint.textColor = [NSColor secondaryLabelColor];
+    extHint.alignment = hexFlippedAlignment(NSTextAlignmentRight, isRTL);
+    [extHint sizeToFit];
+    extHint.frame = NSMakeRect(hexFlippedX(size.width - innerMargin - helpButtonSize - helpButtonGap - NSWidth(extHint.frame),
+                                              NSWidth(extHint.frame), size.width, isRTL),
+                                y,
+                                NSWidth(extHint.frame), fieldRowHeight);
+    [view addSubview:extHint];
+
+    HexHelpButton *extHelp = makeHexHelpButton(L(@"options.startup.extensions.help"),
+                                                 @"hex-editor.options.startup.extensions.help");
+    extHelp.frame = NSMakeRect(hexFlippedX(size.width - innerMargin - helpButtonSize, helpButtonSize, size.width, isRTL),
+                                y + (fieldRowHeight - helpButtonSize) / 2.0,
+                                helpButtonSize, helpButtonSize);
+    [view addSubview:extHelp];
+
+    y -= (hintGap + fieldRowHeight);
+    const CGFloat extFieldWidth = size.width - 2 * innerMargin;
+    NSTextField *extField = [[NSTextField alloc] initWithFrame:NSMakeRect(hexFlippedX(innerMargin, extFieldWidth, size.width, isRTL),
+                                                                              y, extFieldWidth, fieldRowHeight)];
+    extField.accessibilityIdentifier = @"hex-editor.options.startup.extensions";
+    [view addSubview:extField];
+
+    // Percent row --------------------------------------------------------
+    y -= (blockGap + fieldRowHeight);
+    const CGFloat percentFieldWidth = 60.0;
+    const CGFloat percentFieldNaturalX = size.width - innerMargin - helpButtonSize - helpButtonGap - percentFieldWidth;
+    const CGFloat percentLabelMaxWidth = percentFieldNaturalX - innerMargin - 8.0;
+
+    NSTextField *pctLabel = [NSTextField labelWithString:L(@"options.startup.percent.label")];
+    pctLabel.frame = NSMakeRect(hexFlippedX(innerMargin, percentLabelMaxWidth, size.width, isRTL),
+                                 y, percentLabelMaxWidth, fieldRowHeight);
+    [view addSubview:pctLabel];
+
+    NSTextField *pctField = [[NSTextField alloc] initWithFrame:NSMakeRect(hexFlippedX(percentFieldNaturalX, percentFieldWidth, size.width, isRTL),
+                                                                              y, percentFieldWidth, fieldRowHeight)];
+    pctField.alignment = NSTextAlignmentCenter;
+    pctField.accessibilityIdentifier = @"hex-editor.options.startup.percent";
+    NSNumberFormatter *pctFormatter = [[NSNumberFormatter alloc] init];
+    pctFormatter.numberStyle = NSNumberFormatterNoStyle;
+    pctFormatter.allowsFloats = NO;
+    pctFormatter.minimum = @0;
+    pctFormatter.maximum = @99;
+    pctField.formatter = pctFormatter;
+    [view addSubview:pctField];
+
+    HexHelpButton *pctHelp = makeHexHelpButton(L(@"options.startup.percent.help"),
+                                                 @"hex-editor.options.startup.percent.help");
+    pctHelp.frame = NSMakeRect(hexFlippedX(size.width - innerMargin - helpButtonSize, helpButtonSize, size.width, isRTL),
+                                y + (fieldRowHeight - helpButtonSize) / 2.0,
+                                helpButtonSize, helpButtonSize);
+    [view addSubview:pctHelp];
+
+    // Initial fill: show the user's currently saved state.
+    extField.stringValue = g_autoExtensions ?: @"";
+    pctField.stringValue = (g_autoControlPercent > 0)
+        ? [NSString stringWithFormat:@"%d", g_autoControlPercent]
+        : @"";
+
+    // Reset path: factory defaults (auto-engage off) — not committed until Apply / Ok.
+    void (^applyDefaults)(void) = ^{
+        extField.stringValue = @"";
+        pctField.stringValue = @"";
+    };
+
+    void (^commit)(void) = ^{
+        NSString *exts = [extField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] ?: @"";
+        if (![exts isEqualToString:g_autoExtensions ?: @""]) {
+            g_autoExtensions = [exts copy];
+        }
+        const int percent = std::clamp([pctField.stringValue intValue], 0, 99);
+        if (percent != g_autoControlPercent) {
+            g_autoControlPercent = percent;
+        }
+        saveHexPrefs();
+    };
+
+    if (outApplyDefaults) *outApplyDefaults = [applyDefaults copy];
+    if (outCommit) *outCommit = [commit copy];
+
+    return view;
+}
+
+// Build the Colors tab. 5×2 grid of NSColorWell controls (Regular Text,
+// Selection, Compare, Bookmark, Current Line × Text/Back), with a single
+// Help button at the top-right covering the whole tab — there's not enough
+// horizontal room to give each row its own help anchor without crowding
+// the wells, and the help text would say nearly the same thing for every
+// row anyway.
+//
+// Each well's accessibilityIdentifier is "hex-editor.options.colors.<row>.<col>"
+// so UI tests can drive specific cells without depending on tab/row order.
+//
+// Wells reflect the current g_color* globals on construction. On commit
+// we round-trip through colorWellOrNil (returns nil if the well is at its
+// "no override" sentinel — see makeColorWell below). Reset clears all
+// overrides at once so the hex view falls back to the dynamic defaults.
+static NSView *makeColorsTab(NSSize size,
+                              void (^*outApplyDefaults)(void),
+                              void (^*outCommit)(void))
+{
+    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, size.width, size.height)];
+
+    const CGFloat innerMargin = 16.0;
+    const CGFloat helpButtonSize = 18.0;
+    const CGFloat rowHeight = 28.0;
+    const CGFloat rowGap = 4.0;
+    const CGFloat wellWidth = 60.0;
+    const CGFloat wellHeight = 22.0;
+    const CGFloat colGap = 12.0;
+    const CGFloat headerHeight = 18.0;
+    const BOOL isRTL = hexCurrentLayoutIsRTL();
+
+    // Trailing-anchor the two well columns; the row labels stretch from
+    // the leading margin to the start of the wells. Under RTL all x-coords
+    // mirror so the labels end up on the right (leading-physical) and the
+    // wells + help button on the left (trailing-physical).
+    const CGFloat backWellNaturalX = size.width - innerMargin - helpButtonSize - colGap - wellWidth;
+    const CGFloat textWellNaturalX = backWellNaturalX - colGap - wellWidth;
+    const CGFloat labelMaxWidth = textWellNaturalX - innerMargin - 8.0;
+
+    // Header row: "Text"  "Back" centered above the two well columns.
+    // __block so the addRow helper can advance y down for each row.
+    __block CGFloat y = size.height - innerMargin - headerHeight;
+    NSTextField *textHeader = [NSTextField labelWithString:L(@"options.colors.header.text")];
+    textHeader.alignment = NSTextAlignmentCenter;
+    textHeader.textColor = [NSColor secondaryLabelColor];
+    textHeader.frame = NSMakeRect(hexFlippedX(textWellNaturalX, wellWidth, size.width, isRTL),
+                                    y, wellWidth, headerHeight);
+    [view addSubview:textHeader];
+
+    NSTextField *backHeader = [NSTextField labelWithString:L(@"options.colors.header.back")];
+    backHeader.alignment = NSTextAlignmentCenter;
+    backHeader.textColor = [NSColor secondaryLabelColor];
+    backHeader.frame = NSMakeRect(hexFlippedX(backWellNaturalX, wellWidth, size.width, isRTL),
+                                    y, wellWidth, headerHeight);
+    [view addSubview:backHeader];
+
+    // Single help button on the trailing side of "Back".
+    HexHelpButton *help = makeHexHelpButton(L(@"options.colors.help"),
+                                              @"hex-editor.options.colors.help");
+    help.frame = NSMakeRect(hexFlippedX(size.width - innerMargin - helpButtonSize, helpButtonSize, size.width, isRTL),
+                              y + (headerHeight - helpButtonSize) / 2.0,
+                              helpButtonSize, helpButtonSize);
+    [view addSubview:help];
+
+    y -= 6.0;  // gap between headers and first row
+
+    // Helper to build one well. NSColorWell stores the current colour
+    // verbatim — including its colour space — and the system colour panel
+    // restricts its picker to whatever space the well is currently in. If
+    // we feed the well a grayscale colour like [NSColor labelColor]
+    // (which resolves to black in light mode in a Gray colour space), the
+    // panel opens locked to "shades of black". Convert to sRGB before
+    // assignment so the user always gets the full RGB picker.
+    NSColorWell *(^makeWell)(NSString *, NSColor *, CGFloat, CGFloat) =
+    ^NSColorWell *(NSString *axId, NSColor *initial, CGFloat wx, CGFloat wy) {
+        NSColorWell *well = [[HexAxColorWell alloc] initWithFrame:NSMakeRect(wx, wy, wellWidth, wellHeight)];
+        well.accessibilityIdentifier = axId;
+        if (initial) {
+            NSColor *rgb = [initial colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
+            well.color = rgb ?: initial;
+        }
+        [view addSubview:well];
+        return well;
+    };
+
+    NSColorWell *(^addRow)(NSString *, NSString *, BOOL, NSColor *, NSColor *,
+                            NSColorWell *__strong *,
+                            NSColorWell *__strong *) =
+    ^NSColorWell *(NSString *labelKey, NSString *axBase, BOOL hasFg,
+                    NSColor *fgColor, NSColor *bgColor,
+                    NSColorWell *__strong *outFg, NSColorWell *__strong *outBg) {
+        y -= (rowHeight + rowGap);
+        NSTextField *rowLabel = [NSTextField labelWithString:L(labelKey)];
+        rowLabel.alignment = hexFlippedAlignment(NSTextAlignmentRight, isRTL);
+        rowLabel.frame = NSMakeRect(hexFlippedX(innerMargin, labelMaxWidth, size.width, isRTL),
+                                      y + (rowHeight - rowLabel.intrinsicContentSize.height) / 2.0,
+                                      labelMaxWidth, rowLabel.intrinsicContentSize.height);
+        [view addSubview:rowLabel];
+
+        const CGFloat wy = y + (rowHeight - wellHeight) / 2.0;
+        if (hasFg) {
+            NSColorWell *fg = makeWell([NSString stringWithFormat:@"hex-editor.options.colors.%@.fg", axBase],
+                                         fgColor, hexFlippedX(textWellNaturalX, wellWidth, size.width, isRTL), wy);
+            if (outFg) *outFg = fg;
+        }
+        NSColorWell *bg = makeWell([NSString stringWithFormat:@"hex-editor.options.colors.%@.bg", axBase],
+                                     bgColor, hexFlippedX(backWellNaturalX, wellWidth, size.width, isRTL), wy);
+        if (outBg) *outBg = bg;
+        return bg;
+    };
+
+    NSColorWell *regFg = nil, *regBg = nil;
+    NSColorWell *selFg = nil, *selBg = nil;
+    NSColorWell *cmpFg = nil, *cmpBg = nil;
+    NSColorWell *bmkFg = nil, *bmkBg = nil;
+    NSColorWell *curBg = nil;
+
+    // Initial fill comes straight from the resolve helpers — they already
+    // pick the current mode's override (or factory fallback if none) so we
+    // don't need to repeat the branch here.
+    addRow(@"options.colors.row.regularText", @"regularText", YES,
+            hexRegularTextColor(),
+            hexRegularTextBackgroundColor(),
+            &regFg, &regBg);
+    addRow(@"options.colors.row.selection", @"selection", YES,
+            hexSelectionTextColor(),
+            hexSelectionColor(),
+            &selFg, &selBg);
+    addRow(@"options.colors.row.compare", @"compare", YES,
+            hexCompareDiffTextColor(),
+            hexCompareDiffColor(),
+            &cmpFg, &cmpBg);
+    addRow(@"options.colors.row.bookmark", @"bookmark", YES,
+            hexBookmarkTextColor(),
+            hexBookmarkBackgroundColor(),
+            &bmkFg, &bmkBg);
+    addRow(@"options.colors.row.currentLine", @"currentLine", NO,
+            nil, hexCurrentLineColor(),
+            nil, &curBg);
+
+    // Round-trip every well's colour through sRGB so the system colour
+    // panel always opens in full RGB mode. See makeWell above for why.
+    NSColor *(^toRGB)(NSColor *) = ^NSColor *(NSColor *c) {
+        if (!c) return nil;
+        NSColor *rgb = [c colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
+        return rgb ?: c;
+    };
+    // Reset path: show the factory-default colours (Windows-equivalent
+    // hard-coded values, matching what the hex…Color() resolve helpers fall
+    // back to when no override is set). We don't touch the g_colorXxx
+    // globals here — Reset only updates the dialog UI. Apply / Ok commits
+    // whatever's in the wells; Cancel discards the reset.
+    void (^applyDefaults)(void) = ^{
+        regFg.color = toRGB(hexFactoryRegularTextFg());
+        regBg.color = toRGB(hexFactoryRegularTextBg());
+        selFg.color = toRGB(hexFactorySelectionFg());
+        selBg.color = toRGB(hexFactorySelectionBg());
+        cmpFg.color = toRGB(hexFactoryCompareFg());
+        cmpBg.color = toRGB(hexFactoryCompareBg());
+        bmkFg.color = toRGB(hexFactoryBookmarkFg());
+        bmkBg.color = toRGB(hexFactoryBookmarkBg());
+        curBg.color = toRGB(hexFactoryCurrentLineBg());
+    };
+
+    void (^commit)(void) = ^{
+        // For each well: if its colour matches the current-mode factory,
+        // CLEAR the override (g_color = nil) instead of saving the static
+        // factory hex. This is what makes Reset → Apply mode-adaptive: a
+        // cleared override falls back to hexFactory*() at render time,
+        // which re-evaluates on every paint and switches between Light /
+        // Dark factories as NSApp.appearance changes. If we instead saved
+        // the factory snapshot as an override, switching modes would show
+        // the wrong mode's hexes (the user reported this on 2026-05-03:
+        // Reset+Apply in Light, then switch to Dark, still saw Light hexes).
+        //
+        // A user who picks a custom colour that happens to exactly match
+        // the factory will silently get a cleared override instead of a
+        // pinned override — acceptable edge case, the rendered result is
+        // identical for the current mode and gains mode-adaptive behaviour.
+        NSColor *(^toRGB)(NSColor *) = ^NSColor *(NSColor *c) {
+            if (!c) return nil;
+            NSColor *rgb = [c colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
+            return rgb ?: c;
+        };
+        BOOL (^matches)(NSColorWell *, NSColor *) = ^BOOL(NSColorWell *well, NSColor *factory) {
+            return [well.color isEqual:toRGB(factory)];
+        };
+        // Commit to the CURRENT mode's slot only — leaves the other mode's
+        // override untouched, so customising Selection bg in Light doesn't
+        // disturb whatever the user picked (or didn't pick) in Dark.
+        const BOOL isDark = hexEffectiveAppearanceIsDark();
+        NSColor **slotRegFg = isDark ? &g_colorRegularTextFgDark : &g_colorRegularTextFgLight;
+        NSColor **slotRegBg = isDark ? &g_colorRegularTextBgDark : &g_colorRegularTextBgLight;
+        NSColor **slotSelFg = isDark ? &g_colorSelectionFgDark   : &g_colorSelectionFgLight;
+        NSColor **slotSelBg = isDark ? &g_colorSelectionBgDark   : &g_colorSelectionBgLight;
+        NSColor **slotCmpFg = isDark ? &g_colorCompareFgDark     : &g_colorCompareFgLight;
+        NSColor **slotCmpBg = isDark ? &g_colorCompareBgDark     : &g_colorCompareBgLight;
+        NSColor **slotBmkFg = isDark ? &g_colorBookmarkFgDark    : &g_colorBookmarkFgLight;
+        NSColor **slotBmkBg = isDark ? &g_colorBookmarkBgDark    : &g_colorBookmarkBgLight;
+        NSColor **slotCurBg = isDark ? &g_colorCurrentLineBgDark : &g_colorCurrentLineBgLight;
+        setHexColor(slotRegFg, matches(regFg, hexFactoryRegularTextFg()) ? nil : regFg.color);
+        setHexColor(slotRegBg, matches(regBg, hexFactoryRegularTextBg()) ? nil : regBg.color);
+        setHexColor(slotSelFg, matches(selFg, hexFactorySelectionFg())   ? nil : selFg.color);
+        setHexColor(slotSelBg, matches(selBg, hexFactorySelectionBg())   ? nil : selBg.color);
+        setHexColor(slotCmpFg, matches(cmpFg, hexFactoryCompareFg())     ? nil : cmpFg.color);
+        setHexColor(slotCmpBg, matches(cmpBg, hexFactoryCompareBg())     ? nil : cmpBg.color);
+        setHexColor(slotBmkFg, matches(bmkFg, hexFactoryBookmarkFg())    ? nil : bmkFg.color);
+        setHexColor(slotBmkBg, matches(bmkBg, hexFactoryBookmarkBg())    ? nil : bmkBg.color);
+        setHexColor(slotCurBg, matches(curBg, hexFactoryCurrentLineBg()) ? nil : curBg.color);
+        saveHexPrefs();
+        // Repaint the live table so per-cell colour changes (selection,
+        // compare, bookmark) are visible immediately.
+        if (hexTableView != nil) {
+            [hexTableView reloadData];
+            [hexTableView setNeedsDisplay:YES];
+            [hexTableView.headerView setNeedsDisplay:YES];
+        }
+    };
+
+    if (outApplyDefaults) *outApplyDefaults = [applyDefaults copy];
+    if (outCommit) *outCommit = [commit copy];
+
+    return view;
+}
+
+// Build the Font tab. Layout (top → bottom):
+//
+//   [Font Name:]  [popup of monospaced fonts ........................ ]  [?]
+//   [Font Size:]  [popup of point sizes]              [Bold]
+//                                                     [Italic]
+//                 [Capital letters mode]
+//                 [Mirror Cursor as Rect]             [Underline]
+//
+// applyDefaults / commit blocks: same contract as makeStartLayoutTab — Reset
+// rewrites the in-dialog state to the factory defaults (Menlo / 12pt /
+// nothing on / mirror cursor on); commit reads the in-dialog state and
+// writes through to globals + NSUserDefaults. The font popup is filtered to
+// fixed-pitch families via NSFontManager.availableFontNamesWithTraits:
+// (NSFixedPitchFontMask) so the user picks from typefaces that actually
+// align in the byte grid.
+static NSView *makeFontTab(NSSize size,
+                            void (^*outApplyDefaults)(void),
+                            void (^*outCommit)(void))
+{
+    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, size.width, size.height)];
+
+    const CGFloat innerMargin = 16.0;
+    const CGFloat rowHeight = 26.0;
+    const CGFloat rowGap = 6.0;
+    const CGFloat labelMaxWidth = 110.0;
+    const CGFloat helpButtonSize = 18.0;
+    const CGFloat helpButtonGap = 4.0;
+    // Gap between the left-column checkboxes (Capital letters mode, Mirror
+    // Cursor as Rect — long localised labels) and the right-column trait
+    // toggles (Bold, Italic, Underline). The right column's X is computed
+    // below from the *measured* intrinsic widths of the left-column labels
+    // so localisations that grow the labels don't collide with the right
+    // column. 24pt is the gap, measured visually in the same way other
+    // tabs space their controls.
+    const CGFloat columnGap = 24.0;
+    const BOOL isRTL = hexCurrentLayoutIsRTL();
+
+    // Trailing-anchored help button column lives where the Colors tab's
+    // well column does — keeps the dialog's gutter visually consistent.
+    // These constants describe the LTR ("natural") layout; mirroring
+    // happens at NSMakeRect time via hexFlippedX so RTL flips the entire
+    // form (label↔help-column) about the container midline.
+    const CGFloat rightEdge = size.width - innerMargin;
+    const CGFloat helpX = rightEdge - helpButtonSize;
+    const CGFloat fieldRightEdge = helpX - helpButtonGap;
+
+    // Top-down y cursor.
+    __block CGFloat y = size.height - innerMargin - rowHeight;
+
+    NSPopUpButton *fontNamePopup = nil;
+    NSPopUpButton *fontSizePopup = nil;
+
+    // Build the five checkboxes up front and call sizeToFit so we can
+    // measure their localised widths and pick a column-2 X that doesn't
+    // collide with the longest left-column label in the active locale.
+    NSButton *boldCheckbox      = [NSButton checkboxWithTitle:L(@"options.font.bold")              target:nil action:NULL];
+    NSButton *italicCheckbox    = [NSButton checkboxWithTitle:L(@"options.font.italic")            target:nil action:NULL];
+    NSButton *underlineCheckbox = [NSButton checkboxWithTitle:L(@"options.font.underline")         target:nil action:NULL];
+    NSButton *uppercaseCheckbox = [NSButton checkboxWithTitle:L(@"options.font.uppercaseHex")      target:nil action:NULL];
+    NSButton *mirrorCursorCheckbox = [NSButton checkboxWithTitle:L(@"options.font.mirrorAsciiCursor") target:nil action:NULL];
+    boldCheckbox.accessibilityIdentifier         = @"hex-editor.options.font.bold";
+    italicCheckbox.accessibilityIdentifier       = @"hex-editor.options.font.italic";
+    underlineCheckbox.accessibilityIdentifier    = @"hex-editor.options.font.underline";
+    uppercaseCheckbox.accessibilityIdentifier    = @"hex-editor.options.font.uppercaseHex";
+    mirrorCursorCheckbox.accessibilityIdentifier = @"hex-editor.options.font.mirrorAsciiCursor";
+    [boldCheckbox sizeToFit];
+    [italicCheckbox sizeToFit];
+    [underlineCheckbox sizeToFit];
+    [uppercaseCheckbox sizeToFit];
+    [mirrorCursorCheckbox sizeToFit];
+
+    // Row 1: Font Name label + popup + help button.
+    NSTextField *fontNameLabel = [NSTextField labelWithString:L(@"options.font.name")];
+    fontNameLabel.alignment = hexFlippedAlignment(NSTextAlignmentRight, isRTL);
+    fontNameLabel.frame = NSMakeRect(hexFlippedX(innerMargin, labelMaxWidth, size.width, isRTL),
+                                       y + (rowHeight - fontNameLabel.intrinsicContentSize.height) / 2.0,
+                                       labelMaxWidth,
+                                       fontNameLabel.intrinsicContentSize.height);
+    [view addSubview:fontNameLabel];
+
+    const CGFloat popupX = innerMargin + labelMaxWidth + 8.0;
+    const CGFloat fontNamePopupWidth = fieldRightEdge - popupX;
+    fontNamePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(hexFlippedX(popupX, fontNamePopupWidth, size.width, isRTL),
+                                                                       y, fontNamePopupWidth, rowHeight) pullsDown:NO];
+    fontNamePopup.accessibilityIdentifier = @"hex-editor.options.font.name";
+    // Filter to fixed-pitch families. NSFontManager doesn't fold mismatched
+    // synonyms (e.g. "Courier" vs "Courier New"), so de-dupe via NSSet.
+    NSArray<NSString *> *monospacedFamilies = [[NSFontManager sharedFontManager]
+        availableFontNamesWithTraits:NSFixedPitchFontMask] ?: @[];
+    NSMutableArray<NSString *> *families = [NSMutableArray arrayWithCapacity:monospacedFamilies.count];
+    NSMutableSet<NSString *> *seen = [NSMutableSet setWithCapacity:monospacedFamilies.count];
+    for (NSString *fontName in monospacedFamilies) {
+        // availableFontNamesWithTraits: returns PostScript names (e.g.
+        // "Menlo-Regular", "Menlo-Bold"). Convert to the family name so the
+        // popup shows one row per typeface, not one per weight/style.
+        NSFont *probe = [NSFont fontWithName:fontName size:12.0];
+        NSString *family = probe.familyName ?: fontName;
+        if (![seen containsObject:family]) {
+            [seen addObject:family];
+            [families addObject:family];
+        }
+    }
+    [families sortUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+    [fontNamePopup addItemsWithTitles:families];
+    [view addSubview:fontNamePopup];
+
+    HexHelpButton *fontHelp = makeHexHelpButton(L(@"options.font.help"),
+                                                  @"hex-editor.options.font.help");
+    fontHelp.frame = NSMakeRect(hexFlippedX(helpX, helpButtonSize, size.width, isRTL),
+                                 y + (rowHeight - helpButtonSize) / 2.0,
+                                 helpButtonSize, helpButtonSize);
+    [view addSubview:fontHelp];
+
+    y -= (rowHeight + rowGap);
+
+    // Row 2: Font Size label + popup + Bold checkbox.
+    NSTextField *fontSizeLabel = [NSTextField labelWithString:L(@"options.font.size")];
+    fontSizeLabel.alignment = hexFlippedAlignment(NSTextAlignmentRight, isRTL);
+    fontSizeLabel.frame = NSMakeRect(hexFlippedX(innerMargin, labelMaxWidth, size.width, isRTL),
+                                       y + (rowHeight - fontSizeLabel.intrinsicContentSize.height) / 2.0,
+                                       labelMaxWidth,
+                                       fontSizeLabel.intrinsicContentSize.height);
+    [view addSubview:fontSizeLabel];
+
+    const CGFloat sizePopupWidth = 70.0;
+    fontSizePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(hexFlippedX(popupX, sizePopupWidth, size.width, isRTL),
+                                                                       y, sizePopupWidth, rowHeight) pullsDown:NO];
+    fontSizePopup.accessibilityIdentifier = @"hex-editor.options.font.size";
+    NSArray<NSNumber *> *sizes = @[@10, @11, @12, @13, @14, @16, @18, @20, @24, @28, @32];
+    for (NSNumber *sz in sizes) {
+        [fontSizePopup addItemWithTitle:[sz stringValue]];
+    }
+    [view addSubview:fontSizePopup];
+
+    // Right-column X (natural / LTR). The right column hosts the short
+    // trait toggles (Bold / Italic / Underline) on rows 2-4 and must
+    // clear:
+    //   - the size popup on row 2 (so Bold doesn't overlap it),
+    //   - the longest left-column checkbox on rows 3-4 (Capital letters
+    //     mode and Mirror Cursor as Rect, both ~150-170pt at en, but
+    //     longer in other locales — measured here, not assumed).
+    const CGFloat leftMax = MAX(NSWidth(uppercaseCheckbox.frame),
+                                 NSWidth(mirrorCursorCheckbox.frame));
+    const CGFloat rightColumnX = MAX(popupX + sizePopupWidth, popupX + leftMax) + columnGap;
+
+    // placeCheckbox takes a NATURAL (LTR) x-coord and applies hexFlippedX
+    // internally so callers stay direction-agnostic. AppKit auto-flips
+    // the checkbox glyph (the box itself moves to the trailing side of
+    // the label under RTL); we only need to mirror the frame's leading
+    // origin x.
+    auto placeCheckbox = ^(NSButton *cb, CGFloat naturalX, CGFloat cy) {
+        cb.frame = NSMakeRect(hexFlippedX(naturalX, NSWidth(cb.frame), size.width, isRTL),
+                               cy + (rowHeight - NSHeight(cb.frame)) / 2.0,
+                               NSWidth(cb.frame),
+                               NSHeight(cb.frame));
+        [view addSubview:cb];
+    };
+
+    // Row 2 right: Bold.
+    placeCheckbox(boldCheckbox, rightColumnX, y);
+
+    y -= (rowHeight + rowGap);
+
+    // Row 3: Capital letters (left) + Italic (right).
+    placeCheckbox(uppercaseCheckbox, popupX, y);
+    placeCheckbox(italicCheckbox, rightColumnX, y);
+
+    y -= (rowHeight + rowGap);
+
+    // Row 4: Mirror Cursor (left) + Underline (right).
+    placeCheckbox(mirrorCursorCheckbox, popupX, y);
+    placeCheckbox(underlineCheckbox, rightColumnX, y);
+
+    // Helpers used by both the initial fill and applyDefaults / commit.
+    void (^selectFontNameInPopup)(NSString *) = ^(NSString *family) {
+        // If the requested family isn't in our filtered list (renamed,
+        // uninstalled, or not strictly fixed-pitch on this system), just
+        // keep the popup's first item — the commit block normalises the
+        // selection back into the prefs.
+        NSInteger idx = [fontNamePopup indexOfItemWithTitle:family];
+        if (idx >= 0) [fontNamePopup selectItemAtIndex:idx];
+    };
+    void (^selectFontSizeInPopup)(int) = ^(int sz) {
+        NSString *title = [NSString stringWithFormat:@"%d", sz];
+        NSInteger idx = [fontSizePopup indexOfItemWithTitle:title];
+        if (idx < 0) idx = [fontSizePopup indexOfItemWithTitle:[NSString stringWithFormat:@"%d", HEX_DEFAULT_FONT_SIZE_PT]];
+        if (idx >= 0) [fontSizePopup selectItemAtIndex:idx];
+    };
+
+    // Initial fill: show the user's currently saved state.
+    selectFontNameInPopup(g_fontName ?: HEX_DEFAULT_FONT_NAME);
+    selectFontSizeInPopup(g_fontSize);
+    boldCheckbox.state         = g_fontBold          ? NSControlStateValueOn : NSControlStateValueOff;
+    italicCheckbox.state       = g_fontItalic        ? NSControlStateValueOn : NSControlStateValueOff;
+    underlineCheckbox.state    = g_fontUnderline     ? NSControlStateValueOn : NSControlStateValueOff;
+    uppercaseCheckbox.state    = g_uppercaseHex      ? NSControlStateValueOn : NSControlStateValueOff;
+    mirrorCursorCheckbox.state = g_mirrorAsciiCursor ? NSControlStateValueOn : NSControlStateValueOff;
+
+    // Reset path: factory defaults (no commit until Apply / Ok).
+    void (^applyDefaults)(void) = ^{
+        selectFontNameInPopup(HEX_DEFAULT_FONT_NAME);
+        selectFontSizeInPopup(HEX_DEFAULT_FONT_SIZE_PT);
+        boldCheckbox.state         = NSControlStateValueOff;
+        italicCheckbox.state       = NSControlStateValueOff;
+        underlineCheckbox.state    = NSControlStateValueOff;
+        uppercaseCheckbox.state    = NSControlStateValueOff;
+        mirrorCursorCheckbox.state = NSControlStateValueOff;
+    };
+
+    void (^commit)(void) = ^{
+        NSString *picked = fontNamePopup.titleOfSelectedItem ?: HEX_DEFAULT_FONT_NAME;
+        if (![picked isEqualToString:g_fontName ?: @""]) {
+            [g_fontName release];
+            g_fontName = [picked copy];
+        }
+        const int picSize = std::clamp([fontSizePopup.titleOfSelectedItem intValue],
+                                          HEX_FONT_SIZE_MIN_PT, HEX_FONT_SIZE_MAX_PT);
+        g_fontSize          = (picSize > 0) ? picSize : HEX_DEFAULT_FONT_SIZE_PT;
+        g_fontBold          = boldCheckbox.state         == NSControlStateValueOn;
+        g_fontItalic        = italicCheckbox.state       == NSControlStateValueOn;
+        g_fontUnderline     = underlineCheckbox.state    == NSControlStateValueOn;
+        g_uppercaseHex      = uppercaseCheckbox.state    == NSControlStateValueOn;
+        g_mirrorAsciiCursor = mirrorCursorCheckbox.state == NSControlStateValueOn;
+        saveHexPrefs();
+        // No live-render hookup yet — Phase 1 (this commit) only persists
+        // the choices. Phase 2/3/4 wire each setting to the actual rendering
+        // path (font, traits, casing, mirror cursor); commit will start
+        // calling reload after those land.
+    };
+
+    if (outApplyDefaults) *outApplyDefaults = [applyDefaults copy];
+    if (outCommit) *outCommit = [commit copy];
+
+    return view;
+}
+
+// Build a placeholder NSView for tabs we haven't implemented yet. Centered
+// label "This tab will be populated in a future update."
+static NSView *makeOptionsPlaceholderTab(NSSize size)
+{
+    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, size.width, size.height)];
+    NSTextField *label = [NSTextField labelWithString:L(@"options.tab.placeholder")];
+    label.textColor = [NSColor secondaryLabelColor];
+    [label sizeToFit];
+    label.frame = NSMakeRect((size.width - NSWidth(label.frame)) / 2.0,
+                              (size.height - NSHeight(label.frame)) / 2.0,
+                              NSWidth(label.frame), NSHeight(label.frame));
+    [view addSubview:label];
+    return view;
+}
+
+// Build the Start Layout tab. Three radio-button groups in a horizontal row
+// (bits/cell, base, endianness), then two number fields below (column count,
+// address width). Mirrors the Windows IDD_OPTION_DLG layout. Mutates the
+// passed-by-reference popup pointers so the caller can read selections back.
+//
+// applyDefaults / commit blocks: caller invokes applyDefaults on Reset to
+// rewrite the in-dialog state to factory defaults (NOT the saved globals —
+// Reset is non-destructive until the user clicks Apply / Ok). commit reads
+// the in-dialog state and writes through to globals + NSUserDefaults.
+// Keeps the tab self-contained.
+static NSView *makeStartLayoutTab(NSSize size,
+                                   void (^*outApplyDefaults)(void),
+                                   void (^*outCommit)(void))
+{
+    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, size.width, size.height)];
+
+    const CGFloat innerMargin = 16.0;
+    const CGFloat columnGap = 16.0;
+    const CGFloat groupColumnWidth = (size.width - 2 * innerMargin - 2 * columnGap) / 3.0;
+    const CGFloat radioRowHeight = 18.0;
+    const CGFloat radioGap = 2.0;
+    const CGFloat fieldRowHeight = 22.0;
+    const CGFloat fieldRowGap = 6.0;
+    const CGFloat labelToFieldGap = 8.0;
+    const CGFloat numericFieldWidth = 60.0;
+    const CGFloat helpButtonSize = 18.0;
+    const CGFloat helpButtonGap = 4.0;
+    const BOOL isRTL = hexCurrentLayoutIsRTL();
+
+    // Layout from top down: 4 radio rows (bits column has 4 entries; the
+    // others have 2, so the bits column dictates the radio block height).
+    const CGFloat radioBlockHeight = 4 * radioRowHeight + 3 * radioGap;
+    const CGFloat fieldBlockHeight = 2 * fieldRowHeight + fieldRowGap;
+    const CGFloat blockGap = 16.0;
+    const CGFloat totalContentHeight = radioBlockHeight + blockGap + fieldBlockHeight;
+    CGFloat y = (size.height - totalContentHeight) / 2.0 + radioBlockHeight + blockGap + fieldBlockHeight;
+
+    // Helper to lay out a vertical column of radio buttons with optional
+    // help button to the right of the column header. Returns the row of
+    // radio button objects in the order requested.
+    //
+    // Each group needs a unique target+action pair so AppKit's radio-button
+    // grouping kicks in (same superview + same action selector → mutually
+    // exclusive selection within that group). Passing nil/nil leaves them
+    // additive — multiple buttons in the group can be on at once.
+    // makeRadioGroup takes a NATURAL (LTR) start-x for the column. Under
+    // RTL each radio's frame and the help-button frame are mirrored
+    // about the container midline so the column lands on the RTL-leading
+    // side.
+    HexOptionsButtonTarget *radioTarget = [[HexOptionsButtonTarget alloc] init];
+    NSMutableArray<NSButton *> *(^makeRadioGroup)(NSArray<NSString *> *, CGFloat, CGFloat, NSString *, NSString *, NSString *, SEL) =
+    ^NSMutableArray<NSButton *> *(NSArray<NSString *> *titles, CGFloat naturalStartX, CGFloat startY, NSString *axIdPrefix, NSString *helpAxId, NSString *helpText, SEL groupAction) {
+        NSMutableArray<NSButton *> *group = [NSMutableArray arrayWithCapacity:titles.count];
+        const CGFloat radioWidth = groupColumnWidth - helpButtonSize - helpButtonGap;
+        CGFloat ry = startY - radioRowHeight;
+        for (NSUInteger i = 0; i < titles.count; ++i) {
+            NSButton *radio = [NSButton radioButtonWithTitle:titles[i] target:radioTarget action:groupAction];
+            radio.frame = NSMakeRect(hexFlippedX(naturalStartX, radioWidth, size.width, isRTL),
+                                       ry, radioWidth, radioRowHeight);
+            radio.accessibilityIdentifier = [NSString stringWithFormat:@"%@.%@",
+                axIdPrefix, [titles[i] stringByReplacingOccurrencesOfString:@" " withString:@"_"]];
+            [view addSubview:radio];
+            [group addObject:radio];
+            ry -= (radioRowHeight + radioGap);
+        }
+        // Help button next to the first radio in the group (trailing
+        // side of the column under LTR; leading side under RTL after
+        // the mirror).
+        HexHelpButton *help = makeHexHelpButton(helpText, helpAxId);
+        const CGFloat helpNaturalX = naturalStartX + groupColumnWidth - helpButtonSize;
+        help.frame = NSMakeRect(hexFlippedX(helpNaturalX, helpButtonSize, size.width, isRTL),
+                                 startY - radioRowHeight + (radioRowHeight - helpButtonSize) / 2.0,
+                                 helpButtonSize, helpButtonSize);
+        [view addSubview:help];
+        return group;
+    };
+
+    // Bits per cell column: 8/16/32/64
+    NSMutableArray<NSButton *> *bitsRadios = makeRadioGroup(
+        @[L(@"options.startLayout.bits.8"),
+          L(@"options.startLayout.bits.16"),
+          L(@"options.startLayout.bits.32"),
+          L(@"options.startLayout.bits.64")],
+        innerMargin, y,
+        @"hex-editor.options.startLayout.bits",
+        @"hex-editor.options.startLayout.bits.help",
+        L(@"options.startLayout.bits.help"),
+        @selector(hexOptionsBitsRadio:));
+
+    // Base column: Hexadecimal / Binary
+    NSMutableArray<NSButton *> *baseRadios = makeRadioGroup(
+        @[L(@"options.startLayout.base.hex"),
+          L(@"options.startLayout.base.binary")],
+        innerMargin + groupColumnWidth + columnGap, y,
+        @"hex-editor.options.startLayout.base",
+        @"hex-editor.options.startLayout.base.help",
+        L(@"options.startLayout.base.help"),
+        @selector(hexOptionsBaseRadio:));
+
+    // Endianness column: Little / Big. Little-Endian is listed first
+    // because it's the default and matches every system the user is
+    // likely to be inspecting bytes from (Apple Silicon, Intel, ARM,
+    // Windows). Big-Endian is the niche entry for network packet dumps.
+    // Index 0 = Little, Index 1 = Big — keep this consistent with the
+    // initial-fill / commit / Reset logic below (all keyed on index).
+    NSMutableArray<NSButton *> *endianRadios = makeRadioGroup(
+        @[L(@"options.startLayout.endian.little"),
+          L(@"options.startLayout.endian.big")],
+        innerMargin + 2 * (groupColumnWidth + columnGap), y,
+        @"hex-editor.options.startLayout.endian",
+        @"hex-editor.options.startLayout.endian.help",
+        L(@"options.startLayout.endian.help"),
+        @selector(hexOptionsEndianRadio:));
+
+    // Drop down to the field block.
+    y -= radioBlockHeight + blockGap;
+
+    // Column Count + Address Width fields stack vertically. Under LTR:
+    // label leading, numeric field trailing, help button beyond. Under
+    // RTL all three mirror about the container midline so label ends up
+    // on the right (leading-physical) and field+help on the left.
+    const CGFloat fieldX = size.width - innerMargin - helpButtonSize - helpButtonGap - numericFieldWidth;
+    const CGFloat labelMaxWidth = fieldX - innerMargin - labelToFieldGap;
+    const CGFloat helpFieldNaturalX = fieldX + numericFieldWidth + helpButtonGap;
+
+    NSTextField *colLabel = [NSTextField labelWithString:L(@"options.startLayout.columnCount")];
+    colLabel.alignment = hexFlippedAlignment(NSTextAlignmentRight, isRTL);
+    colLabel.frame = NSMakeRect(hexFlippedX(innerMargin, labelMaxWidth, size.width, isRTL),
+                                  y - fieldRowHeight, labelMaxWidth, fieldRowHeight);
+    [view addSubview:colLabel];
+
+    NSTextField *colField = [[NSTextField alloc] initWithFrame:NSMakeRect(hexFlippedX(fieldX, numericFieldWidth, size.width, isRTL),
+                                                                            y - fieldRowHeight, numericFieldWidth, fieldRowHeight)];
+    colField.alignment = NSTextAlignmentCenter;
+    colField.accessibilityIdentifier = @"hex-editor.options.startLayout.columnCount";
+    NSNumberFormatter *colFormatter = [[NSNumberFormatter alloc] init];
+    colFormatter.numberStyle = NSNumberFormatterNoStyle;
+    colFormatter.allowsFloats = NO;
+    colFormatter.minimum = @1;
+    colField.formatter = colFormatter;
+    [view addSubview:colField];
+
+    HexHelpButton *colHelp = makeHexHelpButton(L(@"options.startLayout.columnCount.help"),
+                                                @"hex-editor.options.startLayout.columnCount.help");
+    colHelp.frame = NSMakeRect(hexFlippedX(helpFieldNaturalX, helpButtonSize, size.width, isRTL),
+                                y - fieldRowHeight + (fieldRowHeight - helpButtonSize) / 2.0,
+                                helpButtonSize, helpButtonSize);
+    [view addSubview:colHelp];
+
+    y -= (fieldRowHeight + fieldRowGap);
+
+    NSTextField *addrLabel = [NSTextField labelWithString:L(@"options.startLayout.addressWidth")];
+    addrLabel.alignment = hexFlippedAlignment(NSTextAlignmentRight, isRTL);
+    addrLabel.frame = NSMakeRect(hexFlippedX(innerMargin, labelMaxWidth, size.width, isRTL),
+                                   y - fieldRowHeight, labelMaxWidth, fieldRowHeight);
+    [view addSubview:addrLabel];
+
+    NSTextField *addrField = [[NSTextField alloc] initWithFrame:NSMakeRect(hexFlippedX(fieldX, numericFieldWidth, size.width, isRTL),
+                                                                              y - fieldRowHeight, numericFieldWidth, fieldRowHeight)];
+    addrField.alignment = NSTextAlignmentCenter;
+    addrField.accessibilityIdentifier = @"hex-editor.options.startLayout.addressWidth";
+    NSNumberFormatter *addrFormatter = [[NSNumberFormatter alloc] init];
+    addrFormatter.numberStyle = NSNumberFormatterNoStyle;
+    addrFormatter.allowsFloats = NO;
+    addrFormatter.minimum = @(HEX_MIN_ADDRESS_WIDTH);
+    addrFormatter.maximum = @(HEX_MAX_ADDRESS_WIDTH);
+    addrField.formatter = addrFormatter;
+    [view addSubview:addrField];
+
+    HexHelpButton *addrHelp = makeHexHelpButton(L(@"options.startLayout.addressWidth.help"),
+                                                 @"hex-editor.options.startLayout.addressWidth.help");
+    addrHelp.frame = NSMakeRect(hexFlippedX(helpFieldNaturalX, helpButtonSize, size.width, isRTL),
+                                 y - fieldRowHeight + (fieldRowHeight - helpButtonSize) / 2.0,
+                                 helpButtonSize, helpButtonSize);
+    [view addSubview:addrHelp];
+
+    // Apply defaults / commit hooks ---------------------------------------
+
+    int (^bitsToIndex)(int) = ^int(int bytes) {
+        switch (bytes) {
+            case 1: return 0;
+            case 2: return 1;
+            case 4: return 2;
+            case 8: return 3;
+        }
+        return 0;
+    };
+    int (^indexToBits)(NSInteger) = ^int(NSInteger idx) {
+        switch (idx) {
+            case 0: return 1;
+            case 1: return 2;
+            case 2: return 4;
+            case 3: return 8;
+        }
+        return 1;
+    };
+    NSButton *(^selectedRadio)(NSArray<NSButton *> *) = ^NSButton *(NSArray<NSButton *> *group) {
+        for (NSButton *r in group) {
+            if (r.state == NSControlStateValueOn) return r;
+        }
+        return nil;
+    };
+    void (^selectRadioAtIndex)(NSArray<NSButton *> *, NSUInteger) = ^(NSArray<NSButton *> *group, NSUInteger idx) {
+        for (NSUInteger i = 0; i < group.count; ++i) {
+            group[i].state = (i == idx) ? NSControlStateValueOn : NSControlStateValueOff;
+        }
+    };
+    // Endianness radios stay enabled regardless of bits-per-column. The
+    // setting is meaningless when 8-Bit is selected (single bytes are
+    // always shown in address-ascending order) but the help popover
+    // explains that, and keeping the radios live is consistent with the
+    // Windows reference dialog.
+
+    // Initial fill: show the user's currently saved state.
+    selectRadioAtIndex(bitsRadios, bitsToIndex(g_bytesPerCell));
+    {
+        const hexedit::ViewMode m = currentViewMode();
+        selectRadioAtIndex(baseRadios, m.notation == hexedit::CellNotation::Binary ? 1 : 0);
+    }
+    selectRadioAtIndex(endianRadios, g_littleEndian ? 0 : 1);  // 0 = Little (default), 1 = Big
+    colField.stringValue = [NSString stringWithFormat:@"%d", g_columns];
+    addrField.stringValue = [NSString stringWithFormat:@"%d", g_addressWidth];
+
+    // Reset path: show factory defaults in the dialog without committing.
+    // The user must click Apply / Ok afterwards to persist them; Cancel
+    // discards the reset and the saved state remains untouched.
+    void (^applyDefaults)(void) = ^{
+        selectRadioAtIndex(bitsRadios, bitsToIndex(1));
+        selectRadioAtIndex(baseRadios, 0);
+        selectRadioAtIndex(endianRadios, 0);
+        colField.stringValue = [NSString stringWithFormat:@"%d", HEX_DEFAULT_COLUMNS];
+        addrField.stringValue = [NSString stringWithFormat:@"%d", HEX_DEFAULT_ADDRESS_WIDTH];
+    };
+
+    void (^commit)(void) = ^{
+        NSButton *bitsSel = selectedRadio(bitsRadios);
+        const int bits = indexToBits(bitsSel ? [bitsRadios indexOfObject:bitsSel] : 0);
+        NSButton *baseSel = selectedRadio(baseRadios);
+        const BOOL binary = baseSel && [baseRadios indexOfObject:baseSel] == 1;
+        NSButton *endianSel = selectedRadio(endianRadios);
+        const BOOL little = endianSel && [endianRadios indexOfObject:endianSel] == 0;  // 0 = Little, 1 = Big
+
+        if (bits != g_bytesPerCell) {
+            setHexViewBytesPerCell(bits);
+        }
+        // Number base + endianness via toggle helpers (idempotent if no change).
+        const hexedit::ViewMode currentMode = currentViewMode();
+        if ((currentMode.notation == hexedit::CellNotation::Binary) != (binary != NO)) {
+            toggleHexViewBinary();
+        }
+        // Endian commits regardless of bits-per-cell so the preference
+        // persists through a temporary 8-bit selection. formatCell
+        // ignores the flag at bpc=1 anyway, so storing it is benign;
+        // re-render only when bpc > 1 (where the flag has visible effect).
+        // Bypassing toggleHexViewEndian()'s bpc-1 early-return: that
+        // helper exists for the menu toggle which is only enabled at
+        // bpc > 1; the Options dialog should set the slot regardless.
+        if (g_littleEndian != (little != NO)) {
+            g_littleEndian = (little != NO);
+            saveHexPrefs();
+            if (g_bytesPerCell > 1) {
+                applyHexViewMode();
+            }
+        }
+
+        const int colVal = std::clamp([colField.stringValue intValue], 1,
+                                       columnsLimitForBytesPerCell(g_bytesPerCell));
+        if (colVal != g_columns) {
+            setHexColumns(colVal);
+        }
+        const int addrVal = std::clamp([addrField.stringValue intValue],
+                                        HEX_MIN_ADDRESS_WIDTH, HEX_MAX_ADDRESS_WIDTH);
+        if (addrVal != g_addressWidth) {
+            setHexAddressWidth(addrVal);
+        }
+    };
+
+    if (outApplyDefaults) *outApplyDefaults = [applyDefaults copy];
+    if (outCommit) *outCommit = [commit copy];
+
+    return view;
+}
+
+// Modal preference window. Hosts an NSTabView with four tabs matching the
+// Windows HexEditor reference (Start Layout, Startup, Colors, Font). Apply,
+// Reset, OK, Cancel apply across all tabs at once. Reset only updates the
+// in-dialog state — the user must still click Apply or OK for changes to
+// land in NSUserDefaults.
+static void presentOptionsDialog()
+{
+    @autoreleasepool {
+        // ---- Layout constants ----
+        const CGFloat windowWidth = 520.0;
+        const CGFloat windowHeight = 360.0;
+        const CGFloat innerMargin = 20.0;
+        const CGFloat buttonRowHeight = 32.0;
+        const CGFloat buttonHeight = 28.0;
+        const CGFloat buttonGap = 12.0;
+        const CGFloat tabViewBottomY = innerMargin + buttonRowHeight + 12.0;
+        const CGFloat tabViewWidth = windowWidth - 2 * innerMargin;
+        const CGFloat tabViewHeight = windowHeight - tabViewBottomY - innerMargin;
+
+        // ---- Window ----
+        NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, windowWidth, windowHeight)
+                                                       styleMask:NSWindowStyleMaskTitled
+                                                         backing:NSBackingStoreBuffered
+                                                           defer:NO];
+        window.title = L(@"options.title");
+        window.releasedWhenClosed = NO;
+        window.accessibilityIdentifier = @"hex-editor.options.window";
+        [window center];
+
+        // NSColorPanel is shared system-wide and persists its last picker
+        // mode across launches. Two pitfalls:
+        // 1. Gray Sliders mode locks the user to shades of black.
+        // 2. Wheel mode rendering is governed by the current colour's
+        //    brightness component — picking a black colour shows a fully
+        //    black wheel, with the only visible affordance being a
+        //    brightness slider on the side (easy to miss).
+        // Color Sliders mode dodges both: three labelled R/G/B sliders
+        // (with numeric inputs) make every component visibly editable
+        // even when the starting colour is black. Force this mode each
+        // time the dialog opens; we don't restore the previous mode on
+        // close — Color Sliders is a sensible default for any caller.
+        [NSColorPanel sharedColorPanel].mode = NSColorPanelModeRGB;
+        [NSColorPanel sharedColorPanel].showsAlpha = YES;
+
+        NSView *content = window.contentView;
+
+        // ---- Tab view ----
+        NSTabView *tabView = [[NSTabView alloc] initWithFrame:NSMakeRect(innerMargin, tabViewBottomY, tabViewWidth, tabViewHeight)];
+        tabView.accessibilityIdentifier = @"hex-editor.options.tabView";
+        [content addSubview:tabView];
+
+        // Tab content size = tab view's interior. NSTabView reserves room
+        // for the tab bar at the top; the content rect is what we need.
+        const NSSize tabContentSize = [tabView contentRect].size;
+
+        // Start Layout tab — fully implemented.
+        void (^startLayoutApply)(void) = nil;
+        void (^startLayoutCommit)(void) = nil;
+        NSView *startLayoutView = makeStartLayoutTab(tabContentSize,
+                                                      &startLayoutApply,
+                                                      &startLayoutCommit);
+        NSTabViewItem *startLayoutItem = [[NSTabViewItem alloc] initWithIdentifier:@"startLayout"];
+        startLayoutItem.label = L(@"options.tab.startLayout");
+        startLayoutItem.view = startLayoutView;
+        [tabView addTabViewItem:startLayoutItem];
+
+        // Startup tab — fully implemented.
+        void (^startupApply)(void) = nil;
+        void (^startupCommit)(void) = nil;
+        NSView *startupView = makeStartupTab(tabContentSize, &startupApply, &startupCommit);
+        NSTabViewItem *startupItem = [[NSTabViewItem alloc] initWithIdentifier:@"startup"];
+        startupItem.label = L(@"options.tab.startup");
+        startupItem.view = startupView;
+        [tabView addTabViewItem:startupItem];
+
+        // Colors tab — fully implemented.
+        void (^colorsApply)(void) = nil;
+        void (^colorsCommit)(void) = nil;
+        NSView *colorsView = makeColorsTab(tabContentSize, &colorsApply, &colorsCommit);
+        NSTabViewItem *colorsItem = [[NSTabViewItem alloc] initWithIdentifier:@"colors"];
+        colorsItem.label = L(@"options.tab.colors");
+        colorsItem.view = colorsView;
+        [tabView addTabViewItem:colorsItem];
+
+        // Font tab — fully implemented.
+        void (^fontApply)(void) = nil;
+        void (^fontCommit)(void) = nil;
+        NSView *fontView = makeFontTab(tabContentSize, &fontApply, &fontCommit);
+        NSTabViewItem *fontItem = [[NSTabViewItem alloc] initWithIdentifier:@"font"];
+        fontItem.label = L(@"options.tab.font");
+        fontItem.view = fontView;
+        [tabView addTabViewItem:fontItem];
+
+        // ---- Bottom button row: [Reset] .......... [Cancel] [Apply] [OK] ----
+        // Right-anchored stack: OK is the rightmost (and the default action),
+        // Apply sits to its left and applies values without closing the window,
+        // Cancel sits to Apply's left, Reset is left-anchored at the opposite edge.
+        // OK rather than "Save" — this is a hex editor and "Save" would imply
+        // saving the document.
+        HexOptionsButtonTarget *target = [[HexOptionsButtonTarget alloc] init];
+        const CGFloat buttonY = innerMargin + (buttonRowHeight - buttonHeight) / 2.0;
+
+        NSButton *okBtn = [NSButton buttonWithTitle:L(@"button.ok")
+                                             target:target
+                                             action:@selector(hexOptionsOk:)];
+        okBtn.keyEquivalent = @"\r";   // Return triggers OK
+        okBtn.bezelStyle = NSBezelStyleRounded;
+        okBtn.accessibilityIdentifier = @"hex-editor.options.button.ok";
+        [okBtn sizeToFit];
+        const CGFloat okWidth = std::max<CGFloat>(NSWidth(okBtn.frame), 90.0);
+        okBtn.frame = NSMakeRect(windowWidth - innerMargin - okWidth, buttonY, okWidth, buttonHeight);
+        [content addSubview:okBtn];
+
+        NSButton *applyBtn = [NSButton buttonWithTitle:L(@"options.button.apply")
+                                                target:target
+                                                action:@selector(hexOptionsApply:)];
+        applyBtn.bezelStyle = NSBezelStyleRounded;
+        applyBtn.accessibilityIdentifier = @"hex-editor.options.button.apply";
+        [applyBtn sizeToFit];
+        const CGFloat applyWidth = std::max<CGFloat>(NSWidth(applyBtn.frame), 90.0);
+        applyBtn.frame = NSMakeRect(NSMinX(okBtn.frame) - buttonGap - applyWidth, buttonY, applyWidth, buttonHeight);
+        [content addSubview:applyBtn];
+
+        NSButton *cancelBtn = [NSButton buttonWithTitle:L(@"button.cancel")
+                                                 target:target
+                                                 action:@selector(hexOptionsCancel:)];
+        cancelBtn.keyEquivalent = @"\e";   // Escape triggers Cancel
+        cancelBtn.bezelStyle = NSBezelStyleRounded;
+        cancelBtn.accessibilityIdentifier = @"hex-editor.options.button.cancel";
+        [cancelBtn sizeToFit];
+        const CGFloat cancelWidth = std::max<CGFloat>(NSWidth(cancelBtn.frame), 90.0);
+        cancelBtn.frame = NSMakeRect(NSMinX(applyBtn.frame) - buttonGap - cancelWidth, buttonY, cancelWidth, buttonHeight);
+        [content addSubview:cancelBtn];
+
+        NSButton *resetBtn = [NSButton buttonWithTitle:L(@"options.button.reset")
+                                                target:target
+                                                action:@selector(hexOptionsReset:)];
+        resetBtn.bezelStyle = NSBezelStyleRounded;
+        resetBtn.accessibilityIdentifier = @"hex-editor.options.button.reset";
+        [resetBtn sizeToFit];
+        const CGFloat resetWidth = NSWidth(resetBtn.frame);
+        resetBtn.frame = NSMakeRect(innerMargin, buttonY, resetWidth, buttonHeight);
+        [content addSubview:resetBtn];
+
+        window.defaultButtonCell = okBtn.cell;
+
+        // Aggregate commit across all tabs; Reset is scoped to the visible
+        // tab only. Apply (loops the modal) and OK (exits) share the same
+        // commit. Reset rewrites only the active tab's dialog UI to factory
+        // defaults but does NOT touch the saved globals — Cancel after Reset
+        // leaves the user's prior state intact. Tab-scoped Reset matches
+        // user expectation (the visible tab is "the thing being reset");
+        // resetting all tabs at once would silently nuke prefs the user
+        // can't see (e.g. clicking Reset on Colors used to wipe Startup's
+        // extension list).
+        NSDictionary<NSString *, void (^)(void)> *applyByTab = @{
+            @"startLayout": startLayoutApply ?: ^{},
+            @"startup":     startupApply     ?: ^{},
+            @"colors":      colorsApply      ?: ^{},
+            @"font":        fontApply        ?: ^{},
+        };
+        NSArray<void (^)(void)> *commitBlocks = @[
+            startLayoutCommit ?: ^{},
+            startupCommit ?: ^{},
+            colorsCommit ?: ^{},
+            fontCommit ?: ^{},
+        ];
+        void (^applyDefaultsForActiveTab)(void) = ^{
+            NSString *active = tabView.selectedTabViewItem.identifier;
+            void (^block)(void) = applyByTab[active];
+            if (block) block();
+        };
+        void (^commitAll)(void) = ^{
+            for (void (^block)(void) in commitBlocks) block();
+            if (hexTableView != nil) {
+                applyHexViewMode();
+            }
+        };
+
+        // ---- Modal session (loop on Reset / Apply) ----
+        while (true) {
+            const NSModalResponse response = [NSApp runModalForWindow:window];
+            if (response == kHexOptionsResultReset) {
+                applyDefaultsForActiveTab();
+                continue;
+            }
+            if (response == kHexOptionsResultApply) {
+                commitAll();
+                continue;
+            }
+            if (response != kHexOptionsResultOk) {
+                [window orderOut:nil];
+                return;
+            }
+            break;
+        }
+        [window orderOut:nil];
+        commitAll();
+    }
+}
+
+static void optionsPreview()
+{
+    presentOptionsDialog();
+}
+
 extern "C" NPP_EXPORT void setInfo(NppData data)
 {
     nppData = data;
@@ -3831,6 +8002,7 @@ extern "C" NPP_EXPORT void setInfo(NppData data)
         [hexPrefs() synchronize];
     }
     loadHexPrefs();
+
 
     // Plugin menu entries are C strings (FuncItem._itemName is a fixed char[]).
     // We pull the localized title via L() and copy its UTF8 form. Notepad++ reads
@@ -3860,10 +8032,15 @@ extern "C" NPP_EXPORT void setInfo(NppData data)
     funcItem[4]._init2Check = false;
     funcItem[4]._pShKey = nullptr;
 
-    strlcpy(funcItem[5]._itemName, [L(@"menu.plugin.help") UTF8String], NPP_MENU_ITEM_SIZE);
-    funcItem[5]._pFunc = showAbout;
+    strlcpy(funcItem[5]._itemName, [L(@"menu.plugin.options") UTF8String], NPP_MENU_ITEM_SIZE);
+    funcItem[5]._pFunc = optionsPreview;
     funcItem[5]._init2Check = false;
     funcItem[5]._pShKey = nullptr;
+
+    strlcpy(funcItem[6]._itemName, [L(@"menu.plugin.help") UTF8String], NPP_MENU_ITEM_SIZE);
+    funcItem[6]._pFunc = showAbout;
+    funcItem[6]._init2Check = false;
+    funcItem[6]._pShKey = nullptr;
 }
 
 extern "C" NPP_EXPORT const char *getName()
@@ -3877,20 +8054,73 @@ extern "C" NPP_EXPORT FuncItem *getFuncsArray(int *nbF)
     return funcItem;
 }
 
+// Auto-engage check: consult the user's Startup-tab prefs against the
+// currently active buffer and open the hex view if it matches. Safe to
+// call repeatedly — early-outs when a hex view is already showing or no
+// rules are configured. Used from both NPPN_BUFFERACTIVATED (user
+// switched tabs) and NPPN_READY (NPP just finished restoring its
+// session and the active buffer was set up before our plugin loaded, so
+// we never saw its activation event).
+static void tryAutoEngageHexView()
+{
+    if (previewBufferId != 0) return;
+    if (g_autoExtensions.length == 0 && g_autoControlPercent <= 0) return;
+    const uintptr_t bufferId = getCurrentBufferId();
+    const NppHandle handle = getCurrentScintilla();
+    bool shouldEngage = false;
+    if (g_autoExtensions.length > 0) {
+        NSString *path = getFullPathFromBufferId(bufferId);
+        if (autoExtensionMatches(path)) shouldEngage = true;
+    }
+    if (!shouldEngage && g_autoControlPercent > 0) {
+        shouldEngage = autoControlCharThresholdReached(handle, g_autoControlPercent);
+    }
+    if (shouldEngage) {
+        showHexPreview();
+    }
+}
+
 extern "C" NPP_EXPORT void beNotified(SCNotification *notifyCode)
 {
     const NppHandle notificationHandle = reinterpret_cast<NppHandle>(notifyCode->nmhdr.hwndFrom);
-    if (previewBufferId != 0 &&
-        (notifyCode->nmhdr.code == NPPN_FILEBEFORECLOSE || notifyCode->nmhdr.code == NPPN_FILECLOSED)) {
-        hideHexPreview();
-        return;
+    if (notifyCode->nmhdr.code == NPPN_FILEBEFORECLOSE || notifyCode->nmhdr.code == NPPN_FILECLOSED) {
+        // The buffer being closed should drop its hex-view intent so a
+        // freshly-opened file doesn't unexpectedly come up in hex view if
+        // it happens to land on the same memory address.
+        clearHexIntent(reinterpret_cast<uintptr_t>(notificationHandle));
+        if (previewBufferId != 0) {
+            hideHexPreview();
+            return;
+        }
     }
 
     if (previewBufferId != 0 &&
         notifyCode->nmhdr.code == NPPN_BUFFERACTIVATED &&
         getCurrentBufferId() != previewBufferId) {
         hideHexPreview();
-        return;
+        // Don't clear intent for the previously-active buffer — the user
+        // may switch back to it, in which case the intent restore below
+        // re-engages hex view there. Fall through to the engage check.
+    }
+
+    // NPP-Mac restores its session BEFORE plugins load (see AppDelegate.mm:
+    // session restore at ~line 138, plugin loadPlugins+fireReady at ~line
+    // 158). The buffer-activation events for restored buffers fire too
+    // early for our plugin to hear them. NPPN_READY is fired AFTER both,
+    // so it's the canonical "everything is set up; check the active
+    // buffer now" hook for first-launch behaviour.
+    if (notifyCode->nmhdr.code == NPPN_READY ||
+        notifyCode->nmhdr.code == NPPN_BUFFERACTIVATED) {
+        // Per-buffer user intent takes precedence over the auto-engage
+        // heuristic: a tab the user previously engaged should come back
+        // in hex view even if its extension / content density wouldn't
+        // otherwise auto-engage.
+        const uintptr_t currentBuf = getCurrentBufferId();
+        if (currentBuf != 0 && hasHexIntent(currentBuf) && previewBufferId == 0) {
+            showHexPreview();
+        } else {
+            tryAutoEngageHexView();
+        }
     }
 
     if (previewBufferId != 0 &&
@@ -3900,12 +8130,24 @@ extern "C" NPP_EXPORT void beNotified(SCNotification *notifyCode)
         hexTableView &&
         isPreviewBufferActive() &&
         !suppressModificationRefresh) {
-        previewBytes = readCurrentBuffer(&previewTotalLength);
+        // The Scintilla we're already bound to just mutated. Drop the page
+        // cache instead of rebuilding the source so consecutive byte edits
+        // don't allocate two unique_ptrs per keypress.
+        invalidateHexBuffer();
         clampActiveCursor();
         refreshVisibleHexTables();
     }
 
     if (notifyCode->nmhdr.code == NPPN_SHUTDOWN) {
+        // If we hold an outstanding pasteboard promise (the user did Cmd-C
+        // in the hex view and didn't paste yet — or pasted only into apps
+        // that read the type via pbs IPC, leaving us as the data provider),
+        // the bytes vanish when our process dies. Office and Word handle
+        // this by asking the user at quit; we follow the same pattern.
+        // Trivial-size snapshots (≤ 16 MB) materialize silently — no user
+        // friction for small clipboards. Larger ones get a prompt.
+        materializeHexClipboardOnQuitIfNeeded();
+
         hideHexPreview();
         hexRootView = nil;
         hexTableView = nil;

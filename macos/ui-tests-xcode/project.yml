@@ -10,8 +10,21 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     MACOSX_DEPLOYMENT_TARGET: "13.0"
-    CODE_SIGN_STYLE: Automatic
-    CODE_SIGN_IDENTITY: "-"
+    # Sign the runner with a stable self-signed identity instead of the
+    # default ad-hoc signing ("-"). macOS TCC keys Accessibility grants by
+    # the binary's designated requirement; ad-hoc signing puts the SHA-256
+    # hash of the binary in the DR, so any rebuild — even comment-only —
+    # invalidates the previous TCC grant and the next test run fails with
+    # "Timed out while enabling automation mode". Signing with a stable
+    # cert puts the cert's identity in the DR instead, so the grant
+    # survives any rebuild. Each developer runs
+    #   macos/scripts/install-test-codesign-cert.sh
+    # once per machine that builds the runner (the VM, in our standard
+    # workflow) to install this cert into their login keychain. Manual
+    # style + empty DEVELOPMENT_TEAM because there is no team — the cert
+    # is local-only.
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "NPP-HexEdit Test Codesign"
     CODE_SIGNING_REQUIRED: YES
     CODE_SIGNING_ALLOWED: YES
     DEVELOPMENT_TEAM: ""

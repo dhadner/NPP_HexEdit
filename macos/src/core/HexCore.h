@@ -1,8 +1,10 @@
 #ifndef NPP_HEXEDITOR_HEXCORE_H
 #define NPP_HEXEDITOR_HEXCORE_H
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -22,6 +24,10 @@ struct ViewMode {
     int bytesPerCell = 1;
     CellNotation notation = CellNotation::Hex;
     bool littleEndian = false;
+    // When true, formatCell emits A–F as uppercase ('A'…'F'). When false
+    // (the default — preserves the historical render), digits are
+    // lowercase. Has no effect when notation is Binary (0/1 only).
+    bool uppercase = false;
 };
 
 struct CursorState {
@@ -37,8 +43,15 @@ struct Selection {
     bool active() const { return end > start; }
 };
 
+// Forward declaration; defined just below.
+class ByteSource;
+
 struct DocumentView {
-    const std::uint8_t *bytes = nullptr;
+    // Backing storage for the visible bytes. Reads go through `source->read(...)`
+    // so this struct works equally well over an in-RAM SpanByteSource and a
+    // page-cached WindowedScintillaByteSource. May be null when no buffer
+    // is open (visibleByteCount and totalLength are both 0 in that case).
+    const ByteSource *source = nullptr;
     std::size_t visibleByteCount = 0;
     std::size_t totalLength = 0;
 
@@ -46,10 +59,199 @@ struct DocumentView {
     std::size_t maxEditableOffset() const { return fullyLoaded() ? totalLength : visibleByteCount; }
 };
 
+// Random-access byte stream abstraction. Decouples byte-consuming code (search,
+// compare, rect extraction) from the storage backing those bytes — today an
+// in-RAM previewBytes vector, eventually a windowed reader against Scintilla
+// so a 20 GB file doesn't require a 20 GB plugin allocation.
+//
+// Two implementations are expected:
+//   1. SpanByteSource (defined below) — wraps a contiguous in-RAM buffer.
+//      Used by tests and during the migration while previewBytes is still
+//      a full-RAM copy.
+//   2. WindowedScintillaByteSource (TBD, step 2c) — page-cache backed by
+//      SCI_GETTEXTRANGEFULL with bounded RAM regardless of file size.
+//
+// Contract for read(): writes up to `count` bytes from logical offset
+// `offset` into `dest`. Returns the number of bytes actually written —
+// always min(count, length() - offset), or 0 if offset >= length(). Never
+// reads past the end (no NUL terminator, unlike SciReader::readRange which
+// inherits Scintilla's quirk).
+class ByteSource {
+public:
+    virtual ~ByteSource() = default;
+    virtual std::size_t length() const = 0;
+    virtual std::size_t read(std::size_t offset, std::uint8_t *dest, std::size_t count) const = 0;
+};
+
+// Trivial ByteSource backed by a caller-owned contiguous span. The span must
+// remain valid for the source's lifetime. Common use: wrap a std::vector<uint8_t>
+// or a const std::uint8_t* + size pair to feed legacy in-RAM byte buffers
+// through the new ByteSource-taking APIs without copying.
+class SpanByteSource final : public ByteSource {
+public:
+    SpanByteSource(const std::uint8_t *data, std::size_t length)
+        : data_(data), length_(length) {}
+
+    std::size_t length() const override { return length_; }
+
+    std::size_t read(std::size_t offset, std::uint8_t *dest, std::size_t count) const override {
+        if (offset >= length_) return 0;
+        const std::size_t toCopy = std::min(count, length_ - offset);
+        if (toCopy > 0 && data_ != nullptr) {
+            std::memcpy(dest, data_ + offset, toCopy);
+        }
+        return toCopy;
+    }
+
+private:
+    const std::uint8_t *data_;
+    std::size_t length_;
+};
+
 struct ByteRange {
     std::size_t offset = 0;
     std::size_t byteCount = 0;
 };
+
+// A rectangular block of bytes inside a fixed-row-width hex view. The block spans
+// `width` bytes across `height` consecutive rows starting at `originOffset`, where
+// originOffset is the top-left byte (rowStart * bytesPerRow + colStart). Rectangular
+// selections are always anchored to a row width — if the viewport's bytes-per-row
+// changes after the rectangle is created, the selection must be cleared by the caller
+// because the geometry no longer maps to the same bytes on screen.
+struct RectSelection {
+    std::size_t originOffset = 0;
+    std::size_t width = 0;
+    std::size_t height = 0;
+    std::size_t bytesPerRow = 0;
+
+    bool active() const { return width > 0 && height > 0 && bytesPerRow > 0; }
+    std::size_t totalBytes() const { return width * height; }
+};
+
+// Build a rectangular selection from two corner byte offsets. Either order works
+// (anchor can be top-left, top-right, bottom-left, or bottom-right). Both offsets
+// are clamped to [0, totalLength] before computing the rectangle. Returns an inactive
+// rectangle (width=0 or height=0) when bytesPerRow is 0 or both offsets land on the
+// same byte.
+RectSelection makeRectSelection(std::size_t anchorOffset,
+                                std::size_t endOffset,
+                                std::size_t bytesPerRow,
+                                std::size_t totalLength);
+
+// Decompose the rectangle into one ByteRange per row, clipped to totalLength so the
+// last row may yield a shorter range when the rectangle extends past EOF. Returns an
+// empty vector for an inactive rectangle.
+std::vector<ByteRange> rectToRanges(const RectSelection &rect, std::size_t totalLength);
+
+// Extract a rectangle's bytes into a contiguous (width × height) buffer. Bytes that
+// fall past EOF are zero-filled so the returned buffer always has rect.totalBytes()
+// elements — this keeps the clipboard payload's shape stable even for rectangles
+// that overhang the end of the file. Returns false (and leaves out untouched) for
+// an inactive rectangle. Reads at most rect.width bytes per row from the source,
+// so the temporary memory cost stays bounded by the rect's geometry regardless of
+// the underlying file size.
+bool extractRectBytes(const ByteSource &source,
+                      const RectSelection &rect,
+                      std::vector<std::uint8_t> &out);
+
+// Hex-text rendering of a rectangle: each row's bytes formatted as space-separated
+// 2-digit uppercase hex pairs, rows joined by '\n'. Used for the public-text fallback
+// on the pasteboard so external apps see something usable, and for the parse-text
+// paste path (Q2.b) on incoming clipboards from external apps. Bytes that fall past
+// EOF render as "00" so the rect's shape stays stable.
+std::string formatRectClipboardHex(const ByteSource &source,
+                                   const RectSelection &rect);
+
+// Parse a `\n`-separated text clipboard back into a rectangular byte buffer. Each
+// non-empty line is treated as one row; the parser accepts either hex byte tokens
+// (e.g. "DE AD BE EF" or "DEADBEEF") or, if every line fails as hex, the raw bytes
+// of each line (UTF-8 encoded). All rows must have the same width — mismatched rows
+// fail the parse. On success, outBytes contains width*height bytes in row-major
+// order; outWidth and outHeight describe the shape. Returns false (and leaves the
+// out parameters untouched) on empty / shape-mismatched / unparseable input.
+bool parseRectClipboardText(const std::string &text,
+                            std::vector<std::uint8_t> &outBytes,
+                            std::size_t &outWidth,
+                            std::size_t &outHeight);
+
+// Strip the address column and trailing ASCII representation from a single line
+// of a hex dump, returning just the byte-data substring. Recognises patterns
+// emitted by common debuggers and hex tools:
+//   lldb   : "0x100000000: 48 65 6c 6c 6f 20 77 6f  Hello wo"
+//   gdb    : "0x7fff5fbff8c0: 0x48  0x65  0x6c  0x6c"
+//   xxd    : "00000000: 4865 6c6c 6f20 776f  Hello wo"
+//   x64dbg : "00007FF6BC471000 | 48 65 6C 6C 6F  Hello"
+//   IDA    : "0001:0000  48 65 6C 6C 6F 20 57 6F"
+//   C esc  : "\x48\x65\x6c\x6c"
+//   C arr  : "{ 0x48, 0x65, 0x6c, 0x6c }"
+//
+// The cleaning rules:
+//   * If the line opens with what looks like an address (4+ hex digits, optionally
+//     prefixed with "0x", possibly with a "0001:0000" segment+offset form) and is
+//     followed by a separator (":", "|", ">", or 2+ whitespace chars), strip
+//     everything up to and including the separator.
+//   * If the line contains 2+ consecutive whitespace chars and any non-hex / non-
+//     separator content follows them, strip from that gap to end of line — the
+//     trailing ASCII column.
+//   * Replace "\x" / "\X" with whitespace so C-string escapes split into tokens.
+//   * Replace braces/parens/brackets with whitespace so C array literals tokenise.
+//
+// Lines without an address pattern (e.g. plain "DE AD BE EF") pass through with
+// only the brace/escape transformations. Returns the cleaned line; never fails.
+std::string stripHexDumpAddressAndAscii(const std::string &line);
+
+// Wire-format constants for the custom-UTI pasteboard payload that carries a
+// rectangular selection between the plugin and itself across copy/paste. The
+// header is 20 bytes:
+//   [0..3]   magic = "HXR1"
+//   [4]      version (1)
+//   [5]      kind (RectClipboardKind)
+//   [6..7]   reserved (zero)
+//   [8..11]  width  (little-endian uint32)
+//   [12..15] height (little-endian uint32)
+//   [16..19] dataLength (little-endian uint32)
+//   [20..]   raw bytes (length = dataLength; 0 for kind=Addresses)
+extern const char kRectPayloadMagic[4];
+extern const std::uint8_t kRectPayloadVersion;
+extern const std::size_t kRectPayloadHeaderSize;
+
+enum class RectClipboardKind : std::uint8_t {
+    Bytes = 0,
+    Ascii = 1,
+    // (kind=2 was Addresses, retired in v1.1.x — the address column is no
+    // longer selectable so address-source clipboards no longer exist.)
+};
+
+struct RectPayload {
+    RectClipboardKind kind = RectClipboardKind::Bytes;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::uint32_t dataLength = 0;
+    const std::uint8_t *data = nullptr;
+};
+
+// Serialise a rect payload into the wire format. Always succeeds (returned vector
+// has size kRectPayloadHeaderSize + dataLength). When dataLength is 0, data may
+// be null — used for kind=Addresses where the text payload carries the user-visible
+// content and the structured payload is just the shape + kind tag.
+std::vector<std::uint8_t> encodeRectPayload(RectClipboardKind kind,
+                                            std::uint32_t width,
+                                            std::uint32_t height,
+                                            const std::uint8_t *data,
+                                            std::uint32_t dataLength);
+
+// Validate + parse a wire-format payload. Returns false on bad magic, version
+// mismatch, kind out of range, dataLength larger than the actual buffer, or
+// truncated header. On success, out.data points into the input buffer (no copy
+// is made — caller must not free the input until done with out).
+//
+// This is the function fed attacker-controlled bytes via the system pasteboard,
+// so all bounds checking happens here and only here. Any width/height/dataLength
+// is structurally validated against the input length. Caller is responsible for
+// the SEMANTIC check that dataLength == width * height before treating .data as
+// row-major byte content.
+bool decodeRectPayload(const std::uint8_t *bytes, std::size_t length, RectPayload &out);
 
 struct ByteEditOperation {
     std::size_t offset = 0;
@@ -187,8 +389,13 @@ bool parseSearchPattern(const std::string &text, bool matchCase, SearchPattern &
 // = before). When wrap is true and no match is found in the primary range, the search
 // continues from the opposite end up to startOffset (exclusive) — Windows wrap semantics.
 // matchCase = false is honoured only for SearchPatternKind::Ascii.
-bool findBytePattern(const std::uint8_t *haystack,
-                     std::size_t haystackLength,
+//
+// Implementation reads the haystack in 64 KB chunks (with needleLen-1 byte overlap so
+// matches straddling chunk boundaries are caught), so plugin RAM stays bounded by the
+// chunk size regardless of the underlying file size. SpanByteSource consumers see the
+// same memory cost as the previous raw-pointer API plus one chunk-sized memcpy per
+// 64 KB of haystack.
+bool findBytePattern(const ByteSource &haystack,
                      const SearchPattern &pattern,
                      std::size_t startOffset,
                      SearchDirection direction,
@@ -196,11 +403,114 @@ bool findBytePattern(const std::uint8_t *haystack,
                      std::size_t &outOffset);
 
 // Byte-level compare for the Compare HEX feature. Returns a bool-per-offset mask of
-// length max(lenA, lenB): mask[i] = true when the byte at offset i differs between the
-// two buffers (or when one buffer is shorter, so byte i is "missing"). Returns an empty
-// vector if both buffers are identical (i.e. lenA == lenB and all bytes match).
-std::vector<bool> computeByteDiffs(const std::uint8_t *a, std::size_t lenA,
-                                    const std::uint8_t *b, std::size_t lenB);
+// length max(a.length(), b.length()): mask[i] = true when the byte at offset i differs
+// between the two sources (or when one source is shorter, so byte i is "missing").
+// Returns an empty vector if both sources are identical (same length, same bytes).
+//
+// Implementation reads both sources in lock-stepped 64 KB chunks, so RAM stays bounded
+// by the chunk size during the compute path. The returned mask itself is unbounded
+// (length proportional to the larger source) — for very large files the mask may need
+// a separate streaming representation.
+std::vector<bool> computeByteDiffs(const ByteSource &a, const ByteSource &b);
+
+// =============================================================================
+// SCI buffer-read abstraction (testable without Scintilla)
+// =============================================================================
+//
+// readPreviewBuffer() consolidates the buffer-shape logic that used to live
+// inline in HexEditor.mm's readCurrentBuffer():
+//
+//   1. Compute bytesToRead = min(scintillaLength, previewLimit).
+//   2. Allocate bytesToRead + 1 (Scintilla writes a trailing NUL terminator
+//      at lpstrText[bytesToRead] — skipping the +1 caused a heap-buffer-overflow
+//      that ASan would have caught had we exercised this path under ASan).
+//   3. Send SCI_GETTEXTRANGEFULL via the abstract reader.
+//   4. Resize the result back to bytesToRead (drop the NUL slot).
+//
+// SciReader is the abstraction. The real implementation lives in HexEditor.mm
+// and forwards to sci(editor, ...). A FakeScintilla implementation in the unit
+// tests obeys the documented SCI_GETTEXTRANGEFULL contract — including writing
+// the NUL exactly where Scintilla does — so any heap-overrun in the buffer-shape
+// code is caught by ASan during the unit-test pass.
+class SciReader {
+public:
+    virtual ~SciReader() = default;
+
+    // Returns the document length in bytes (Scintilla's SCI_GETLENGTH).
+    virtual std::size_t documentLength() const = 0;
+
+    // Fills `dest` with bytes from [cpMin, cpMax). `dest` must have room for
+    // (cpMax - cpMin + 1) bytes — the trailing slot receives a NUL terminator
+    // per the SCI_GETTEXTRANGEFULL contract. Implementations MUST write that
+    // NUL so tests catch buffers sized without it.
+    virtual void readRange(std::size_t cpMin, std::size_t cpMax, char *dest) const = 0;
+};
+
+// Read up to `previewLimit` bytes from the start of the document via the
+// reader. Sets *outTotalLength to the document's full size (independent of
+// truncation). Returns the bytes; the returned vector's size is at most
+// previewLimit.
+std::vector<std::uint8_t> readPreviewBuffer(const SciReader &reader,
+                                            std::size_t previewLimit,
+                                            std::size_t *outTotalLength);
+
+// =============================================================================
+// WindowedScintillaByteSource — bounded-RAM ByteSource backed by SciReader
+// =============================================================================
+//
+// A ByteSource that reads bytes on demand from a Scintilla document via
+// SciReader::readRange, caching pages in a small LRU table so plugin RAM
+// stays bounded (default ~4 MB) regardless of document size. This is the
+// backend that lets the hex view scale to 20 GB files without a
+// proportional plugin allocation.
+//
+// Cache shape: `maxPages` pages of `pageSize` bytes each. On a cache miss
+// the source fetches one full page from Scintilla; on hit it bumps an LRU
+// counter. When at capacity, the least-recently-used page is evicted to
+// make room for the new one. With the defaults (64 pages × 64 KB), the
+// hot-window covers ~4 MB of the document — comfortably more than any
+// viewport — and a sequential scan (find / replace / compare) only needs
+// one round-trip per 64 KB of haystack.
+//
+// Length: read() and length() both consult SciReader::documentLength()
+// (cheap — SCI_GETLENGTH). Pages are stale after a document edit; plugin
+// code MUST call invalidate() after any modification that changes the
+// underlying bytes (typically from the SCN_MODIFIED notification handler).
+class WindowedScintillaByteSource : public ByteSource {
+public:
+    explicit WindowedScintillaByteSource(SciReader &reader,
+                                         std::size_t pageSize = 64 * 1024,
+                                         std::size_t maxPages = 64);
+
+    std::size_t length() const override;
+    std::size_t read(std::size_t offset, std::uint8_t *dest, std::size_t count) const override;
+
+    // Drop all cached pages. Call after any edit that mutates the underlying
+    // document so subsequent reads re-fetch fresh bytes.
+    void invalidate();
+
+    // Diagnostic accessors — handy for tests verifying cache behaviour.
+    std::size_t pageSize() const { return pageSize_; }
+    std::size_t maxPages() const { return maxPages_; }
+    std::size_t cachedPageCount() const { return pages_.size(); }
+
+private:
+    struct Page {
+        std::size_t pageIndex = 0;
+        std::vector<std::uint8_t> bytes;
+        std::uint64_t lru = 0;
+    };
+
+    SciReader &reader_;
+    std::size_t pageSize_;
+    std::size_t maxPages_;
+    mutable std::vector<Page> pages_;
+    mutable std::uint64_t lruCounter_;
+
+    // Loads (or refreshes the LRU stamp on) the page at `pageIndex` and
+    // returns a reference good until the next loadPage call.
+    const Page &loadPage(std::size_t pageIndex) const;
+};
 
 }
 

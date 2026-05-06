@@ -1,0 +1,199 @@
+/* Notepad++ HexEditor — Ukrainian (uk)
+ *
+ * Full translation. Keys mirror Localizable.en.strings; comments stay in
+ * English so future translators can diff against the canonical source.
+ *
+ * Format specifiers (%@, %d, %zu, %lu, %1$d, %1$@, etc.) are preserved
+ * verbatim. The "N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+" form embeds U+2060 Word Joiners and
+ * must be copied byte-for-byte from the English source.
+ *
+ * GitHub URLs are hard-coded — only the surrounding label text is
+ * translated.
+ */
+
+/* Plugin menu (Plugins > HexEditor > …) */
+"menu.plugin.viewInHex"            = "Перегляд у HEX";
+"menu.plugin.compareHex"           = "Порівняти HEX";
+"menu.plugin.clearCompareResult"   = "Очистити результат порівняння";
+"menu.plugin.insertColumns"        = "Вставити стовпці...";
+"menu.plugin.patternReplace"       = "Заміна за шаблоном...";
+"menu.plugin.options"              = "Параметри...";
+"menu.plugin.help"                 = "Довідка...";
+
+/* Right-click context menu on the hex view */
+"menu.context.undo"                = "Скасувати";
+"menu.context.redo"                = "Повторити";
+"menu.context.cut"                 = "Вирізати";
+"menu.context.copy"                = "Копіювати";
+"menu.context.paste"               = "Вставити";
+"menu.context.delete"              = "Видалити";
+"menu.context.selectAll"           = "Виділити все";
+"menu.context.selectToStart"       = "Виділити до початку файлу";
+"menu.context.selectToEnd"         = "Виділити до кінця файлу";
+"menu.context.cutBinary"           = "Вирізати двійковий вміст";
+"menu.context.copyBinary"          = "Копіювати двійковий вміст";
+"menu.context.pasteBinary"         = "Вставити двійковий вміст";
+"menu.context.find"                = "Знайти…";
+"menu.context.findReplace"         = "Знайти й замінити…";
+"menu.context.findNext"            = "Знайти далі";
+"menu.context.findPrevious"        = "Знайти попереднє";
+"menu.context.gotoOffset"          = "Перейти до зсуву…";
+"menu.context.viewIn"              = "Перегляд у";
+"menu.context.addressWidth"        = "Ширина адреси...";
+"menu.context.columns"             = "Стовпці...";
+"menu.context.zoomIn"              = "Збільшити";
+"menu.context.zoomOut"             = "Зменшити";
+"menu.context.zoomReset"           = "Відновити масштаб за замовчуванням";
+
+/* View-in submenu */
+"menu.viewIn.bits8"                = "8 біт";
+"menu.viewIn.bits16"               = "16 біт";
+"menu.viewIn.bits32"               = "32 біт";
+"menu.viewIn.bits64"               = "64 біт";
+"menu.viewIn.toBinary"             = "у двійковий";
+"menu.viewIn.toHex"                = "у шістнадцятковий";
+"menu.viewIn.toBigEndian"          = "у BigEndian";
+"menu.viewIn.toLittleEndian"       = "у LittleEndian";
+
+/* Common buttons */
+"button.ok"                        = "OK";
+"button.cancel"                    = "Скасувати";
+
+/* App / dialog identity */
+"app.title"                        = "HexEditor";
+"app.titleMac"                     = "HexEditor для macOS";
+"app.titleCompare"                 = "Порівняння HexEditor";
+
+/* Address Width dialog */
+"addressWidth.title"               = "Ширина адреси";
+"addressWidth.message"             = "Кількість цифр у стовпці зсуву (%1$d–%2$d).";
+"addressWidth.invalidRange"        = "Дозволено лише значення від %1$d до %2$d.";
+
+/* Columns dialog */
+"columns.title"                    = "Стовпці";
+"columns.message"                  = "Кількість комірок у рядку (1–%1$d за поточної розрядності).";
+"columns.invalidMaximum"           = "В одному рядку можна показати не більше %1$d байт.";
+
+/* Go to Offset dialog */
+"goto.title"                       = "Перейти до зсуву";
+"goto.message"                     = "Введіть зсув у байтах.\n  • Десятковий: 1234\n  • Шістнадцятковий: 0x4A2 (або 0X4A2)\n  • Відносний: +0x10 — перехід уперед, -100 — назад\n\nПоточний: 0x%1$@    Кінець: 0x%2$@";
+"goto.button"                      = "Перейти";
+"goto.placeholder"                 = "напр. 0x1F або +16";
+"goto.errorParse"                  = "Не вдалося розібрати зсув. Використовуйте десяткове значення, шістнадцяткове з префіксом 0x або префікс + / − для відносних переходів.";
+
+/* Find / Find and Replace dialog */
+"find.titleFind"                   = "Пошук у шістнадцятковому виді";
+"find.titleReplace"                = "Знайти й замінити";
+"find.message"                     = "Звичайний текст шукається у буфері як ASCII-байти.\nВикористовуйте префікс 0x або шістнадцяткові значення через пробіл (напр. 0xDEADBEEF або DE AD BE EF) для байтових шаблонів.";
+"find.button.findNext"             = "Знайти далі";
+"find.button.replaceAll"           = "Замінити все";
+"find.placeholder.find"            = "Знайти: текст або 0xDEADBEEF";
+"find.placeholder.replace"         = "Замінити на: текст або шістнадцяткові байти";
+"find.toggle.matchCase"            = "Враховувати регістр (тільки ASCII)";
+"find.toggle.wrap"                 = "Продовжувати з початку після кінця буфера";
+"find.errorNotFound"               = "Шаблон не знайдено.";
+"find.errorNoPriorSearch"          = "Попередній пошук відсутній. Спершу виконайте Знайти (Cmd+F).";
+"find.errorParseFind"              = "Не вдалося розібрати шаблон пошуку.";
+"find.errorParseReplace"           = "Не вдалося розібрати шаблон заміни.";
+"find.errorPatternEmpty"           = "Шаблон пошуку порожній.";
+"find.errorNoBuffer"               = "Немає активного буфера HEX.";
+"find.errorNoEditor"               = "Немає активного редактора.";
+"find.errorReplaceFailed"          = "Заміна не вдалася.";
+"find.errorReplaceCurrent"         = "Немає виділення для заміни. Спершу виконайте Знайти далі.";
+"find.errorReplaceLength"          = "Поточне виділення не відповідає довжині шаблону пошуку.";
+"find.errorReplaceFailedShort"     = "Заміна не вдалася.";
+"find.replacedSingular"            = "Замінено 1 збіг.";
+"find.replacedPlural"              = "Замінено збігів: %1$d.";
+
+/* Compare HEX */
+"compare.openHexFirstCompare"      = "Відкрийте HEX-перегляд (Перегляд у HEX), перш ніж використовувати Порівняти HEX.";
+"compare.openHexFirstRun"          = "Відкрийте HEX-перегляд (Перегляд у HEX), перш ніж запускати порівняння.";
+"compare.errorNoFile"              = "Файл для порівняння не вибрано.";
+"compare.errorReadFile"            = "Не вдалося прочитати %1$@: %2$@";
+"compare.errorReadUnknown"         = "невідома помилка";
+"compare.errorFailed"              = "Порівняння не вдалося.";
+"compare.openPanelTitle"           = "Порівняти HEX з…";
+"compare.openPanelMessage"         = "Виберіть файл для порівняння з поточним буфером.";
+"compare.summaryMatch"             = "Файли збігаються.";
+"compare.summaryDifferSingular"    = "Відрізняється 1 байт.\nВикористовуйте Очистити результат порівняння, щоб прибрати підсвічування.";
+"compare.summaryDifferPlural"      = "Відрізняється байт: %1$d.\nВикористовуйте Очистити результат порівняння, щоб прибрати підсвічування.";
+"compare.noActiveResult"           = "Немає активного порівняння для очищення.";
+
+/* Insert Columns */
+"insertColumns.openHexFirst"       = "Відкрийте HEX-перегляд (Перегляд у HEX), перш ніж використовувати Вставити стовпці.";
+"insertColumns.title"              = "Вставити стовпці";
+"insertColumns.message"            = "Вставляє шістнадцятковий шаблон у кожен рядок у вибраній позиції стовпця. Кожен рядок зростає на (кількість × %1$d) байт; число стовпців зростає на `кількість`.\n\nШаблон: тільки шістнадцяткові байти (напр. 0x00 або DE AD).\nКількість: від 1 до %2$d за поточного групування %3$d біт.\nПозиція: від 0 до %4$d (поточне число стовпців).";
+"insertColumns.button"             = "Вставити";
+"insertColumns.placeholder.pattern"  = "Шаблон (hex): 0xFF або DE AD";
+"insertColumns.placeholder.count"    = "Кількість (стовпців для вставлення)";
+"insertColumns.placeholder.position" = "Позиція (індекс стовпця, 0 = лівий край)";
+"insertColumns.errorEmptyPattern"  = "Шаблон порожній.";
+"insertColumns.errorParsePattern"  = "Шаблон має бути послідовністю шістнадцяткових байт (напр. 0x00, DE AD BE EF).";
+"insertColumns.errorRangeCount"    = "Кількість стовпців має бути від 1 до %1$d за поточної розрядності.";
+"insertColumns.errorRangePosition" = "Позиція вставлення має бути від 0 до %1$d (поточне число стовпців).";
+"insertColumns.errorBufferEmpty"   = "Буфер порожній — немає куди вставляти.";
+"insertColumns.errorRowSize"       = "Неприпустимий розмір поточного рядка.";
+"insertColumns.errorFailed"        = "Вставлення не вдалося.";
+"insertColumns.summarySingularRows" = "Вставлено стовпців: %1$d%2$@ у 1 рядку.";
+"insertColumns.summaryPluralRows"   = "Вставлено стовпців: %1$d%2$@ у %3$d рядках.";
+
+/* Pattern Replace */
+"patternReplace.openHexFirst"      = "Відкрийте HEX-перегляд (Перегляд у HEX), перш ніж використовувати Заміну за шаблоном.";
+"patternReplace.requireSelection"  = "Спершу виділіть щось у HEX-перегляді — Заміна за шаблоном заповнює виділення.";
+"patternReplace.title"             = "Заміна за шаблоном";
+"patternReplace.message"           = "Заповнює поточне виділення з %1$zu байт повторюваним шістнадцятковим шаблоном.\n\nШаблон: тільки шістнадцяткові байти (напр. 0xFF або DE AD).";
+"patternReplace.button"            = "Замінити";
+"patternReplace.placeholder"       = "Шаблон (hex): 0xFF або DE AD";
+"patternReplace.errorEmptyPattern" = "Шаблон порожній.";
+"patternReplace.errorParsePattern" = "Шаблон має бути послідовністю шістнадцяткових байт (напр. 0xFF або DE AD BE EF).";
+"patternReplace.errorFailed"       = "Заміна за шаблоном не вдалася.";
+"patternReplace.summarySingular"   = "Замінено 1 байт за шаблоном.";
+"patternReplace.summaryPlural"     = "Замінено байт за шаблоном: %1$d.";
+
+/* Status bar (substring-matched by UI tests — wording is contractual) */
+"status.empty"                     = "Поточний документ порожній.";
+"status.showing"                   = "Показано байт: %1$zu.";
+"status.rectangle"                 = "Прямокутник: %1$lu × %2$lu (%3$lu байт)";
+
+/* Rectangular paste error dialogs (strict shape-match, see DEVELOPER.md) */
+"paste.rect.errorNeedsRectDestination" = "Призначення має бути прямокутним виділенням %1$lu × %2$lu байт. Перетягніть з Option (або Shift+Option, відповідно до Параметрів), щоб створити його.";
+"paste.rect.errorShapeMismatch"      = "Призначення має неправильний розмір — має бути %1$lu байт у ширину та %2$lu байт у висоту.";
+
+/* Pattern Replace — rectangular variant (per-row pattern restart) */
+"patternReplace.messageRect"         = "Заповнює поточний прямокутник %1$lu × %2$lu повторюваним шістнадцятковим шаблоном.\nШаблон починається спочатку з першого байта кожного рядка.\n\nШаблон: тільки шістнадцяткові байти (напр. 0xFF або DE AD).";
+"patternReplace.summaryRect"         = "Прямокутник %1$lu × %2$lu (%3$lu байт) заповнено за шаблоном.";
+
+/* About / help dialog. The "N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+" form preserves the U+2060
+   Word Joiners and must be copied byte-for-byte from the English source. */
+"about.body"                       = "Нативний порт плагіна HEX-Editor для N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+ під macOS. Надає вбудовану шістнадцяткову таблицю з прямим редагуванням байт, виділенням, закладками, пошуком/заміною, порівнянням і перемиканням режиму перегляду.";
+"about.version"                    = "Версія %1$@";
+"about.url"                        = "Проєкт: https://github.com/dhadner/NPP_HexEdit";
+"about.localeTag"                  = "Strings: uk";
+"about.localizationGuide"          = "Допомогти з перекладом: https://github.com/dhadner/NPP_HexEdit/blob/master/LOCALIZATION.md";
+
+/* Quit-time clipboard prompt */
+"clipboard.saveOnQuit.title"       = "Зберегти вміст буфера обміну?";
+"clipboard.saveOnQuit.body"        = "Ви скопіювали %1$@ з HEX-перегляду. Зберегти у буфері обміну, щоб інші програми могли вставити ці дані після закриття HEX-Editor? Відмова негайно звільняє пам'ять.";
+"clipboard.saveOnQuit.keepButton"  = "Зберегти";
+"clipboard.saveOnQuit.discardButton" = "Відмовитися";
+
+/* Generic error paths used when toggling between Scintilla / hex view */
+"editor.noActiveBuffer"            = "Немає доступного активного буфера редактора.";
+"editor.noActiveView"              = "Не вдалося знайти активне подання редактора для заміни.";
+
+/* Column headers in the hex table */
+"table.header.offset"              = "Зсув";
+"table.header.ascii"               = "ASCII";
+
+/* Help popovers (shared) */
+"help.button.axLabel"              = "Довідка";
+
+/* Options dialog (Plugins > HexEditor > Options...) */
+"options.title"                    = "Параметри HexEditor";
+"options.message"                  = "Загальні налаштування плагіна. Скинути відновлює значення за замовчуванням, показані нижче; натисніть Застосувати для підтвердження.";
+"options.button.apply"             = "Застосувати";
+"options.button.reset"             = "Скинути до значень за замовчуванням";
+"options.rectModifier.label"       = "Клавіша-модифікатор для прямокутного (блочного) виділення:";
+"options.rectModifier.option"      = "Option (за замовчуванням; відповідає плагіну HexEditor для Windows)";
+"options.rectModifier.shiftOption" = "Shift+Option (відповідає VS Code)";
+"options.rectModifier.help"        = "Під час перетягування у HEX- або ASCII-панелі утримання цієї клавіші перетворює перетягування на прямокутне (блочне) виділення — той самий тип виділення, який використовують HEX-редактори та текстові редактори у режимі стовпців.\n\nOption — значення за замовчуванням: відповідає плагіну HexEditor для Windows і конвенції виділення стовпців у macOS. Виберіть Shift+Option, якщо ваша м'язова пам'ять сформована Visual Studio Code.";

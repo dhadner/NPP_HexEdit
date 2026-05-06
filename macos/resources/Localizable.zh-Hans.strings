@@ -1,0 +1,193 @@
+/* Notepad++ HexEditor — Simplified Chinese (zh-Hans)
+ *
+ * Translated from Localizable.en.strings 2026-05-05. Comments stay in
+ * English so future translators can follow the maintainer's notes.
+ */
+
+/* Plugin menu (Plugins > HexEditor > …) */
+"menu.plugin.viewInHex"            = "以十六进制查看";
+"menu.plugin.compareHex"           = "比较十六进制";
+"menu.plugin.clearCompareResult"   = "清除比较结果";
+"menu.plugin.insertColumns"        = "插入列...";
+"menu.plugin.patternReplace"       = "模式替换...";
+"menu.plugin.options"              = "选项...";
+"menu.plugin.help"                 = "帮助...";
+
+/* Right-click context menu on the hex view */
+"menu.context.undo"                = "撤销";
+"menu.context.redo"                = "重做";
+"menu.context.cut"                 = "剪切";
+"menu.context.copy"                = "复制";
+"menu.context.paste"               = "粘贴";
+"menu.context.delete"              = "删除";
+"menu.context.selectAll"           = "全选";
+"menu.context.selectToStart"       = "选择到文件开头";
+"menu.context.selectToEnd"         = "选择到文件结尾";
+"menu.context.cutBinary"           = "剪切二进制内容";
+"menu.context.copyBinary"          = "复制二进制内容";
+"menu.context.pasteBinary"         = "粘贴二进制内容";
+"menu.context.find"                = "查找…";
+"menu.context.findReplace"         = "查找并替换…";
+"menu.context.findNext"            = "查找下一个";
+"menu.context.findPrevious"        = "查找上一个";
+"menu.context.gotoOffset"          = "转到偏移…";
+"menu.context.viewIn"              = "查看为";
+"menu.context.addressWidth"        = "地址宽度...";
+"menu.context.columns"             = "列数...";
+"menu.context.zoomIn"              = "放大";
+"menu.context.zoomOut"             = "缩小";
+"menu.context.zoomReset"           = "恢复默认缩放";
+
+/* View-in submenu */
+"menu.viewIn.bits8"                = "8 位";
+"menu.viewIn.bits16"               = "16 位";
+"menu.viewIn.bits32"               = "32 位";
+"menu.viewIn.bits64"               = "64 位";
+"menu.viewIn.toBinary"             = "改为二进制";
+"menu.viewIn.toHex"                = "改为十六进制";
+"menu.viewIn.toBigEndian"          = "改为大端序";
+"menu.viewIn.toLittleEndian"       = "改为小端序";
+
+/* Common buttons */
+"button.ok"                        = "确定";
+"button.cancel"                    = "取消";
+
+/* App / dialog identity. "HexEditor" stays as a proper-noun trademark. */
+"app.title"                        = "HexEditor";
+"app.titleMac"                     = "macOS 版 HexEditor";
+"app.titleCompare"                 = "HexEditor 比较";
+
+/* Address Width dialog */
+"addressWidth.title"               = "地址宽度";
+"addressWidth.message"             = "偏移列中的数字位数(%1$d–%2$d)。";
+"addressWidth.invalidRange"        = "仅支持 %1$d 到 %2$d 之间的值。";
+
+/* Columns dialog */
+"columns.title"                    = "列数";
+"columns.message"                  = "每行的单元格数(在当前位宽下为 1–%1$d)。";
+"columns.invalidMaximum"           = "一行最多显示 %1$d 个字节。";
+
+/* Go to Offset dialog */
+"goto.title"                       = "转到偏移";
+"goto.message"                     = "输入字节偏移量。\n  • 十进制:1234\n  • 十六进制:0x4A2(或 0X4A2)\n  • 相对值:+0x10 向前跳,-100 向后跳\n\n当前:0x%1$@    末尾:0x%2$@";
+"goto.button"                      = "转到";
+"goto.placeholder"                 = "例如 0x1F 或 +16";
+"goto.errorParse"                  = "无法解析偏移量。请使用十进制值、0x 前缀的十六进制值,或 + / - 前缀进行相对跳转。";
+
+/* Find / Find and Replace dialog */
+"find.titleFind"                   = "在十六进制中查找";
+"find.titleReplace"                = "查找并替换";
+"find.message"                     = "纯文本以 ASCII 字节搜索缓冲区。\n字节模式请使用 0x 前缀或以空格分隔的十六进制(例如 0xDEADBEEF 或 DE AD BE EF)。";
+"find.button.findNext"             = "查找下一个";
+"find.button.replaceAll"           = "全部替换";
+"find.placeholder.find"            = "查找:文本或 0xDEADBEEF";
+"find.placeholder.replace"         = "替换为:文本或十六进制字节";
+"find.toggle.matchCase"            = "区分大小写(仅 ASCII)";
+"find.toggle.wrap"                 = "在缓冲区末尾循环";
+"find.errorNotFound"               = "未找到模式。";
+"find.errorNoPriorSearch"          = "尚未搜索。请先使用查找(Cmd+F)。";
+"find.errorParseFind"              = "无法解析查找模式。";
+"find.errorParseReplace"           = "无法解析替换模式。";
+"find.errorPatternEmpty"           = "查找模式为空。";
+"find.errorNoBuffer"               = "没有活动的十六进制缓冲区。";
+"find.errorNoEditor"               = "没有活动的编辑器。";
+"find.errorReplaceFailed"          = "替换失败。";
+"find.errorReplaceCurrent"         = "没有要替换的选择。请先使用查找下一个。";
+"find.errorReplaceLength"          = "当前选择与查找模式的长度不匹配。";
+"find.errorReplaceFailedShort"     = "替换失败。";
+"find.replacedSingular"            = "替换了 1 处。";
+"find.replacedPlural"              = "替换了 %1$d 处。";
+
+/* Compare HEX */
+"compare.openHexFirstCompare"      = "使用比较十六进制之前请先打开十六进制视图(以十六进制查看)。";
+"compare.openHexFirstRun"          = "运行比较之前请先打开十六进制视图(以十六进制查看)。";
+"compare.errorNoFile"              = "未选择比较文件。";
+"compare.errorReadFile"            = "无法读取 %1$@:%2$@";
+"compare.errorReadUnknown"         = "未知错误";
+"compare.errorFailed"              = "比较失败。";
+"compare.openPanelTitle"           = "比较十六进制与…";
+"compare.openPanelMessage"         = "选择要与当前缓冲区比较的文件。";
+"compare.summaryMatch"             = "文件匹配。";
+"compare.summaryDifferSingular"    = "存在 1 字节差异。\n请使用清除比较结果以移除高亮。";
+"compare.summaryDifferPlural"      = "存在 %1$d 字节差异。\n请使用清除比较结果以移除高亮。";
+"compare.noActiveResult"           = "没有要清除的活动比较。";
+
+/* Insert Columns */
+"insertColumns.openHexFirst"       = "使用插入列之前请先打开十六进制视图(以十六进制查看)。";
+"insertColumns.title"              = "插入列";
+"insertColumns.message"            = "在每行的指定列位置插入十六进制模式。每行增加(数量 × %1$d)字节,列数增加“数量”。\n\n模式:仅十六进制字节(例如 0x00 或 DE AD)。\n数量:在当前 %3$d 位分组下为 1 到 %2$d。\n位置:0 到 %4$d(当前列数)。";
+"insertColumns.button"             = "插入";
+"insertColumns.placeholder.pattern"  = "模式(十六进制):0xFF 或 DE AD";
+"insertColumns.placeholder.count"    = "数量(要插入的列数)";
+"insertColumns.placeholder.position" = "位置(列索引,0 = 左边)";
+"insertColumns.errorEmptyPattern"  = "模式为空。";
+"insertColumns.errorParsePattern"  = "模式必须是十六进制字节序列(例如 0x00、DE AD BE EF)。";
+"insertColumns.errorRangeCount"    = "在当前位宽下,列数必须为 1 到 %1$d 之间。";
+"insertColumns.errorRangePosition" = "插入位置必须为 0 到 %1$d 之间(当前列数)。";
+"insertColumns.errorBufferEmpty"   = "缓冲区为空 — 无可插入位置。";
+"insertColumns.errorRowSize"       = "当前行大小无效。";
+"insertColumns.errorFailed"        = "插入失败。";
+"insertColumns.summarySingularRows" = "在 1 行中插入了 %1$d 列%2$@。";
+"insertColumns.summaryPluralRows"   = "在 %3$d 行中插入了 %1$d 列%2$@。";
+
+/* Pattern Replace */
+"patternReplace.openHexFirst"      = "使用模式替换之前请先打开十六进制视图(以十六进制查看)。";
+"patternReplace.requireSelection"  = "请先在十六进制视图中选择内容 — 模式替换将填充该选择。";
+"patternReplace.title"             = "模式替换";
+"patternReplace.message"           = "用重复的十六进制模式填充当前 %1$zu 字节选择。\n\n模式:仅十六进制字节(例如 0xFF 或 DE AD)。";
+"patternReplace.button"            = "替换";
+"patternReplace.placeholder"       = "模式(十六进制):0xFF 或 DE AD";
+"patternReplace.errorEmptyPattern" = "模式为空。";
+"patternReplace.errorParsePattern" = "模式必须是十六进制字节序列(例如 0xFF 或 DE AD BE EF)。";
+"patternReplace.errorFailed"       = "模式替换失败。";
+"patternReplace.summarySingular"   = "用该模式替换了 1 字节。";
+"patternReplace.summaryPlural"     = "用该模式替换了 %1$d 字节。";
+
+/* Status bar (substring-matched by UI tests — wording is contractual) */
+"status.empty"                     = "当前文档为空。";
+"status.showing"                   = "正在显示 %1$zu 字节。";
+"status.rectangle"                 = "矩形:%1$lu × %2$lu(%3$lu 字节)";
+
+/* Rectangular paste error dialogs (strict shape-match, see DEVELOPER.md) */
+"paste.rect.errorNeedsRectDestination" = "目标必须是 %1$lu × %2$lu 字节的矩形选择。按 Option 拖动(或按选项中的 Shift+Option 拖动)即可创建。";
+"paste.rect.errorShapeMismatch"      = "目标大小不正确 — 必须为 %1$lu 字节宽 %2$lu 字节高。";
+
+/* Pattern Replace — rectangular variant (per-row pattern restart) */
+"patternReplace.messageRect"         = "用重复的十六进制模式填充当前 %1$lu × %2$lu 矩形。\n模式在每行的第一个字节处重新开始。\n\n模式:仅十六进制字节(例如 0xFF 或 DE AD)。";
+"patternReplace.summaryRect"         = "用该模式填充了 %1$lu × %2$lu 矩形(%3$lu 字节)。";
+
+/* About / help dialog. The "N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+" form preserves the U+2060
+   Word Joiners from the source file so the proper noun stays atomic
+   against word-wrap. */
+"about.body"                       = "N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+ HEX-Editor 插件的原生 macOS 移植版。提供内嵌十六进制表格,支持直接字节编辑、选择、书签、查找/替换、比较以及视图模式切换。";
+"about.version"                    = "版本 %1$@";
+"about.url"                        = "项目:https://github.com/dhadner/NPP_HexEdit";
+"about.localeTag"                  = "Strings: zh-Hans";
+"about.localizationGuide"          = "帮助翻译:https://github.com/dhadner/NPP_HexEdit/blob/master/LOCALIZATION.md";
+
+/* Quit-time clipboard prompt (Office/Word pattern) */
+"clipboard.saveOnQuit.title"       = "保留剪贴板内容?";
+"clipboard.saveOnQuit.body"        = "您从 HEX 视图复制了 %1$@。保留在剪贴板上以便 HEX-Editor 关闭后其他应用可以粘贴吗?丢弃将立即释放内存。";
+"clipboard.saveOnQuit.keepButton"  = "保留";
+"clipboard.saveOnQuit.discardButton" = "丢弃";
+
+/* Generic error paths */
+"editor.noActiveBuffer"            = "没有可用的活动编辑器缓冲区。";
+"editor.noActiveView"              = "找不到要替换的活动编辑器视图。";
+
+/* Column headers in the hex table */
+"table.header.offset"              = "偏移";
+"table.header.ascii"               = "ASCII";
+
+/* Help popovers (shared) */
+"help.button.axLabel"              = "帮助";
+
+/* Options dialog (Plugins > HexEditor > Options...) */
+"options.title"                    = "HexEditor 选项";
+"options.message"                  = "插件全局偏好设置。重置会恢复下面显示的默认值,点击保存即可应用。";
+"options.button.apply"             = "应用";
+"options.button.reset"             = "恢复默认值";
+"options.rectModifier.label"       = "矩形(块)选择拖动的修饰键:";
+"options.rectModifier.option"      = "Option(默认;与 Windows HexEditor 插件一致)";
+"options.rectModifier.shiftOption" = "Shift+Option(与 VS Code 一致)";
+"options.rectModifier.help"        = "在十六进制或 ASCII 窗格中拖动时,按住此修饰键会将拖动变为矩形(块)选择 — 这与十六进制编辑器和列模式文本编辑器使用的选择方式相同。\n\nOption 是默认值 — 与 Windows HexEditor 插件以及 macOS 上的列选择约定一致。如果您的肌肉记忆来自 Visual Studio Code,请选择 Shift+Option。";

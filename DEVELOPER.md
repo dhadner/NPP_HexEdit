@@ -1,6 +1,6 @@
 # Developer guide
 
-How to build, test, and contribute to the macOS port of the Notepad++ HEX-Editor
+How to build, test, and contribute to the macOS port of the Notepad++ HexEditor
 plugin. If you only want to *use* the plugin, see [README.md](README.md) instead.
 
 ## Quick start
@@ -25,16 +25,16 @@ ctest --test-dir macos/build-universal -L "unit|smoke" --output-on-failure
 ```
 
 If the unit + smoke tiers pass and the host launches with the plugin enabled
-(Plugins → HEX-Editor menu present), you have a working dev loop.
+(Plugins → HexEditor menu present), you have a working dev loop.
 
 ## Prerequisites
 
 | Tool | Why | Install |
-|---|---|---|
+| --- | --- | --- |
 | macOS 11+ | Build target | n/a |
 | Xcode 15+ | Compiler, SDK, XCTest | App Store, or `xcodes install --latest` |
 | Xcode CLT | `xcode-select`, `clang`, `cmake` discovery | `sudo xcode-select --install` |
-| Homebrew | Dependency installer | https://brew.sh |
+| Homebrew | Dependency installer | <https://brew.sh> |
 | CMake ≥ 3.20 | Build system | `brew install cmake` |
 | Git | Source control | `brew install git` |
 | XcodeGen | Generates the XCTest UI project from `project.yml` | `brew install xcodegen` |
@@ -123,7 +123,7 @@ NPP_MACOS_APP=/Applications/Notepad++.app macos/ui-tests-xcode/run-tests.sh
 
 The risk: if the installed binary was built against a different version of
 the NPP plugin API than your headers, the plugin can fail to load at runtime
-(symptom: HEX-Editor doesn't appear under the host's Plugins menu). When the
+(symptom: HexEditor doesn't appear under the host's Plugins menu). When the
 host's plugin API is stable, this isn't an issue. If you see the plugin not
 load, build the host from source and try again — that eliminates version
 drift as a variable.
@@ -138,7 +138,7 @@ Either way, the plugin itself rebuilds in seconds every time you change a
 cmake -S macos -B macos/build-universal -DCMAKE_BUILD_TYPE=Release
 cmake --build macos/build-universal
 
-# Install to ~/.notepad++/plugins/HexEditor/ (also copies the .strings files).
+# Install to ~/.notepad++/plugins/HexEditor/ (also copies the .strings files + toolbar icons).
 cmake --install macos/build-universal
 ```
 
@@ -174,7 +174,7 @@ A "does the plugin even load?" test. It dynamically loads the built `.dylib`
 file and checks that:
 
 - the five functions Notepad++ expects to find are all there
-- `getName()` returns `"HEX-Editor"`
+- `getName()` returns `"HexEditor"`
 - the right number of menu items are registered, with the expected English titles
 
 The test forces the plugin to use English so the title assertions don't depend
@@ -224,6 +224,40 @@ happened — no need to scroll xcodebuild output.
 **The UI tier locks your keyboard and mouse for the duration of the run** —
 ~14 min for the full suite. The next section describes how to avoid this.
 
+### Tier 4 — Sanitizers + libFuzzer (`ctest -L fuzz`, opt-in)
+
+A separate build directory builds the C++ tests under AddressSanitizer +
+UndefinedBehaviorSanitizer, optionally with libFuzzer harnesses against the
+parsers in HexCore that consume attacker-controlled data (the custom-UTI
+binary payload + the Q2.b text fallback). See
+[macos/fuzz/README.md](macos/fuzz/README.md) for the harness inventory.
+
+ASan + UBSan only (works with Apple Clang, no extra install):
+
+```sh
+cmake -S macos -B macos/build-asan -DENABLE_SANITIZERS=ON -DCMAKE_OSX_ARCHITECTURES=arm64
+cmake --build macos/build-asan
+ctest --test-dir macos/build-asan -L "unit|smoke" --output-on-failure
+```
+
+Adds ASan + UBSan + libFuzzer (requires `brew install llvm` because Apple
+Clang ships the `-fsanitize=fuzzer` flag but not the runtime archive):
+
+```sh
+cmake -S macos -B macos/build-fuzz -DENABLE_FUZZ_TESTS=ON \
+  -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ \
+  -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang
+cmake --build macos/build-fuzz
+ctest --test-dir macos/build-fuzz -L fuzz --output-on-failure
+```
+
+Each fuzz harness runs for `FUZZ_DURATION_SEC` seconds (30 by default;
+override via `-DFUZZ_DURATION_SEC=N`). For a longer soak against one harness:
+
+```sh
+./macos/build-fuzz/fuzz_decodeRectPayload -max_total_time=600 -print_final_stats=1
+```
+
 ## Running UI tests in a VM (recommended)
 
 Running UI tests in a VM lets you keep using your Mac while the suite executes.
@@ -238,6 +272,7 @@ about 30 minutes (mostly Xcode download time).
 
 2. **Install Xcode** in the guest from the App Store (~30 GB download). Open
    it once to accept the license. Then in a guest Terminal:
+
    ```sh
    sudo xcodebuild -runFirstLaunch
    sudo xcodebuild -license accept
@@ -252,6 +287,7 @@ about 30 minutes (mostly Xcode download time).
    folder, installs Homebrew + xcodegen + cmake + git, builds the plugin to a
    VM-local directory for speed, runs the unit + smoke tiers, and writes
    `~/.npp-hexedit-vm.env` with the discovered paths):
+
    ```sh
    "/Volumes/My Shared Files/.../NPP_HexEdit/macos/scripts/vm-bootstrap.sh"
    ```
@@ -259,6 +295,17 @@ about 30 minutes (mostly Xcode download time).
 5. **Grant Accessibility permission to Xcode** in the guest's
    System Settings → Privacy & Security → Accessibility (same as the host
    pre-flight above).
+
+6. **Grant Accessibility permission to the test runner on its first run.**
+   Run `~/vm-test-local.sh` once with the VM's desktop visible. macOS will
+   show a one-time prompt for `HexEditorUITestRunner` — click "Allow",
+   then verify the entry is checked in System Settings → Privacy & Security
+   → Accessibility. Subsequent runs are unattended (the script preserves
+   DerivedData so the runner's ad-hoc code hash stays stable, which keeps
+   the TCC grant valid). If you see "Timed out while enabling automation
+   mode" in the test log, the grant was lost — repeat this step. Pass
+   `--clean` to vm-test-local.sh to force a DerivedData wipe (you'll need
+   to re-grant after).
 
 ### Daily UI test runs
 
@@ -274,11 +321,15 @@ Inside the guest, after a host-side edit:
 The local copy avoids a Parallels SMB caching quirk where bash reads the
 shared script with stale content even after the host edits it.
 
-The script: rebuilds the plugin, wipes `~/Library/Developer/Xcode/DerivedData/HexEditorUITests-*`
-(needed because SMB mtime staleness confuses xcodebuild's incremental
-compiler), runs xcodebuild against a VM-local mirror of the test source, and
-copies the result bundle + Markdown summary back to the shared folder so you
-can read them on the host.
+The script: rebuilds the plugin; rsyncs `--checksum` the test source from the
+shared folder to a VM-local mirror (so xcodebuild compiles from VM-local
+files, sidestepping the SMB-caching quirk where swiftc would see stale
+content); runs xcodebuild from there; and copies the result bundle + Markdown
+summary back to the shared folder so you can read them on the host. By
+default DerivedData is preserved between runs so the test runner's ad-hoc
+code hash stays stable and TCC's Accessibility grant survives. Pass
+`--clean` to wipe DerivedData (and re-grant the runner's Accessibility
+permission afterward).
 
 You can also drive everything via SSH from the host:
 
@@ -402,16 +453,70 @@ The plugin is two files plus a header: an Objective-C++ adapter
   → write it in `HexEditor.mm`. If it produces state worth checking from a
   test, expose it through the diagnostic accessibility element
   (`hex-editor.cursor.diagnostic`) so the test suite can read it.
-- **A new top-level menu entry under Plugins → HEX-Editor** → register it in
+- **A new top-level menu entry under Plugins → HexEditor** → register it in
   the plugin's `setInfo` function (which sets the menu count and the title
   of each entry), then update `HexEditorPluginSmokeTests` so it asserts the
   new count and title.
+- **Localized strings with two or more parameters** → use numbered
+  positional placeholders (`%1$d`, `%2$@`, ...). Bare `%d`/`%@` repeated
+  prevents translators from reordering for languages where parameters
+  naturally appear in a different sequence. If the call site needs dynamic
+  width (e.g. `%0*zx`), pre-format that argument into an `NSString *` at
+  the call site and pass it as a simple `%1$@` so translators don't have
+  to know printf's dynamic-width syntax. The grep
+  `grep -E '"[^"]+"\s*=\s*"[^"]*%[^1-9$%][^%]*%[^1-9$]' Localizable.*.strings`
+  finds violators.
+
+### Rectangular (block) selection internals
+
+Three layers, mirrored across `HexCore` and `HexEditor.mm`:
+
+- **Geometry** — `hexedit::RectSelection` carries `originOffset`, `width`,
+  `height`, and the `bytesPerRow` it was anchored to. Pure helpers
+  (`makeRectSelection`, `rectToRanges`, `extractRectBytes`) live in
+  `HexCore` and are unit-tested. The "anchored to bytesPerRow" field is
+  the load-bearing invariant: any code path that changes `currentBytesPerRow()`
+  (Columns dialog, View-in submode, hex-view toggle) must call
+  `clearRectSelection()` because the rect's column coordinates no longer
+  map to the same bytes on screen.
+- **Interaction** in `HexEditor.mm` — `mouseDown:` / `mouseDragged:` /
+  `mouseUp:` branch on a modifier match against `currentRectModifierFlags()`
+  (Option or Shift+Option, per Options dialog). Drags only originate in
+  the hex byte or ASCII pane; clicks on the address column toggle a
+  bookmark on the row regardless of modifier. `keyDown:` matches
+  Shift+modifier+arrow before the plain-arrow switch and bootstraps a 1×1
+  rect at the caret on first use. Plain arrows / typing /
+  `clearAllByteSelections()` collapse the rect.
+- **Clipboard** — every rect copy emits two pasteboard items: a
+  public-text fallback (space-separated hex bytes per row, joined by
+  `\n`) for cross-app use, plus a custom UTI
+  `org.notepad-plus-plus.HexEditor.rectangular` that carries a 20-byte
+  header (`HXR1` magic, version, kind, width, height, dataLength)
+  followed by the raw bytes. Paste reads the custom UTI first
+  (preserving shape and source-pane kind), falling back to
+  `parseRectClipboardText` on the public-text payload when no custom UTI
+  is present. `kind = Bytes` and `kind = Ascii` are interchangeable
+  since both carry the same byte data with different display
+  interpretations — the address column is not selectable, so address-source
+  clipboards do not exist. Strict shape-match — `dest.width × dest.height`
+  must equal payload `width × height` — is enforced before any byte is
+  written.
+
+The diagnostic AX value (`hex-editor.cursor.diagnostic`) exposes
+`rectActive`, `rectOrigin`, `rectWidth`, `rectHeight`, `rectBpr`, and
+`rectOriginPane` so XCUI tests can verify rect state structurally rather
+than via fragile drag mechanics. The Swift parser in
+[macos/ui-tests-xcode/Tests/HexEditorUITests.swift](macos/ui-tests-xcode/Tests/HexEditorUITests.swift)
+reads these into `HexCursorState` for assertion.
 
 ## Releasing
 
-See [CHANGELOG.md](CHANGELOG.md) for the v1.0.0 release notes structure. Each
-release entry documents shipped behavior, divergences from the Windows
-baseline, and the test tiers' state at release time.
+See [CHANGELOG.md](CHANGELOG.md) for the release-notes structure (current
+shape: a v1.x.x heading, sub-sections for "What's new" / tests added /
+divergence updates). Each release entry documents shipped behavior,
+divergences from the Windows baseline, and the test tiers' state at release
+time. Bump `project(... VERSION x.y.z ...)` in
+[macos/CMakeLists.txt](macos/CMakeLists.txt) before tagging.
 
 ## License
 

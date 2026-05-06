@@ -1,0 +1,16 @@
+# Workspace-root clangd config. The macos/.clangd file is discovered when clangd
+# walks up from a source file under macos/, but some IDE configurations launch
+# clangd from the workspace root and only consult .clangd files at or above the
+# launch directory — leaving sources at unrelated paths (e.g. tests opened via
+# Ctrl+P that don't resolve through the macos/ tree on first index) without a
+# compilation database. This file mirrors macos/.clangd so the discovery succeeds
+# from either side.
+#
+# `If` constrains the rule to files actually under macos/ — clangd otherwise
+# applies the database to anything in the workspace, including files outside the
+# macOS port (the original Windows source under HexEditor/) where the macOS-only
+# include paths and -arch flags would produce confusing errors.
+If:
+  PathMatch: macos/.*
+CompileFlags:
+  CompilationDatabase: macos/build-universal

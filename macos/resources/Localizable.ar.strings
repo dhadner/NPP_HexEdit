@@ -1,0 +1,205 @@
+/* Notepad++ HexEditor — Arabic (ar)
+ *
+ * Full translation. Keys mirror Localizable.en.strings; comments stay in
+ * English so future translators can diff against the canonical source.
+ *
+ * Format specifiers (%1$@, %1$d, %1$zu, %1$lu, %2$@, etc.) are preserved
+ * verbatim. The "N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+" form embeds U+2060 Word Joiners and
+ * must be copied byte-for-byte from the English source.
+ *
+ * GitHub URLs are hard-coded — only the surrounding label text is
+ * translated.
+ *
+ * RTL note: Arabic is right-to-left. The plugin pins its hex view
+ * (offset / hex bytes / ASCII grid) and the Options dialog form content
+ * to LTR regardless of locale — hex dumps are universally read LTR even
+ * by Arabic/Hebrew developers. Menus, NSAlert dialogs, and the host
+ * Notepad++ chrome flip to RTL automatically. See LOCALIZATION.md.
+ */
+
+/* Plugin menu (Plugins > HexEditor > …) */
+"menu.plugin.viewInHex"            = "عرض بصيغة HEX";
+"menu.plugin.compareHex"           = "مقارنة HEX";
+"menu.plugin.clearCompareResult"   = "مسح نتيجة المقارنة";
+"menu.plugin.insertColumns"        = "إدراج أعمدة...";
+"menu.plugin.patternReplace"       = "استبدال بنمط...";
+"menu.plugin.options"              = "خيارات...";
+"menu.plugin.help"                 = "مساعدة...";
+
+/* Right-click context menu on the hex view */
+"menu.context.undo"                = "تراجع";
+"menu.context.redo"                = "إعادة";
+"menu.context.cut"                 = "قص";
+"menu.context.copy"                = "نسخ";
+"menu.context.paste"               = "لصق";
+"menu.context.delete"              = "حذف";
+"menu.context.selectAll"           = "تحديد الكل";
+"menu.context.selectToStart"       = "تحديد حتى بداية الملف";
+"menu.context.selectToEnd"         = "تحديد حتى نهاية الملف";
+"menu.context.cutBinary"           = "قص محتوى ثنائي";
+"menu.context.copyBinary"          = "نسخ محتوى ثنائي";
+"menu.context.pasteBinary"         = "لصق محتوى ثنائي";
+"menu.context.find"                = "بحث…";
+"menu.context.findReplace"         = "بحث واستبدال…";
+"menu.context.findNext"            = "بحث عن التالي";
+"menu.context.findPrevious"        = "بحث عن السابق";
+"menu.context.gotoOffset"          = "انتقال إلى الإزاحة…";
+"menu.context.viewIn"              = "عرض بصيغة";
+"menu.context.addressWidth"        = "عرض العنوان...";
+"menu.context.columns"             = "أعمدة...";
+"menu.context.zoomIn"              = "تكبير";
+"menu.context.zoomOut"             = "تصغير";
+"menu.context.zoomReset"           = "استعادة التكبير الافتراضي";
+
+/* View-in submenu */
+"menu.viewIn.bits8"                = "8 بت";
+"menu.viewIn.bits16"               = "16 بت";
+"menu.viewIn.bits32"               = "32 بت";
+"menu.viewIn.bits64"               = "64 بت";
+"menu.viewIn.toBinary"             = "إلى ثنائي";
+"menu.viewIn.toHex"                = "إلى ست عشري";
+"menu.viewIn.toBigEndian"          = "إلى BigEndian";
+"menu.viewIn.toLittleEndian"       = "إلى LittleEndian";
+
+/* Common buttons */
+"button.ok"                        = "موافق";
+"button.cancel"                    = "إلغاء";
+
+/* App / dialog identity */
+"app.title"                        = "HexEditor";
+"app.titleMac"                     = "HexEditor لنظام macOS";
+"app.titleCompare"                 = "مقارنة HexEditor";
+
+/* Address Width dialog */
+"addressWidth.title"               = "عرض العنوان";
+"addressWidth.message"             = "عدد الأرقام في عمود الإزاحة (%1$d–%2$d).";
+"addressWidth.invalidRange"        = "يُسمح فقط بالقيم بين %1$d و %2$d.";
+
+/* Columns dialog */
+"columns.title"                    = "أعمدة";
+"columns.message"                  = "عدد الخلايا في كل صف (1–%1$d بعرض البتات الحالي).";
+"columns.invalidMaximum"           = "يمكن عرض %1$d بايت كحد أقصى في صف واحد.";
+
+/* Go to Offset dialog */
+"goto.title"                       = "انتقال إلى الإزاحة";
+"goto.message"                     = "أدخل إزاحة بايت.\n  • عشري: 1234\n  • ست عشري: 0x4A2 (أو 0X4A2)\n  • نسبي: +0x10 يقفز للأمام، -100 يقفز للخلف\n\nالحالي: 0x%1$@    النهاية: 0x%2$@";
+"goto.button"                      = "انتقال";
+"goto.placeholder"                 = "مثال: 0x1F أو +16";
+"goto.errorParse"                  = "تعذّر تحليل الإزاحة. استخدم قيمة عشرية أو قيمة ست عشرية مسبوقة بـ 0x أو بادئة + / − للقفزات النسبية.";
+
+/* Find / Find and Replace dialog */
+"find.titleFind"                   = "بحث في الست عشري";
+"find.titleReplace"                = "بحث واستبدال";
+"find.message"                     = "النص العادي يبحث في المخزن المؤقت كبايتات ASCII.\nاستخدم البادئة 0x أو ست عشري مفصول بمسافات (مثال 0xDEADBEEF أو DE AD BE EF) لأنماط البايتات.";
+"find.button.findNext"             = "بحث عن التالي";
+"find.button.replaceAll"           = "استبدال الكل";
+"find.placeholder.find"            = "بحث: نص أو 0xDEADBEEF";
+"find.placeholder.replace"         = "استبدال بـ: نص أو بايتات ست عشرية";
+"find.toggle.matchCase"            = "مطابقة حالة الأحرف (ASCII فقط)";
+"find.toggle.wrap"                 = "الاستمرار من البداية بعد نهاية المخزن";
+"find.errorNotFound"               = "لم يُعثر على النمط.";
+"find.errorNoPriorSearch"          = "لا يوجد بحث سابق. استخدم بحث (Cmd+F) أولاً.";
+"find.errorParseFind"              = "تعذّر تحليل نمط البحث.";
+"find.errorParseReplace"           = "تعذّر تحليل نمط الاستبدال.";
+"find.errorPatternEmpty"           = "نمط البحث فارغ.";
+"find.errorNoBuffer"               = "لا يوجد مخزن HEX نشط.";
+"find.errorNoEditor"               = "لا يوجد محرر نشط.";
+"find.errorReplaceFailed"          = "فشل الاستبدال.";
+"find.errorReplaceCurrent"         = "لا يوجد تحديد للاستبدال. استخدم بحث عن التالي أولاً.";
+"find.errorReplaceLength"          = "التحديد الحالي لا يطابق طول نمط البحث.";
+"find.errorReplaceFailedShort"     = "فشل الاستبدال.";
+"find.replacedSingular"            = "تم استبدال تطابق واحد.";
+"find.replacedPlural"              = "عدد التطابقات المستبدلة: %1$d.";
+
+/* Compare HEX */
+"compare.openHexFirstCompare"      = "افتح عرض HEX (عرض بصيغة HEX) قبل استخدام مقارنة HEX.";
+"compare.openHexFirstRun"          = "افتح عرض HEX (عرض بصيغة HEX) قبل تشغيل المقارنة.";
+"compare.errorNoFile"              = "لم يتم تحديد ملف للمقارنة.";
+"compare.errorReadFile"            = "تعذّر قراءة %1$@: %2$@";
+"compare.errorReadUnknown"         = "خطأ غير معروف";
+"compare.errorFailed"              = "فشلت المقارنة.";
+"compare.openPanelTitle"           = "مقارنة HEX مع…";
+"compare.openPanelMessage"         = "اختر ملفاً للمقارنة مع المخزن الحالي.";
+"compare.summaryMatch"             = "الملفات متطابقة.";
+"compare.summaryDifferSingular"    = "بايت واحد مختلف.\nاستخدم مسح نتيجة المقارنة لإزالة التظليل.";
+"compare.summaryDifferPlural"      = "عدد البايتات المختلفة: %1$d.\nاستخدم مسح نتيجة المقارنة لإزالة التظليل.";
+"compare.noActiveResult"           = "لا توجد مقارنة نشطة لمسحها.";
+
+/* Insert Columns */
+"insertColumns.openHexFirst"       = "افتح عرض HEX (عرض بصيغة HEX) قبل استخدام إدراج أعمدة.";
+"insertColumns.title"              = "إدراج أعمدة";
+"insertColumns.message"            = "يدرج نمطاً ست عشرياً في كل صف عند موضع عمود مختار. كل صف يكبر بمقدار (العدد × %1$d) بايت؛ وعدد الأعمدة يكبر بمقدار `العدد`.\n\nالنمط: بايتات ست عشرية فقط (مثال 0x00 أو DE AD).\nالعدد: من 1 إلى %2$d بالتجميع الحالي %3$d-بت.\nالموضع: من 0 إلى %4$d (عدد الأعمدة الحالي).";
+"insertColumns.button"             = "إدراج";
+"insertColumns.placeholder.pattern"  = "النمط (ست عشري): 0xFF أو DE AD";
+"insertColumns.placeholder.count"    = "العدد (أعمدة للإدراج)";
+"insertColumns.placeholder.position" = "الموضع (فهرس العمود، 0 = الحافة اليسرى)";
+"insertColumns.errorEmptyPattern"  = "النمط فارغ.";
+"insertColumns.errorParsePattern"  = "يجب أن يكون النمط متتالية من البايتات الست عشرية (مثال 0x00, DE AD BE EF).";
+"insertColumns.errorRangeCount"    = "يجب أن يكون عدد الأعمدة بين 1 و %1$d بعرض البتات الحالي.";
+"insertColumns.errorRangePosition" = "يجب أن يكون موضع الإدراج بين 0 و %1$d (عدد الأعمدة الحالي).";
+"insertColumns.errorBufferEmpty"   = "المخزن فارغ — لا يوجد ما يُدرج فيه.";
+"insertColumns.errorRowSize"       = "حجم الصف الحالي غير صالح.";
+"insertColumns.errorFailed"        = "فشل الإدراج.";
+"insertColumns.summarySingularRows" = "تم إدراج أعمدة: %1$d%2$@ في صف واحد.";
+"insertColumns.summaryPluralRows"   = "تم إدراج أعمدة: %1$d%2$@ في %3$d صفوف.";
+
+/* Pattern Replace */
+"patternReplace.openHexFirst"      = "افتح عرض HEX (عرض بصيغة HEX) قبل استخدام استبدال بنمط.";
+"patternReplace.requireSelection"  = "حدد شيئاً ما في عرض HEX أولاً — استبدال بنمط يملأ التحديد.";
+"patternReplace.title"             = "استبدال بنمط";
+"patternReplace.message"           = "يملأ التحديد الحالي البالغ %1$zu بايت بنمط ست عشري متكرر.\n\nالنمط: بايتات ست عشرية فقط (مثال 0xFF أو DE AD).";
+"patternReplace.button"            = "استبدال";
+"patternReplace.placeholder"       = "النمط (ست عشري): 0xFF أو DE AD";
+"patternReplace.errorEmptyPattern" = "النمط فارغ.";
+"patternReplace.errorParsePattern" = "يجب أن يكون النمط متتالية من البايتات الست عشرية (مثال 0xFF أو DE AD BE EF).";
+"patternReplace.errorFailed"       = "فشل استبدال بنمط.";
+"patternReplace.summarySingular"   = "تم استبدال بايت واحد بالنمط.";
+"patternReplace.summaryPlural"     = "عدد البايتات المستبدلة بالنمط: %1$d.";
+
+/* Status bar (substring-matched by UI tests — wording is contractual) */
+"status.empty"                     = "المستند الحالي فارغ.";
+"status.showing"                   = "عرض %1$zu بايت.";
+"status.rectangle"                 = "مستطيل: %1$lu × %2$lu (%3$lu بايت)";
+
+/* Rectangular paste error dialogs (strict shape-match, see DEVELOPER.md) */
+"paste.rect.errorNeedsRectDestination" = "يجب أن تكون الوجهة تحديداً مستطيلاً بحجم %1$lu × %2$lu بايت. اسحب مع Option (أو Shift+Option، حسب الخيارات) لإنشاء واحد.";
+"paste.rect.errorShapeMismatch"      = "حجم الوجهة غير صحيح — يجب أن يكون عرضها %1$lu بايت وارتفاعها %2$lu بايت.";
+
+/* Pattern Replace — rectangular variant (per-row pattern restart) */
+"patternReplace.messageRect"         = "يملأ المستطيل الحالي بحجم %1$lu × %2$lu بنمط ست عشري متكرر.\nيبدأ النمط من جديد عند البايت الأول لكل صف.\n\nالنمط: بايتات ست عشرية فقط (مثال 0xFF أو DE AD).";
+"patternReplace.summaryRect"         = "تم ملء المستطيل %1$lu × %2$lu (%3$lu بايت) بالنمط.";
+
+/* About / help dialog. The "N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+" form preserves the U+2060
+   Word Joiners and must be copied byte-for-byte from the English source. */
+"about.body"                       = "نقل أصلي إلى macOS لإضافة HEX-Editor الخاصة بـ N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+. يوفر جدولاً ست عشرياً مدمجاً مع تحرير مباشر للبايتات والتحديد والإشارات المرجعية وبحث/استبدال ومقارنة وتبديل وضع العرض.";
+"about.version"                    = "الإصدار %1$@";
+"about.url"                        = "المشروع: https://github.com/dhadner/NPP_HexEdit";
+"about.localeTag"                  = "Strings: ar";
+"about.localizationGuide"          = "ساعد في الترجمة: https://github.com/dhadner/NPP_HexEdit/blob/master/LOCALIZATION.md";
+
+/* Quit-time clipboard prompt */
+"clipboard.saveOnQuit.title"       = "هل تريد الاحتفاظ بمحتويات الحافظة؟";
+"clipboard.saveOnQuit.body"        = "نسخت %1$@ من عرض HEX. هل تريد الاحتفاظ بها في الحافظة لتتمكن التطبيقات الأخرى من اللصق بعد إغلاق HEX-Editor؟ التجاهل يحرر الذاكرة فوراً.";
+"clipboard.saveOnQuit.keepButton"  = "احتفظ";
+"clipboard.saveOnQuit.discardButton" = "تجاهل";
+
+/* Generic error paths used when toggling between Scintilla / hex view */
+"editor.noActiveBuffer"            = "لا يوجد مخزن محرر نشط متاح.";
+"editor.noActiveView"              = "تعذّر العثور على عرض المحرر النشط للاستبدال.";
+
+/* Column headers in the hex table */
+"table.header.offset"              = "إزاحة";
+"table.header.ascii"               = "ASCII";
+
+/* Help popovers (shared) */
+"help.button.axLabel"              = "مساعدة";
+
+/* Options dialog (Plugins > HexEditor > Options...) */
+"options.title"                    = "خيارات HexEditor";
+"options.message"                  = "تفضيلات عامة للإضافة. إعادة التعيين تستعيد القيم الافتراضية الموضحة أدناه؛ انقر على تطبيق للتأكيد.";
+"options.button.apply"             = "تطبيق";
+"options.button.reset"             = "إعادة التعيين إلى القيم الافتراضية";
+"options.rectModifier.label"       = "مفتاح التعديل لتحديد مستطيل (كتلة):";
+"options.rectModifier.option"      = "Option (افتراضي؛ يطابق إضافة HexEditor الخاصة بـ Windows)";
+"options.rectModifier.shiftOption" = "Shift+Option (يطابق VS Code)";
+"options.rectModifier.help"        = "أثناء السحب في لوحة HEX أو ASCII، الضغط على هذا المفتاح يحول السحب إلى تحديد مستطيل (كتلة) — نفس نوع التحديد المستخدم في محررات HEX ومحررات النصوص في وضع العمود.\n\nOption هي القيمة الافتراضية — تطابق إضافة HexEditor الخاصة بـ Windows ومُواضعة تحديد الأعمدة في macOS. اختر Shift+Option إذا كانت ذاكرة عضلاتك تأتي من Visual Studio Code.";

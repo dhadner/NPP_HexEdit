@@ -80,22 +80,23 @@ int main(int argc, char **argv)
     const char *name = getName();
     hexExpect(name != nullptr, "getName() returned NULL");
     if (name) {
-        hexExpect(std::strcmp(name, "HEX-Editor") == 0,
-                  std::string("getName() returned \"") + name + "\", expected \"HEX-Editor\"");
+        hexExpect(std::strcmp(name, "HexEditor") == 0,
+                  std::string("getName() returned \"") + name + "\", expected \"HexEditor\"");
     }
 
     int nbF = -1;
     FuncItem *items = getFuncsArray(&nbF);
     hexExpect(items != nullptr, "getFuncsArray() returned NULL");
-    hexExpect(nbF == 6, std::string("getFuncsArray() set nbF=") + std::to_string(nbF) + ", expected 6");
+    hexExpect(nbF == 7, std::string("getFuncsArray() set nbF=") + std::to_string(nbF) + ", expected 7");
 
-    if (items && nbF == 6) {
-        const std::array<const char *, 6> expectedNames = {
+    if (items && nbF == 7) {
+        const std::array<const char *, 7> expectedNames = {
             "View in HEX",
             "Compare HEX",
             "Clear Compare Result",
             "Insert Columns...",
             "Pattern Replace...",
+            "Options...",
             "Help...",
         };
 

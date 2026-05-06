@@ -1,4 +1,4 @@
-/* Notepad++ HEX-Editor — American English (en-US)
+/* Notepad++ HexEditor — American English (en-US)
  *
  * Regional override file. en.strings is already American English (it is the
  * canonical translation source), so this file is intentionally near-empty —
@@ -11,4 +11,6 @@
  */
 
 /* About / help dialog — diagnostic locale tag */
+"about.version"                    = "Version %1$@";
+"about.url"                        = "Project: https://github.com/dhadner/NPP_HexEdit";
 "about.localeTag"                  = "Strings: en-US";
