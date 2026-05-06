@@ -8,7 +8,7 @@ This repo holds two versions of the same plugin:
   v0.9.x, copied without changes from
   [SourceForge](https://sourceforge.net/projects/npp-plugins/files/Hex%20Editor/).
 - **A macOS port** (`macos/`) — a fresh rewrite that runs as a plugin file
-  (`HexEditor.dylib`) inside [Notepad++ macOS](https://github.com/notepad-plus-plus-macos).
+  (`HexEditor.dylib`) inside [Nextpad++ macOS](https://github.com/notepad-plus-plus-macos).
   ".dylib" is just the macOS file extension for a dynamically loaded library;
   Notepad++ loads it on launch.
 
