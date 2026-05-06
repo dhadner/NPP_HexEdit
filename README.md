@@ -2,7 +2,7 @@
 
 A hex editor plugin for Nextpad++.
 
-This repo holds the MacOS port of the Windows Notepad++ HexEditor plugin.  The original Windows source code is included under the same GPL license for comparison since this is a fork of that repo.
+This repo holds the MacOS port of the Windows Notepad++ HEX-Editor plugin.  The original Windows source code is included under the same GPL license for comparison since this is a fork of that repo.
 
 In this repo are:
 
