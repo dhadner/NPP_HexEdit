@@ -6,7 +6,7 @@ per-test history from `macos/ui-tests-xcode/build/run-history.json`, then
 re-render `docs/test-status.md` and `docs/test-status/state.json`.
 
 This dashboard is generated on the developer machine (the test suite locks
-the keyboard for ~22 minutes via the VM-routed UI tier and is unsuitable
+the keyboard for ~46 minutes via the VM-routed UI tier and is unsuitable
 for CI), then committed to the repo so GitHub renders the latest state
 without needing live CI runs.
 
@@ -202,6 +202,53 @@ def tier_note(tier_key: str, tier_state: dict) -> str:
 
 # ---- Rendering -------------------------------------------------------------
 
+def render_aligned_table(headers: list[str],
+                         alignments: list[str],
+                         rows: list[list[str]]) -> list[str]:
+    """Render a markdown table with vertically-aligned pipes.
+
+    markdownlint rule MD060 (table-column-style) requires every row in a
+    table to share the same pipe positions — i.e. cells must be padded so
+    the pipes line up across header, delimiter, and every data row.
+    `alignments` is one of "left" / "right" / "center" per column; the
+    delimiter row uses the matching `:---` / `---:` / `:---:` pattern.
+    """
+    n = len(headers)
+    col_widths = [len(headers[i]) for i in range(n)]
+    for row in rows:
+        for i in range(min(n, len(row))):
+            col_widths[i] = max(col_widths[i], len(row[i]))
+
+    def fmt_cell(content: str, width: int, alignment: str) -> str:
+        if alignment == "right":
+            return content.rjust(width)
+        if alignment == "center":
+            return content.center(width)
+        return content.ljust(width)
+
+    def fmt_delim(width: int, alignment: str) -> str:
+        if width < 1:
+            width = 1
+        if alignment == "right":
+            return "-" * (width - 1) + ":"
+        if alignment == "center":
+            return ":" + "-" * max(width - 2, 0) + ":" if width >= 2 else ":"
+        if alignment == "left":
+            return ":" + "-" * (width - 1)
+        return "-" * width
+
+    out: list[str] = []
+    header_cells = [fmt_cell(headers[i], col_widths[i], alignments[i]) for i in range(n)]
+    out.append("| " + " | ".join(header_cells) + " |")
+    delim_cells = [fmt_delim(col_widths[i], alignments[i]) for i in range(n)]
+    out.append("| " + " | ".join(delim_cells) + " |")
+    for row in rows:
+        padded = [fmt_cell(row[i] if i < len(row) else "", col_widths[i], alignments[i])
+                  for i in range(n)]
+        out.append("| " + " | ".join(padded) + " |")
+    return out
+
+
 def render_markdown(state: dict, ui_history: list[dict] | None,
                     screenshots_present: list[tuple[str, str]]) -> str:
     lines: list[str] = []
@@ -222,26 +269,36 @@ def render_markdown(state: dict, ui_history: list[dict] | None,
 
     lines.append("## Tier status")
     lines.append("")
-    lines.append("| Tier | Status | Duration | Last passed | Notes |")
-    lines.append("|------|--------|---------:|-------------|-------|")
     tiers = state.get("tiers", {})
+    tier_rows: list[list[str]] = []
     for tier_key, tier_label in TIER_ORDER:
         t = tiers.get(tier_key, {})
         status = t.get("status", "unknown")
         icon = STATUS_ICON.get(status, "❓")
         # Shell timer is integer-second; sub-second tiers (unit, asan unit, smoke)
-        # report as 0 even though they did run. Render those as "<1s" rather than
-        # the misleading "0.00s". Skipped tiers render as a dash regardless.
+        # report as 0 even though they did run. Render those as inline code
+        # `<1s` so the literal "<" doesn't get interpreted as an HTML tag start
+        # by GitHub's renderer (and also so we don't trip lint rules that flag
+        # HTML entity references in markdown). Skipped tiers render as a dash.
         duration_raw = t.get("duration_sec")
         if status == "skipped":
             duration = "—"
         elif duration_raw == 0 and status == "pass":
-            duration = "<1s"
+            duration = "`<1s`"
         else:
             duration = fmt_duration(duration_raw)
-        last_passed = fmt_timestamp(t.get("last_passed_at"))
-        note = tier_note(tier_key, t)
-        lines.append(f"| {tier_label} | {icon} {status} | {duration} | {last_passed} | {note} |")
+        tier_rows.append([
+            tier_label,
+            f"{icon} {status}",
+            duration,
+            fmt_timestamp(t.get("last_passed_at")),
+            tier_note(tier_key, t),
+        ])
+    lines.extend(render_aligned_table(
+        ["Tier", "Status", "Duration", "Last passed", "Notes"],
+        ["left", "left", "right", "left", "left"],
+        tier_rows,
+    ))
     lines.append("")
 
     # Fuzz harness breakdown (only when we have data from a recent fuzz run).
@@ -250,16 +307,23 @@ def render_markdown(state: dict, ui_history: list[dict] | None,
     if harnesses:
         lines.append("## Fuzz harness detail")
         lines.append("")
-        lines.append("| Harness | Iterations | Peak RSS | Status |")
-        lines.append("|---------|-----------:|---------:|--------|")
+        fuzz_rows: list[list[str]] = []
         for h in harnesses:
             name   = h.get("name", "—")
             execs  = h.get("execs")
             rss_mb = h.get("peak_rss_mb")
             hstat  = h.get("status", "pass")
-            execs_s = f"{execs:,}" if isinstance(execs, int) else "—"
-            rss_s   = f"{rss_mb} MB" if isinstance(rss_mb, int) else "—"
-            lines.append(f"| `{name}` | {execs_s} | {rss_s} | {STATUS_ICON.get(hstat, '❓')} {hstat} |")
+            fuzz_rows.append([
+                f"`{name}`",
+                f"{execs:,}" if isinstance(execs, int) else "—",
+                f"{rss_mb} MB" if isinstance(rss_mb, int) else "—",
+                f"{STATUS_ICON.get(hstat, '❓')} {hstat}",
+            ])
+        lines.extend(render_aligned_table(
+            ["Harness", "Iterations", "Peak RSS", "Status"],
+            ["left", "right", "right", "left"],
+            fuzz_rows,
+        ))
         lines.append("")
 
     # UI tier per-test summary (only if history file is present).
@@ -277,18 +341,23 @@ def render_markdown(state: dict, ui_history: list[dict] | None,
         lines.append("")
         # Include a short-tail of recent runs (last 5) for trend visibility.
         if len(ui_history) > 1:
-            lines.append("**Recent UI runs**")
+            lines.append("### Recent UI runs")
             lines.append("")
-            lines.append("| Date | Total | Pass | Fail | Skip | Duration |")
-            lines.append("|------|------:|-----:|-----:|-----:|---------:|")
+            ui_rows: list[list[str]] = []
             for entry in list(reversed(ui_history))[:5]:
-                ts = fmt_timestamp(entry.get("timestamp"))
-                t  = entry.get("total", 0)
-                p  = entry.get("passed", 0)
-                f  = entry.get("failed", 0)
-                s  = entry.get("skipped", 0)
-                d  = fmt_duration(entry.get("duration_seconds"))
-                lines.append(f"| {ts} | {t} | {p} | {f} | {s} | {d} |")
+                ui_rows.append([
+                    fmt_timestamp(entry.get("timestamp")),
+                    str(entry.get("total", 0)),
+                    str(entry.get("passed", 0)),
+                    str(entry.get("failed", 0)),
+                    str(entry.get("skipped", 0)),
+                    fmt_duration(entry.get("duration_seconds")),
+                ])
+            lines.extend(render_aligned_table(
+                ["Date", "Total", "Pass", "Fail", "Skip", "Duration"],
+                ["left", "right", "right", "right", "right", "right"],
+                ui_rows,
+            ))
             lines.append("")
         lines.append("For a full per-test breakdown including pass-rates and "
                      "last-failure timestamps, run `macos/scripts/test-ui.sh --dashboard` "

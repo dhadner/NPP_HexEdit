@@ -40,8 +40,8 @@
 # process launch via DYLD_INSERT_LIBRARIES (set in the XCUITest helper's
 # launchEnvironment) — see vm-test.sh for the rationale. Any heap overrun /
 # use-after-free / signed-overflow inside our plugin's runtime path aborts
-# with an ASan stack trace and fails the test. UI suite measured at ~25 min
-# under ASan vs. ~22 min baseline. Use this as a periodic gate — the
+# with an ASan stack trace and fails the test. UI suite measured at ~53 min
+# under ASan vs. ~46 min baseline (109 tests as of 2026-05-06). Use this as a periodic gate — the
 # unit-tier tests catch buffer-shape bugs at < 1 ms feedback; the ASan UI
 # run is the broader net for runtime-only paths the unit suite doesn't
 # reach.

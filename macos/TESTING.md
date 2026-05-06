@@ -84,10 +84,10 @@ The macOS port should use Scintilla as the source of truth for document bytes an
 bash macos/scripts/pre-commit-tests.sh
 ```
 
-This runs every test tier in dependency order, fastest-first, aborting at the first failure so a 5 ms unit-tier regression doesn't burn 22 minutes of UI run before being noticed:
+This runs every test tier in dependency order, fastest-first, aborting at the first failure so a 5 ms unit-tier regression doesn't burn 46 minutes of UI run before being noticed:
 
 1. **Unit (host)** — `ctest -L unit` against `macos/build/`. ~0.01 s.
-2. **Unit + ASan/UBSan (host)** — `ctest -L unit` against `macos/build-asan/`. ~0.5 s. Catches heap-buffer-overflow / use-after-free / signed-overflow at < 1 ms feedback so they don't surface 22 minutes deep into the UI run.
+2. **Unit + ASan/UBSan (host)** — `ctest -L unit` against `macos/build-asan/`. ~0.5 s. Catches heap-buffer-overflow / use-after-free / signed-overflow at < 1 ms feedback so they don't surface 46 minutes deep into the UI run.
 3. **Plugin smoke (host)** — `ctest -L smoke` against `macos/build/`. `dlopen`s the plugin and checks the host contract. ~0.4 s.
 4. **Fuzz / robustness (host)** — `ctest -L fuzz` against `macos/build-fuzz/`. 8 libFuzzer harnesses × 30 s = ~4 min. Exercises every external-input parser the plugin exposes against random inputs, under ASan + UBSan:
    - `fuzz_parseRectClipboardText` — rectangular clipboard text fallback
@@ -100,7 +100,7 @@ This runs every test tier in dependency order, fastest-first, aborting at the fi
    - `fuzz_resolveGotoOffset` — Goto Offset dialog (`+`/`-` relative, `0x` hex, decimal)
 
    Each runs ~30 s with a fresh seed, accumulating ~30M+ iterations across the suite per pre-commit run. Adding a new harness is a 3-step pattern: drop a `fuzz_<targetFn>.cpp` under `macos/fuzz/` exposing `LLVMFuzzerTestOneInput`, append the harness name to `HEX_FUZZ_HARNESSES` in `macos/CMakeLists.txt`, and reconfigure `macos/build-fuzz`. See `macos/fuzz/README.md` for harness-writing conventions.
-5. **Full XCTest UI (VM)** — `macos/scripts/test-ui.sh`. ~22 min on the Parallels VM. Locks VM keyboard/mouse; don't use the VM for anything else while this runs.
+5. **Full XCTest UI (VM)** — `macos/scripts/test-ui.sh`. ~46 min on the Parallels VM (109 tests at the time of writing). Locks VM keyboard/mouse; don't use the VM for anything else while this runs.
 
 The script accepts `--skip-fuzz` (cosmetic-only commits) and `--skip-ui` (fast pre-push gate), but the full sequence is required before any commit. Skipping a tier means trusting that nothing it would have caught has been introduced — only OK when the change is genuinely orthogonal (whitespace, a docs file).
 
@@ -199,7 +199,7 @@ macos/scripts/test-ui.sh --dashboard              # open dashboard.html in brows
 
 The wrapper SSHes to the VM (`npp-vm`), syncs the source tree and Notepad++.app to VM-local paths (Parallels' shared-folder protocol caches reads aggressively, so we work from a checksum-synced mirror), runs the tests, and copies the results back. After the run it also rebuilds + installs the host's `HexEditor.dylib` from the same source so your own Notepad++ matches whatever the VM just tested (restart Notepad++ to load the new dylib). If the host build directory hasn't been configured yet, that step is skipped with a hint to run `cmake -S macos -B macos/build` once.
 
-`--asan` is the periodic safety-net run. The plugin is built under `-fsanitize=address,undefined`; the runtime is then injected into NPP at process launch via `DYLD_INSERT_LIBRARIES` (set in the XCUITest helper's `launchEnvironment`). Any heap-buffer-overflow / use-after-free / signed-overflow inside our runtime path aborts with a sanitizer stack trace and fails the test. Cost: ~15% slower than the regular UI suite on the Parallels VM (~25 min vs. ~22 min, measured 2026-05-02 over a 59-test run). The host plugin is **not** auto-replaced on `--asan` runs (you keep your fast day-to-day plugin). Catches the bug class that the unit tier already protects against (via `hexedit::SciReader` + `FakeScintilla`) plus anything in the plugin's runtime path the unit tests don't reach (AppKit interaction, NSEvent handling, draw paths). Why DYLD injection: a dlopen-loaded ASan-instrumented dylib aborts NPP at "Interceptors are not working" because dyld brings up the plugin after the host's first malloc; injecting at launch sidesteps that. NPP-Mac is ad-hoc signed with no entitlements, so SIP doesn't strip the env var. After the run, three artefacts land at stable paths under [macos/ui-tests-xcode/build/](ui-tests-xcode/build/):
+`--asan` is the periodic safety-net run. The plugin is built under `-fsanitize=address,undefined`; the runtime is then injected into NPP at process launch via `DYLD_INSERT_LIBRARIES` (set in the XCUITest helper's `launchEnvironment`). Any heap-buffer-overflow / use-after-free / signed-overflow inside our runtime path aborts with a sanitizer stack trace and fails the test. Cost: ~15% slower than the regular UI suite on the Parallels VM (extrapolating from a 2026-05-02 run, expect ~53 min vs. ~46 min for the regular UI suite at the current ~109-test count). The host plugin is **not** auto-replaced on `--asan` runs (you keep your fast day-to-day plugin). Catches the bug class that the unit tier already protects against (via `hexedit::SciReader` + `FakeScintilla`) plus anything in the plugin's runtime path the unit tests don't reach (AppKit interaction, NSEvent handling, draw paths). Why DYLD injection: a dlopen-loaded ASan-instrumented dylib aborts NPP at "Interceptors are not working" because dyld brings up the plugin after the host's first malloc; injecting at launch sidesteps that. NPP-Mac is ad-hoc signed with no entitlements, so SIP doesn't strip the env var. After the run, three artefacts land at stable paths under [macos/ui-tests-xcode/build/](ui-tests-xcode/build/):
 
 - `dashboard.html` — human-readable dashboard. Per-test status and last 20 runs. Open with `test-ui.sh --dashboard`.
 - `dashboard.md` — same content, Markdown.

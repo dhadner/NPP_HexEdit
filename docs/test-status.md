@@ -1,30 +1,30 @@
 # HexEditor test status
 
-_Generated: 2026-05-06 11:42 PDT · commit `7196afaf` · developer machine (no CI — UI tier needs the Parallels VM)._
+_Generated: 2026-05-06 12:17 PDT · commit `7196afaf` · developer machine (no CI — UI tier needs the Parallels VM)._
 
 ## Tier status
 
-| Tier | Status | Duration | Last passed | Notes |
-|------|--------|---------:|-------------|-------|
-| 1. Unit | ✅ pass | <1s | 2026-05-06 10:52 PDT | HexCore C++ assertions |
-| 2. Unit + ASan/UBSan | ✅ pass | <1s | 2026-05-06 10:52 PDT | Same suite, AddressSanitizer + UndefinedBehaviorSanitizer |
-| 3. Plugin smoke | ✅ pass | <1s | 2026-05-06 10:52 PDT | Plugin `dlopen` contract |
-| 4. Fuzz / robustness | ✅ pass | 4m 9s | 2026-05-06 10:52 PDT | 8 libFuzzer harnesses × 30 s, ASan + UBSan |
-| 5. XCTest UI (VM) | ✅ pass | 45m 54s | 2026-05-06 10:52 PDT | XCTest UI on Parallels VM |
+| Tier                 | Status | Duration | Last passed          | Notes                                                     |
+| :------------------- | :----- | -------: | :------------------- | :-------------------------------------------------------- |
+| 1. Unit              | ✅ pass |    `<1s` | 2026-05-06 10:52 PDT | HexCore C++ assertions                                    |
+| 2. Unit + ASan/UBSan | ✅ pass |    `<1s` | 2026-05-06 10:52 PDT | Same suite, AddressSanitizer + UndefinedBehaviorSanitizer |
+| 3. Plugin smoke      | ✅ pass |    `<1s` | 2026-05-06 10:52 PDT | Plugin `dlopen` contract                                  |
+| 4. Fuzz / robustness | ✅ pass |    4m 9s | 2026-05-06 10:52 PDT | 8 libFuzzer harnesses × 30 s, ASan + UBSan                |
+| 5. XCTest UI (VM)    | ✅ pass |  45m 54s | 2026-05-06 10:52 PDT | XCTest UI on Parallels VM                                 |
 
 ## XCTest UI tier
 
 Latest run: **108** passed · **0** failed · **1** skipped · **109** total · 45m 41s at 2026-05-06 10:56 PDT
 
-**Recent UI runs**
+### Recent UI runs
 
-| Date | Total | Pass | Fail | Skip | Duration |
-|------|------:|-----:|-----:|-----:|---------:|
-| 2026-05-06 10:56 PDT | 109 | 108 | 0 | 1 | 45m 41s |
-| 2026-05-05 23:30 PDT | 109 | 108 | 0 | 1 | 46m 20s |
-| 2026-05-05 23:23 PDT | 6 | 6 | 0 | 0 | 4m 47s |
-| 2026-05-05 22:54 PDT | 5 | 1 | 4 | 0 | 3m 7s |
-| 2026-05-05 22:08 PDT | 109 | 103 | 5 | 1 | 44m 31s |
+| Date                 | Total | Pass | Fail | Skip | Duration |
+| :------------------- | ----: | ---: | ---: | ---: | -------: |
+| 2026-05-06 10:56 PDT |   109 |  108 |    0 |    1 |  45m 41s |
+| 2026-05-05 23:30 PDT |   109 |  108 |    0 |    1 |  46m 20s |
+| 2026-05-05 23:23 PDT |     6 |    6 |    0 |    0 |   4m 47s |
+| 2026-05-05 22:54 PDT |     5 |    1 |    4 |    0 |    3m 7s |
+| 2026-05-05 22:08 PDT |   109 |  103 |    5 |    1 |  44m 31s |
 
 For a full per-test breakdown including pass-rates and last-failure timestamps, run `macos/scripts/test-ui.sh --dashboard` locally (the per-test view is too large to commit).
 

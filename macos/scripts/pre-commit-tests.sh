@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Canonical pre-commit gate. Runs every test tier in dependency order,
 # fastest first; aborts at the first failing tier so a 5 ms unit-tier
-# regression doesn't burn 22 minutes of UI run before being noticed.
+# regression doesn't burn 46 minutes of UI run before being noticed.
 #
 # Run from the repo root:
 #   bash macos/scripts/pre-commit-tests.sh
 #
-# Tiers (cumulative time ~27 min on a quiet machine):
+# Tiers (cumulative time ~50 min on a quiet machine):
 #   1. Unit (host)              ~0.01 s — ctest -L unit
 #   2. Unit + ASan/UBSan (host) ~0.5  s — ctest -L unit (sanitized build)
 #   3. Plugin smoke (host)      ~0.4  s — ctest -L smoke (dlopen contract)
 #   4. Fuzz / robustness (host) ~4    min — 8 libFuzzer harnesses × 30 s
-#   5. Full XCTest UI (VM)      ~22   min — test-ui.sh, locks VM kbd/mouse
+#   5. Full XCTest UI (VM)      ~46   min — test-ui.sh, locks VM kbd/mouse
 #
 # Tiers 1-4 run on the host. Tier 5 SSH-routes to the Parallels VM (per
 # feedback_xctest_ui_runs.md — never run UI tests on the host since the
@@ -260,7 +260,7 @@ else
         ctest --test-dir macos/build-fuzz -L fuzz --output-on-failure
 fi
 
-# ---- Tier 5: full XCTest UI on VM (~22 min) ------------------------------
+# ---- Tier 5: full XCTest UI on VM (~46 min) ------------------------------
 
 if [[ $SKIP_UI -eq 1 ]]; then
     yellow "==> [5/5 UI (VM)] SKIPPED via --skip-ui — host tiers green only"
@@ -270,10 +270,10 @@ if [[ $SKIP_UI -eq 1 ]]; then
     exit 0
 fi
 
-yellow "    UI tier locks the VM kbd/mouse for ~22 min — don't use the VM until done."
+yellow "    UI tier locks the VM kbd/mouse for ~46 min — don't use the VM until done."
 yellow "    Ctrl+C on this terminal to abort cleanly (killing only the VM-side test"
 yellow "    won't stop the host wrapper's post-test housekeeping)."
-run_tier "5/5 UI suite (VM, ~22 min)" "5-ui" \
+run_tier "5/5 UI suite (VM, ~46 min)" "5-ui" \
     bash macos/scripts/test-ui.sh
 
 # ---- All tiers green -----------------------------------------------------
