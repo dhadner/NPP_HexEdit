@@ -1,0 +1,205 @@
+/* Notepad++ HexEditor — Hebrew (he)
+ *
+ * Full translation. Keys mirror Localizable.en.strings; comments stay in
+ * English so future translators can diff against the canonical source.
+ *
+ * Format specifiers (%1$@, %1$d, %1$zu, %1$lu, %2$@, etc.) are preserved
+ * verbatim. The "N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+" form embeds U+2060 Word Joiners and
+ * must be copied byte-for-byte from the English source.
+ *
+ * GitHub URLs are hard-coded — only the surrounding label text is
+ * translated.
+ *
+ * RTL note: Hebrew is right-to-left. The plugin pins its hex view
+ * (offset / hex bytes / ASCII grid) and the Options dialog form content
+ * to LTR regardless of locale — hex dumps are universally read LTR even
+ * by Hebrew/Arabic developers. Menus, NSAlert dialogs, and the host
+ * Notepad++ chrome flip to RTL automatically. See LOCALIZATION.md.
+ */
+
+/* Plugin menu (Plugins > HexEditor > …) */
+"menu.plugin.viewInHex"            = "תצוגה ב-HEX";
+"menu.plugin.compareHex"           = "השוואת HEX";
+"menu.plugin.clearCompareResult"   = "נקה תוצאת השוואה";
+"menu.plugin.insertColumns"        = "הוסף עמודות...";
+"menu.plugin.patternReplace"       = "החלפה לפי תבנית...";
+"menu.plugin.options"              = "אפשרויות...";
+"menu.plugin.help"                 = "עזרה...";
+
+/* Right-click context menu on the hex view */
+"menu.context.undo"                = "בטל פעולה";
+"menu.context.redo"                = "בצע שוב";
+"menu.context.cut"                 = "גזור";
+"menu.context.copy"                = "העתק";
+"menu.context.paste"               = "הדבק";
+"menu.context.delete"              = "מחק";
+"menu.context.selectAll"           = "בחר הכול";
+"menu.context.selectToStart"       = "בחר עד תחילת הקובץ";
+"menu.context.selectToEnd"         = "בחר עד סוף הקובץ";
+"menu.context.cutBinary"           = "גזור תוכן בינארי";
+"menu.context.copyBinary"          = "העתק תוכן בינארי";
+"menu.context.pasteBinary"         = "הדבק תוכן בינארי";
+"menu.context.find"                = "חפש…";
+"menu.context.findReplace"         = "חפש והחלף…";
+"menu.context.findNext"            = "חפש את הבא";
+"menu.context.findPrevious"        = "חפש את הקודם";
+"menu.context.gotoOffset"          = "עבור להיסט…";
+"menu.context.viewIn"              = "תצוגה ב";
+"menu.context.addressWidth"        = "רוחב כתובת...";
+"menu.context.columns"             = "עמודות...";
+"menu.context.zoomIn"              = "הגדל";
+"menu.context.zoomOut"             = "הקטן";
+"menu.context.zoomReset"           = "שחזר זום ברירת מחדל";
+
+/* View-in submenu */
+"menu.viewIn.bits8"                = "8 סיביות";
+"menu.viewIn.bits16"               = "16 סיביות";
+"menu.viewIn.bits32"               = "32 סיביות";
+"menu.viewIn.bits64"               = "64 סיביות";
+"menu.viewIn.toBinary"             = "לבינארי";
+"menu.viewIn.toHex"                = "להקסדצימלי";
+"menu.viewIn.toBigEndian"          = "ל-BigEndian";
+"menu.viewIn.toLittleEndian"       = "ל-LittleEndian";
+
+/* Common buttons */
+"button.ok"                        = "אישור";
+"button.cancel"                    = "ביטול";
+
+/* App / dialog identity */
+"app.title"                        = "HexEditor";
+"app.titleMac"                     = "HexEditor ל-macOS";
+"app.titleCompare"                 = "השוואת HexEditor";
+
+/* Address Width dialog */
+"addressWidth.title"               = "רוחב כתובת";
+"addressWidth.message"             = "מספר הספרות בעמודת ההיסט (%1$d–%2$d).";
+"addressWidth.invalidRange"        = "מותרים רק ערכים בין %1$d ל-%2$d.";
+
+/* Columns dialog */
+"columns.title"                    = "עמודות";
+"columns.message"                  = "מספר תאים בכל שורה (1–%1$d ברוחב הביטים הנוכחי).";
+"columns.invalidMaximum"           = "ניתן להציג לכל היותר %1$d בייטים בשורה אחת.";
+
+/* Go to Offset dialog */
+"goto.title"                       = "עבור להיסט";
+"goto.message"                     = "הזן היסט בייטים.\n  • עשרוני: 1234\n  • הקסדצימלי: 0x4A2 (או 0X4A2)\n  • יחסי: +0x10 קופץ קדימה, -100 קופץ אחורה\n\nנוכחי: 0x%1$@    סוף: 0x%2$@";
+"goto.button"                      = "עבור";
+"goto.placeholder"                 = "למשל 0x1F או +16";
+"goto.errorParse"                  = "לא ניתן לפרש את ההיסט. השתמש בערך עשרוני, ערך הקסדצימלי עם קידומת 0x, או קידומת + / − לקפיצות יחסיות.";
+
+/* Find / Find and Replace dialog */
+"find.titleFind"                   = "חיפוש בהקסדצימלי";
+"find.titleReplace"                = "חפש והחלף";
+"find.message"                     = "טקסט פשוט מחפש במאגר כבייטים ASCII.\nהשתמש בקידומת 0x או בערכים הקסדצימליים מופרדים ברווחים (למשל 0xDEADBEEF או DE AD BE EF) עבור תבניות בייטים.";
+"find.button.findNext"             = "חפש את הבא";
+"find.button.replaceAll"           = "החלף הכול";
+"find.placeholder.find"            = "חפש: טקסט או 0xDEADBEEF";
+"find.placeholder.replace"         = "החלף ב: טקסט או בייטים הקסדצימליים";
+"find.toggle.matchCase"            = "התאם רישיות (ASCII בלבד)";
+"find.toggle.wrap"                 = "המשך מהתחלה לאחר סוף המאגר";
+"find.errorNotFound"               = "התבנית לא נמצאה.";
+"find.errorNoPriorSearch"          = "אין חיפוש קודם. השתמש תחילה בחפש (Cmd+F).";
+"find.errorParseFind"              = "לא ניתן לפרש את תבנית החיפוש.";
+"find.errorParseReplace"           = "לא ניתן לפרש את תבנית ההחלפה.";
+"find.errorPatternEmpty"           = "תבנית החיפוש ריקה.";
+"find.errorNoBuffer"               = "אין מאגר HEX פעיל.";
+"find.errorNoEditor"               = "אין עורך פעיל.";
+"find.errorReplaceFailed"          = "ההחלפה נכשלה.";
+"find.errorReplaceCurrent"         = "אין בחירה להחלפה. השתמש תחילה בחפש את הבא.";
+"find.errorReplaceLength"          = "הבחירה הנוכחית אינה תואמת לאורך תבנית החיפוש.";
+"find.errorReplaceFailedShort"     = "ההחלפה נכשלה.";
+"find.replacedSingular"            = "הוחלפה התאמה אחת.";
+"find.replacedPlural"              = "מספר התאמות שהוחלפו: %1$d.";
+
+/* Compare HEX */
+"compare.openHexFirstCompare"      = "פתח את תצוגת ה-HEX (תצוגה ב-HEX) לפני שימוש בהשוואת HEX.";
+"compare.openHexFirstRun"          = "פתח את תצוגת ה-HEX (תצוגה ב-HEX) לפני הפעלת ההשוואה.";
+"compare.errorNoFile"              = "לא נבחר קובץ להשוואה.";
+"compare.errorReadFile"            = "לא ניתן לקרוא את %1$@: %2$@";
+"compare.errorReadUnknown"         = "שגיאה לא ידועה";
+"compare.errorFailed"              = "ההשוואה נכשלה.";
+"compare.openPanelTitle"           = "השווה HEX עם…";
+"compare.openPanelMessage"         = "בחר קובץ להשוואה מול המאגר הנוכחי.";
+"compare.summaryMatch"             = "הקבצים זהים.";
+"compare.summaryDifferSingular"    = "בייט אחד שונה.\nהשתמש בנקה תוצאת השוואה כדי להסיר את ההדגשה.";
+"compare.summaryDifferPlural"      = "מספר בייטים שונים: %1$d.\nהשתמש בנקה תוצאת השוואה כדי להסיר את ההדגשה.";
+"compare.noActiveResult"           = "אין השוואה פעילה לניקוי.";
+
+/* Insert Columns */
+"insertColumns.openHexFirst"       = "פתח את תצוגת ה-HEX (תצוגה ב-HEX) לפני שימוש בהוסף עמודות.";
+"insertColumns.title"              = "הוסף עמודות";
+"insertColumns.message"            = "מוסיף תבנית הקסדצימלית בכל שורה במיקום עמודה נבחר. כל שורה גדלה ב-(כמות × %1$d) בייטים; מספר העמודות גדל ב-`כמות`.\n\nתבנית: בייטים הקסדצימליים בלבד (למשל 0x00 או DE AD).\nכמות: 1 עד %2$d בקיבוץ הנוכחי של %3$d סיביות.\nמיקום: 0 עד %4$d (מספר העמודות הנוכחי).";
+"insertColumns.button"             = "הוסף";
+"insertColumns.placeholder.pattern"  = "תבנית (הקס): 0xFF או DE AD";
+"insertColumns.placeholder.count"    = "כמות (עמודות להוספה)";
+"insertColumns.placeholder.position" = "מיקום (אינדקס עמודה, 0 = שוליים שמאליים)";
+"insertColumns.errorEmptyPattern"  = "התבנית ריקה.";
+"insertColumns.errorParsePattern"  = "התבנית חייבת להיות רצף של בייטים הקסדצימליים (למשל 0x00, DE AD BE EF).";
+"insertColumns.errorRangeCount"    = "מספר העמודות חייב להיות בין 1 ל-%1$d ברוחב הביטים הנוכחי.";
+"insertColumns.errorRangePosition" = "מיקום ההוספה חייב להיות בין 0 ל-%1$d (מספר העמודות הנוכחי).";
+"insertColumns.errorBufferEmpty"   = "המאגר ריק — אין לאן להוסיף.";
+"insertColumns.errorRowSize"       = "גודל שורה נוכחי לא חוקי.";
+"insertColumns.errorFailed"        = "ההוספה נכשלה.";
+"insertColumns.summarySingularRows" = "הוספו עמודות: %1$d%2$@ בשורה אחת.";
+"insertColumns.summaryPluralRows"   = "הוספו עמודות: %1$d%2$@ ב-%3$d שורות.";
+
+/* Pattern Replace */
+"patternReplace.openHexFirst"      = "פתח את תצוגת ה-HEX (תצוגה ב-HEX) לפני שימוש בהחלפה לפי תבנית.";
+"patternReplace.requireSelection"  = "בחר תחילה משהו בתצוגת ה-HEX — החלפה לפי תבנית ממלאת את הבחירה.";
+"patternReplace.title"             = "החלפה לפי תבנית";
+"patternReplace.message"           = "ממלא את הבחירה הנוכחית של %1$zu בייטים בתבנית הקסדצימלית חוזרת.\n\nתבנית: בייטים הקסדצימליים בלבד (למשל 0xFF או DE AD).";
+"patternReplace.button"            = "החלף";
+"patternReplace.placeholder"       = "תבנית (הקס): 0xFF או DE AD";
+"patternReplace.errorEmptyPattern" = "התבנית ריקה.";
+"patternReplace.errorParsePattern" = "התבנית חייבת להיות רצף של בייטים הקסדצימליים (למשל 0xFF או DE AD BE EF).";
+"patternReplace.errorFailed"       = "החלפה לפי תבנית נכשלה.";
+"patternReplace.summarySingular"   = "הוחלף בייט אחד לפי התבנית.";
+"patternReplace.summaryPlural"     = "מספר הבייטים שהוחלפו לפי התבנית: %1$d.";
+
+/* Status bar (substring-matched by UI tests — wording is contractual) */
+"status.empty"                     = "המסמך הנוכחי ריק.";
+"status.showing"                   = "מציג %1$zu בייטים.";
+"status.rectangle"                 = "מלבן: %1$lu × %2$lu (%3$lu בייטים)";
+
+/* Rectangular paste error dialogs (strict shape-match, see DEVELOPER.md) */
+"paste.rect.errorNeedsRectDestination" = "היעד חייב להיות בחירה מלבנית של %1$lu × %2$lu בייטים. גרור עם Option (או Shift+Option, לפי האפשרויות) כדי ליצור אחת.";
+"paste.rect.errorShapeMismatch"      = "ליעד גודל שגוי — חייב להיות ברוחב %1$lu בייטים ובגובה %2$lu בייטים.";
+
+/* Pattern Replace — rectangular variant (per-row pattern restart) */
+"patternReplace.messageRect"         = "ממלא את המלבן הנוכחי של %1$lu × %2$lu בתבנית הקסדצימלית חוזרת.\nהתבנית מתחילה מחדש בבייט הראשון של כל שורה.\n\nתבנית: בייטים הקסדצימליים בלבד (למשל 0xFF או DE AD).";
+"patternReplace.summaryRect"         = "המלבן %1$lu × %2$lu (%3$lu בייטים) מולא לפי התבנית.";
+
+/* About / help dialog. The "N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+" form preserves the U+2060
+   Word Joiners and must be copied byte-for-byte from the English source. */
+"about.body"                       = "פורט מקורי ל-macOS של תוסף ה-HEX-Editor של N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+. מספק טבלה הקסדצימלית משובצת עם עריכת בייטים ישירה, בחירה, סימניות, חיפוש/החלפה, השוואה והחלפת מצב תצוגה.";
+"about.version"                    = "גרסה %1$@";
+"about.url"                        = "פרויקט: https://github.com/dhadner/NPP_HexEdit";
+"about.localeTag"                  = "Strings: he";
+"about.localizationGuide"          = "עזור בתרגום: https://github.com/dhadner/NPP_HexEdit/blob/master/LOCALIZATION.md";
+
+/* Quit-time clipboard prompt */
+"clipboard.saveOnQuit.title"       = "לשמור את תוכן הלוח?";
+"clipboard.saveOnQuit.body"        = "העתקת %1$@ מתצוגת ה-HEX. לשמור בלוח כדי שאפליקציות אחרות יוכלו להדביק לאחר סגירת HEX-Editor? ביטול משחרר את הזיכרון מיד.";
+"clipboard.saveOnQuit.keepButton"  = "שמור";
+"clipboard.saveOnQuit.discardButton" = "בטל";
+
+/* Generic error paths used when toggling between Scintilla / hex view */
+"editor.noActiveBuffer"            = "אין מאגר עורך פעיל זמין.";
+"editor.noActiveView"              = "לא ניתן למצוא את תצוגת העורך הפעילה להחלפה.";
+
+/* Column headers in the hex table */
+"table.header.offset"              = "היסט";
+"table.header.ascii"               = "ASCII";
+
+/* Help popovers (shared) */
+"help.button.axLabel"              = "עזרה";
+
+/* Options dialog (Plugins > HexEditor > Options...) */
+"options.title"                    = "אפשרויות HexEditor";
+"options.message"                  = "העדפות כלליות של התוסף. איפוס משחזר את ערכי ברירת המחדל המוצגים למטה; לחץ על החל לאישור.";
+"options.button.apply"             = "החל";
+"options.button.reset"             = "אפס לערכי ברירת מחדל";
+"options.rectModifier.label"       = "מקש מאתחל לבחירה מלבנית (חסומה):";
+"options.rectModifier.option"      = "Option (ברירת מחדל; תואם לתוסף HexEditor של Windows)";
+"options.rectModifier.shiftOption" = "Shift+Option (תואם ל-VS Code)";
+"options.rectModifier.help"        = "במהלך גרירה בחלונית ה-HEX או ה-ASCII, החזקת מקש זה הופכת את הגרירה לבחירה מלבנית (חסומה) — אותו סוג בחירה שבו משתמשים עורכי HEX ועורכי טקסט במצב עמודה.\n\nOption הוא ברירת המחדל — תואם לתוסף HexEditor של Windows ולמוסכמת בחירת העמודות ב-macOS. בחר Shift+Option אם זיכרון השרירים שלך מגיע מ-Visual Studio Code.";

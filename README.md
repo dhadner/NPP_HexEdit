@@ -31,7 +31,8 @@ This repo holds two versions of the same plugin:
 | Zoom | Cmd+Scroll or two-finger trackpad pinch resizes the hex font (matches Scintilla's behavior in the host's text views) |
 | Options | Plugin-wide preferences dialog (Plugins → HexEditor → Options...): rectangular-selection modifier (Option vs Shift+Option), mirror-cursor toggle (rectangle vs underline). Designed to grow without churning the main menu |
 | Persistence | View mode, address width, columns, find options, rect-modifier choice, mirror toggle, and per-buffer hex view intent persist via `NSUserDefaults` (`org.notepad-plus-plus.HexEditor`) |
-| Localization | 13 `.strings` files cover 9 full translations (English, German, Spanish, French, Italian, Polish, Russian, Ukrainian, Simplified Chinese) plus 4 regional overrides (British / American English, Peninsular / Mexican Spanish). Cascade falls through exact tag → base tag → next preferred language → embedded English defaults. Every format placeholder is numbered (`%1$@`, `%1$d`, ...) so translators learn one rule. See [LOCALIZATION.md](LOCALIZATION.md) for the translator-facing guide |
+| Localization | 15 `.strings` files cover 11 full translations (English, German, Spanish, French, Italian, Polish, Russian, Ukrainian, Simplified Chinese, Hebrew, Arabic) plus 4 regional overrides (British / American English, Peninsular / Mexican Spanish). Cascade falls through exact tag → base tag → next preferred language → embedded English defaults. Every format placeholder is numbered (`%1$@`, `%1$d`, ...) so translators learn one rule. See [LOCALIZATION.md](LOCALIZATION.md) for the translator-facing guide |
+| RTL languages | Menus / dialogs / host chrome auto-flip under Hebrew and Arabic. The hex view itself stays LTR (Offset on the leading-physical edge, ASCII on the trailing) — hex dumps are universally LTR even for RTL-language developers, so flipping would break the canonical form |
 | Appearance | Semantic `NSColor` values throughout — dark mode and accent-colour preferences inherit from the host |
 
 The full feature inventory and divergences from the Windows version are tracked in [CHANGELOG.md](CHANGELOG.md).
@@ -124,7 +125,7 @@ running them inside a Parallels virtual machine instead.
 │   ├── src/                   — HexEditor.mm (AppKit/NPP adapter) + core/HexCore.* (pure logic)
 │   ├── tests/                 — HexCoreTests (unit) + HexPluginSmokeTests (dlopen)
 │   ├── ui-tests-xcode/        — XCTest UI suite (XcodeGen-generated)
-│   ├── resources/             — Localizable.<lang>.strings (13 files: 9 full translations + 4 regional overrides)
+│   ├── resources/             — Localizable.<lang>.strings (15 files: 11 full translations + 4 regional overrides)
 │   ├── scripts/               — vm-bootstrap.sh + vm-test.sh (Parallels UI test workflow)
 │   └── CMakeLists.txt         — build, install, test wiring
 ├── CHANGELOG.md               — release notes

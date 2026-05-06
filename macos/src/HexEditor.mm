@@ -6284,6 +6284,13 @@ static NSView *createHexTableView(NSTableView **tableView, NSTextField **statusL
     // view fills the rest via HeightSizable) already adapt; the rootView itself
     // just needs the same flexibility to inherit the parent's actual size.
     rootView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    // Pin the entire hex chrome left-to-right under any locale — hex dumps
+    // are universally LTR (Offset on left, ASCII on right) regardless of
+    // whether the user reads Hebrew, Arabic, or any other script. Without
+    // this, AppKit would flip column order under -AppleLanguages '(he)' and
+    // every Hebrew/Arabic-speaking developer would be confused. Surrounding
+    // dialog chrome (menus, NSAlerts, the Options dialog) still flips.
+    rootView.userInterfaceLayoutDirection = NSUserInterfaceLayoutDirectionLeftToRight;
 
     NSTextField *label = [NSTextField labelWithString:@""];
     NSFont *labelFont = statusLabelFontFor(font);
@@ -6300,6 +6307,9 @@ static NSView *createHexTableView(NSTableView **tableView, NSTextField **statusL
 
     NSScrollView *scrollView = [[HexTableScrollView alloc] initWithFrame:NSMakeRect(0, 0, tableWidth, HEX_TABLE_HEIGHT - statusAreaHeight)];
     scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    // Belt-and-suspenders LTR pin (rootView already pins, but child scroll
+    // views can override their parent's direction in some macOS versions).
+    scrollView.userInterfaceLayoutDirection = NSUserInterfaceLayoutDirectionLeftToRight;
     scrollView.hasVerticalScroller = YES;
     scrollView.hasHorizontalScroller = YES;
     scrollView.borderType = NSNoBorder;
@@ -6317,6 +6327,11 @@ static NSView *createHexTableView(NSTableView **tableView, NSTextField **statusL
     NSTableView *table = [[HexTableView alloc] initWithFrame:scrollView.contentView.bounds];
     table.accessibilityIdentifier = kHexEditorTableAccessibilityID;
     table.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    // Pin the table's column ordering LTR — without this, NSTableView
+    // would render columns right-to-left under RTL locales and the
+    // Offset / hex bytes / ASCII layout would be mirrored, defeating the
+    // canonical hex-dump form.
+    table.userInterfaceLayoutDirection = NSUserInterfaceLayoutDirectionLeftToRight;
     table.usesAlternatingRowBackgroundColors = NO;
     table.gridStyleMask = NSTableViewGridNone;
     table.rowHeight = 18.0;
@@ -6808,6 +6823,88 @@ static const NSInteger kHexOptionsResultApply  = 4;
 }
 @end
 
+// RTL helpers for the Options-tab manual-frame layouts. Each tab below
+// uses NSMakeRect placement (labels at innerMargin, help buttons at
+// size.width - innerMargin - helpButtonSize, etc.) which is direction-
+// agnostic — AppKit doesn't auto-flip absolute frame coordinates under
+// `userInterfaceLayoutDirection`. Under Hebrew / Arabic we want the
+// trailing-edge content (help buttons, hint labels) to land on the
+// physical-leading edge and vice versa, so we mirror x-coords manually.
+//
+// hexFlippedX is the basic mirror: `containerWidth - naturalX -
+// elementWidth` reflects an element about the container's vertical
+// midline so its trailing edge under LTR maps to the leading edge under
+// RTL with the same gap.
+//
+// hexFlippedAlignment swaps NSTextAlignmentRight ↔ NSTextAlignmentLeft so
+// labels that were "right-aligned to hug the input field on their right"
+// under LTR become "left-aligned to hug the (now-mirrored) input field
+// on their left" under RTL. NSTextAlignmentNatural / Center / Justified
+// pass through unchanged.
+//
+// Together these let each tab function declare a single `BOOL isRTL` at
+// the top, wrap every NSMakeRect's x with hexFlippedX, and any explicit
+// NSTextAlignmentRight/Left with hexFlippedAlignment. The pattern keeps
+// the manual-frame code intact (no Auto-Layout rewrite) while delivering
+// proper RTL mirroring under Hebrew / Arabic locales.
+static inline CGFloat hexFlippedX(CGFloat naturalX, CGFloat elementWidth, CGFloat containerWidth, BOOL isRTL)
+{
+    return isRTL ? (containerWidth - naturalX - elementWidth) : naturalX;
+}
+
+static inline NSTextAlignment hexFlippedAlignment(NSTextAlignment alignment, BOOL isRTL)
+{
+    if (!isRTL) return alignment;
+    if (alignment == NSTextAlignmentRight) return NSTextAlignmentLeft;
+    if (alignment == NSTextAlignmentLeft) return NSTextAlignmentRight;
+    return alignment;
+}
+
+// Determine whether the plugin should render its dialog content in RTL
+// orientation. We follow the SAME language preference the .strings
+// cascade uses (HEX_EDITOR_LANG_OVERRIDE → CFPreferencesCopyAppValue →
+// system) rather than NSApp.userInterfaceLayoutDirection alone, so the
+// plugin flips correctly under both:
+//   1. Production: user sets system language to Hebrew → NSApp is RTL,
+//      hexUserPreferredLanguages() returns "he", direction matches.
+//   2. Plugin-scoped override: user keeps system English but runs
+//      `defaults write org.notepadplusplus.mac AppleLanguages -array he`
+//      to localize this plugin only → NSApp is LTR (host hasn't
+//      changed) but the plugin renders Hebrew strings, and we want the
+//      layout to flip too so the form looks right.
+//   3. Test harness: HEX_EDITOR_LANG_OVERRIDE forces a language for
+//      XCUITest (system defaults are sandbox-redirected), and again
+//      we want the layout to follow the override.
+//
+// The list below covers BCP-47 base tags for RTL scripts: Hebrew (he,
+// iw legacy), Arabic (ar), Persian/Farsi (fa), Urdu (ur), Yiddish
+// (yi), Central Kurdish/Sorani (ckb), Kashmiri (ks), Pashto (ps),
+// Sindhi (sd), Uyghur (ug). NSLocale's characterDirection lookup
+// would also work but we don't need its richness here.
+static inline BOOL hexCurrentLayoutIsRTL(void)
+{
+    // The plugin is built MRR (no ARC). `+setWithObjects:` returns an
+    // autoreleased set, which would be dealloc'd at the end of the
+    // first caller's autorelease pool — leaving rtlBases dangling for
+    // every subsequent call and crashing on the next invocation.
+    // Use `-initWithObjects:` instead so the set is owned with +1
+    // retain that never goes away, matching dispatch_once's once-per-
+    // process initialization contract.
+    static NSSet<NSString *> *rtlBases = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        rtlBases = [[NSSet alloc] initWithObjects:
+            @"he", @"iw", @"ar", @"fa", @"ur", @"yi",
+            @"ckb", @"ks", @"ps", @"sd", @"ug", nil];
+    });
+    NSString *first = [hexUserPreferredLanguages() firstObject];
+    if (first.length > 0) {
+        NSString *base = [[first componentsSeparatedByString:@"-"] firstObject];
+        if (base != nil && [rtlBases containsObject:base]) return YES;
+    }
+    return [NSApp userInterfaceLayoutDirection] == NSUserInterfaceLayoutDirectionRightToLeft;
+}
+
 // Build the Startup tab. Two prefs: an extensions list (space-separated)
 // and a control-char-density percent threshold. NPPN_BUFFERACTIVATED reads
 // these globals and decides whether to auto-open the hex view for the new
@@ -6826,50 +6923,60 @@ static NSView *makeStartupTab(NSSize size,
     const CGFloat fieldRowHeight = 22.0;
     const CGFloat blockGap = 18.0;
     const CGFloat hintGap = 4.0;
+    const BOOL isRTL = hexCurrentLayoutIsRTL();
 
     CGFloat y = size.height - innerMargin;
 
     // Extensions row -----------------------------------------------------
-    // Label "Extensions:" on the left, hint "e.g.: .dat …" on the right of
-    // the same line, full-width text field below.
+    // Label "Extensions:" on the leading edge, hint "e.g.: .dat …" on the
+    // trailing edge of the same line, full-width text field below. Under
+    // RTL all x-coords mirror about the container midline so the label
+    // ends up on the right (leading-physical) and the hint+help on the
+    // left (trailing-physical).
     y -= fieldRowHeight;
     NSTextField *extLabel = [NSTextField labelWithString:L(@"options.startup.extensions.label")];
     [extLabel sizeToFit];
-    extLabel.frame = NSMakeRect(innerMargin, y, NSWidth(extLabel.frame), fieldRowHeight);
+    extLabel.frame = NSMakeRect(hexFlippedX(innerMargin, NSWidth(extLabel.frame), size.width, isRTL),
+                                  y, NSWidth(extLabel.frame), fieldRowHeight);
     [view addSubview:extLabel];
 
     NSTextField *extHint = [NSTextField labelWithString:L(@"options.startup.extensions.hint")];
     extHint.textColor = [NSColor secondaryLabelColor];
-    extHint.alignment = NSTextAlignmentRight;
+    extHint.alignment = hexFlippedAlignment(NSTextAlignmentRight, isRTL);
     [extHint sizeToFit];
-    extHint.frame = NSMakeRect(size.width - innerMargin - helpButtonSize - helpButtonGap - NSWidth(extHint.frame),
+    extHint.frame = NSMakeRect(hexFlippedX(size.width - innerMargin - helpButtonSize - helpButtonGap - NSWidth(extHint.frame),
+                                              NSWidth(extHint.frame), size.width, isRTL),
                                 y,
                                 NSWidth(extHint.frame), fieldRowHeight);
     [view addSubview:extHint];
 
     HexHelpButton *extHelp = makeHexHelpButton(L(@"options.startup.extensions.help"),
                                                  @"hex-editor.options.startup.extensions.help");
-    extHelp.frame = NSMakeRect(size.width - innerMargin - helpButtonSize,
+    extHelp.frame = NSMakeRect(hexFlippedX(size.width - innerMargin - helpButtonSize, helpButtonSize, size.width, isRTL),
                                 y + (fieldRowHeight - helpButtonSize) / 2.0,
                                 helpButtonSize, helpButtonSize);
     [view addSubview:extHelp];
 
     y -= (hintGap + fieldRowHeight);
-    NSTextField *extField = [[NSTextField alloc] initWithFrame:NSMakeRect(innerMargin, y, size.width - 2 * innerMargin, fieldRowHeight)];
+    const CGFloat extFieldWidth = size.width - 2 * innerMargin;
+    NSTextField *extField = [[NSTextField alloc] initWithFrame:NSMakeRect(hexFlippedX(innerMargin, extFieldWidth, size.width, isRTL),
+                                                                              y, extFieldWidth, fieldRowHeight)];
     extField.accessibilityIdentifier = @"hex-editor.options.startup.extensions";
     [view addSubview:extField];
 
     // Percent row --------------------------------------------------------
     y -= (blockGap + fieldRowHeight);
     const CGFloat percentFieldWidth = 60.0;
-    const CGFloat percentFieldX = size.width - innerMargin - helpButtonSize - helpButtonGap - percentFieldWidth;
-    const CGFloat percentLabelMaxWidth = percentFieldX - innerMargin - 8.0;
+    const CGFloat percentFieldNaturalX = size.width - innerMargin - helpButtonSize - helpButtonGap - percentFieldWidth;
+    const CGFloat percentLabelMaxWidth = percentFieldNaturalX - innerMargin - 8.0;
 
     NSTextField *pctLabel = [NSTextField labelWithString:L(@"options.startup.percent.label")];
-    pctLabel.frame = NSMakeRect(innerMargin, y, percentLabelMaxWidth, fieldRowHeight);
+    pctLabel.frame = NSMakeRect(hexFlippedX(innerMargin, percentLabelMaxWidth, size.width, isRTL),
+                                 y, percentLabelMaxWidth, fieldRowHeight);
     [view addSubview:pctLabel];
 
-    NSTextField *pctField = [[NSTextField alloc] initWithFrame:NSMakeRect(percentFieldX, y, percentFieldWidth, fieldRowHeight)];
+    NSTextField *pctField = [[NSTextField alloc] initWithFrame:NSMakeRect(hexFlippedX(percentFieldNaturalX, percentFieldWidth, size.width, isRTL),
+                                                                              y, percentFieldWidth, fieldRowHeight)];
     pctField.alignment = NSTextAlignmentCenter;
     pctField.accessibilityIdentifier = @"hex-editor.options.startup.percent";
     NSNumberFormatter *pctFormatter = [[NSNumberFormatter alloc] init];
@@ -6882,7 +6989,7 @@ static NSView *makeStartupTab(NSSize size,
 
     HexHelpButton *pctHelp = makeHexHelpButton(L(@"options.startup.percent.help"),
                                                  @"hex-editor.options.startup.percent.help");
-    pctHelp.frame = NSMakeRect(size.width - innerMargin - helpButtonSize,
+    pctHelp.frame = NSMakeRect(hexFlippedX(size.width - innerMargin - helpButtonSize, helpButtonSize, size.width, isRTL),
                                 y + (fieldRowHeight - helpButtonSize) / 2.0,
                                 helpButtonSize, helpButtonSize);
     [view addSubview:pctHelp];
@@ -6945,12 +7052,15 @@ static NSView *makeColorsTab(NSSize size,
     const CGFloat wellHeight = 22.0;
     const CGFloat colGap = 12.0;
     const CGFloat headerHeight = 18.0;
+    const BOOL isRTL = hexCurrentLayoutIsRTL();
 
-    // Right-anchor the two well columns; the row labels stretch from the
-    // left margin to the start of the wells.
-    const CGFloat backWellX = size.width - innerMargin - helpButtonSize - colGap - wellWidth;
-    const CGFloat textWellX = backWellX - colGap - wellWidth;
-    const CGFloat labelMaxWidth = textWellX - innerMargin - 8.0;
+    // Trailing-anchor the two well columns; the row labels stretch from
+    // the leading margin to the start of the wells. Under RTL all x-coords
+    // mirror so the labels end up on the right (leading-physical) and the
+    // wells + help button on the left (trailing-physical).
+    const CGFloat backWellNaturalX = size.width - innerMargin - helpButtonSize - colGap - wellWidth;
+    const CGFloat textWellNaturalX = backWellNaturalX - colGap - wellWidth;
+    const CGFloat labelMaxWidth = textWellNaturalX - innerMargin - 8.0;
 
     // Header row: "Text"  "Back" centered above the two well columns.
     // __block so the addRow helper can advance y down for each row.
@@ -6958,19 +7068,21 @@ static NSView *makeColorsTab(NSSize size,
     NSTextField *textHeader = [NSTextField labelWithString:L(@"options.colors.header.text")];
     textHeader.alignment = NSTextAlignmentCenter;
     textHeader.textColor = [NSColor secondaryLabelColor];
-    textHeader.frame = NSMakeRect(textWellX, y, wellWidth, headerHeight);
+    textHeader.frame = NSMakeRect(hexFlippedX(textWellNaturalX, wellWidth, size.width, isRTL),
+                                    y, wellWidth, headerHeight);
     [view addSubview:textHeader];
 
     NSTextField *backHeader = [NSTextField labelWithString:L(@"options.colors.header.back")];
     backHeader.alignment = NSTextAlignmentCenter;
     backHeader.textColor = [NSColor secondaryLabelColor];
-    backHeader.frame = NSMakeRect(backWellX, y, wellWidth, headerHeight);
+    backHeader.frame = NSMakeRect(hexFlippedX(backWellNaturalX, wellWidth, size.width, isRTL),
+                                    y, wellWidth, headerHeight);
     [view addSubview:backHeader];
 
-    // Single help button to the right of "Back".
+    // Single help button on the trailing side of "Back".
     HexHelpButton *help = makeHexHelpButton(L(@"options.colors.help"),
                                               @"hex-editor.options.colors.help");
-    help.frame = NSMakeRect(size.width - innerMargin - helpButtonSize,
+    help.frame = NSMakeRect(hexFlippedX(size.width - innerMargin - helpButtonSize, helpButtonSize, size.width, isRTL),
                               y + (headerHeight - helpButtonSize) / 2.0,
                               helpButtonSize, helpButtonSize);
     [view addSubview:help];
@@ -7004,19 +7116,20 @@ static NSView *makeColorsTab(NSSize size,
                     NSColorWell *__strong *outFg, NSColorWell *__strong *outBg) {
         y -= (rowHeight + rowGap);
         NSTextField *rowLabel = [NSTextField labelWithString:L(labelKey)];
-        rowLabel.alignment = NSTextAlignmentRight;
-        rowLabel.frame = NSMakeRect(innerMargin, y + (rowHeight - rowLabel.intrinsicContentSize.height) / 2.0,
-                                     labelMaxWidth, rowLabel.intrinsicContentSize.height);
+        rowLabel.alignment = hexFlippedAlignment(NSTextAlignmentRight, isRTL);
+        rowLabel.frame = NSMakeRect(hexFlippedX(innerMargin, labelMaxWidth, size.width, isRTL),
+                                      y + (rowHeight - rowLabel.intrinsicContentSize.height) / 2.0,
+                                      labelMaxWidth, rowLabel.intrinsicContentSize.height);
         [view addSubview:rowLabel];
 
         const CGFloat wy = y + (rowHeight - wellHeight) / 2.0;
         if (hasFg) {
             NSColorWell *fg = makeWell([NSString stringWithFormat:@"hex-editor.options.colors.%@.fg", axBase],
-                                         fgColor, textWellX, wy);
+                                         fgColor, hexFlippedX(textWellNaturalX, wellWidth, size.width, isRTL), wy);
             if (outFg) *outFg = fg;
         }
         NSColorWell *bg = makeWell([NSString stringWithFormat:@"hex-editor.options.colors.%@.bg", axBase],
-                                     bgColor, backWellX, wy);
+                                     bgColor, hexFlippedX(backWellNaturalX, wellWidth, size.width, isRTL), wy);
         if (outBg) *outBg = bg;
         return bg;
     };
@@ -7170,9 +7283,13 @@ static NSView *makeFontTab(NSSize size,
     // column. 24pt is the gap, measured visually in the same way other
     // tabs space their controls.
     const CGFloat columnGap = 24.0;
+    const BOOL isRTL = hexCurrentLayoutIsRTL();
 
-    // Right-anchored help button column lives where the Colors tab's well
-    // column does — keeps the dialog's right gutter visually consistent.
+    // Trailing-anchored help button column lives where the Colors tab's
+    // well column does — keeps the dialog's gutter visually consistent.
+    // These constants describe the LTR ("natural") layout; mirroring
+    // happens at NSMakeRect time via hexFlippedX so RTL flips the entire
+    // form (label↔help-column) about the container midline.
     const CGFloat rightEdge = size.width - innerMargin;
     const CGFloat helpX = rightEdge - helpButtonSize;
     const CGFloat fieldRightEdge = helpX - helpButtonGap;
@@ -7204,15 +7321,17 @@ static NSView *makeFontTab(NSSize size,
 
     // Row 1: Font Name label + popup + help button.
     NSTextField *fontNameLabel = [NSTextField labelWithString:L(@"options.font.name")];
-    fontNameLabel.alignment = NSTextAlignmentRight;
-    fontNameLabel.frame = NSMakeRect(innerMargin,
+    fontNameLabel.alignment = hexFlippedAlignment(NSTextAlignmentRight, isRTL);
+    fontNameLabel.frame = NSMakeRect(hexFlippedX(innerMargin, labelMaxWidth, size.width, isRTL),
                                        y + (rowHeight - fontNameLabel.intrinsicContentSize.height) / 2.0,
                                        labelMaxWidth,
                                        fontNameLabel.intrinsicContentSize.height);
     [view addSubview:fontNameLabel];
 
     const CGFloat popupX = innerMargin + labelMaxWidth + 8.0;
-    fontNamePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(popupX, y, fieldRightEdge - popupX, rowHeight) pullsDown:NO];
+    const CGFloat fontNamePopupWidth = fieldRightEdge - popupX;
+    fontNamePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(hexFlippedX(popupX, fontNamePopupWidth, size.width, isRTL),
+                                                                       y, fontNamePopupWidth, rowHeight) pullsDown:NO];
     fontNamePopup.accessibilityIdentifier = @"hex-editor.options.font.name";
     // Filter to fixed-pitch families. NSFontManager doesn't fold mismatched
     // synonyms (e.g. "Courier" vs "Courier New"), so de-dupe via NSSet.
@@ -7237,7 +7356,7 @@ static NSView *makeFontTab(NSSize size,
 
     HexHelpButton *fontHelp = makeHexHelpButton(L(@"options.font.help"),
                                                   @"hex-editor.options.font.help");
-    fontHelp.frame = NSMakeRect(helpX,
+    fontHelp.frame = NSMakeRect(hexFlippedX(helpX, helpButtonSize, size.width, isRTL),
                                  y + (rowHeight - helpButtonSize) / 2.0,
                                  helpButtonSize, helpButtonSize);
     [view addSubview:fontHelp];
@@ -7246,15 +7365,16 @@ static NSView *makeFontTab(NSSize size,
 
     // Row 2: Font Size label + popup + Bold checkbox.
     NSTextField *fontSizeLabel = [NSTextField labelWithString:L(@"options.font.size")];
-    fontSizeLabel.alignment = NSTextAlignmentRight;
-    fontSizeLabel.frame = NSMakeRect(innerMargin,
+    fontSizeLabel.alignment = hexFlippedAlignment(NSTextAlignmentRight, isRTL);
+    fontSizeLabel.frame = NSMakeRect(hexFlippedX(innerMargin, labelMaxWidth, size.width, isRTL),
                                        y + (rowHeight - fontSizeLabel.intrinsicContentSize.height) / 2.0,
                                        labelMaxWidth,
                                        fontSizeLabel.intrinsicContentSize.height);
     [view addSubview:fontSizeLabel];
 
     const CGFloat sizePopupWidth = 70.0;
-    fontSizePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(popupX, y, sizePopupWidth, rowHeight) pullsDown:NO];
+    fontSizePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(hexFlippedX(popupX, sizePopupWidth, size.width, isRTL),
+                                                                       y, sizePopupWidth, rowHeight) pullsDown:NO];
     fontSizePopup.accessibilityIdentifier = @"hex-editor.options.font.size";
     NSArray<NSNumber *> *sizes = @[@10, @11, @12, @13, @14, @16, @18, @20, @24, @28, @32];
     for (NSNumber *sz in sizes) {
@@ -7262,8 +7382,9 @@ static NSView *makeFontTab(NSSize size,
     }
     [view addSubview:fontSizePopup];
 
-    // Right-column X. The right column hosts the short trait toggles
-    // (Bold / Italic / Underline) on rows 2-4 and must clear:
+    // Right-column X (natural / LTR). The right column hosts the short
+    // trait toggles (Bold / Italic / Underline) on rows 2-4 and must
+    // clear:
     //   - the size popup on row 2 (so Bold doesn't overlap it),
     //   - the longest left-column checkbox on rows 3-4 (Capital letters
     //     mode and Mirror Cursor as Rect, both ~150-170pt at en, but
@@ -7272,8 +7393,13 @@ static NSView *makeFontTab(NSSize size,
                                  NSWidth(mirrorCursorCheckbox.frame));
     const CGFloat rightColumnX = MAX(popupX + sizePopupWidth, popupX + leftMax) + columnGap;
 
-    auto placeCheckbox = ^(NSButton *cb, CGFloat cx, CGFloat cy) {
-        cb.frame = NSMakeRect(cx,
+    // placeCheckbox takes a NATURAL (LTR) x-coord and applies hexFlippedX
+    // internally so callers stay direction-agnostic. AppKit auto-flips
+    // the checkbox glyph (the box itself moves to the trailing side of
+    // the label under RTL); we only need to mirror the frame's leading
+    // origin x.
+    auto placeCheckbox = ^(NSButton *cb, CGFloat naturalX, CGFloat cy) {
+        cb.frame = NSMakeRect(hexFlippedX(naturalX, NSWidth(cb.frame), size.width, isRTL),
                                cy + (rowHeight - NSHeight(cb.frame)) / 2.0,
                                NSWidth(cb.frame),
                                NSHeight(cb.frame));
@@ -7400,6 +7526,7 @@ static NSView *makeStartLayoutTab(NSSize size,
     const CGFloat numericFieldWidth = 60.0;
     const CGFloat helpButtonSize = 18.0;
     const CGFloat helpButtonGap = 4.0;
+    const BOOL isRTL = hexCurrentLayoutIsRTL();
 
     // Layout from top down: 4 radio rows (bits column has 4 entries; the
     // others have 2, so the bits column dictates the radio block height).
@@ -7417,23 +7544,32 @@ static NSView *makeStartLayoutTab(NSSize size,
     // grouping kicks in (same superview + same action selector → mutually
     // exclusive selection within that group). Passing nil/nil leaves them
     // additive — multiple buttons in the group can be on at once.
+    // makeRadioGroup takes a NATURAL (LTR) start-x for the column. Under
+    // RTL each radio's frame and the help-button frame are mirrored
+    // about the container midline so the column lands on the RTL-leading
+    // side.
     HexOptionsButtonTarget *radioTarget = [[HexOptionsButtonTarget alloc] init];
     NSMutableArray<NSButton *> *(^makeRadioGroup)(NSArray<NSString *> *, CGFloat, CGFloat, NSString *, NSString *, NSString *, SEL) =
-    ^NSMutableArray<NSButton *> *(NSArray<NSString *> *titles, CGFloat startX, CGFloat startY, NSString *axIdPrefix, NSString *helpAxId, NSString *helpText, SEL groupAction) {
+    ^NSMutableArray<NSButton *> *(NSArray<NSString *> *titles, CGFloat naturalStartX, CGFloat startY, NSString *axIdPrefix, NSString *helpAxId, NSString *helpText, SEL groupAction) {
         NSMutableArray<NSButton *> *group = [NSMutableArray arrayWithCapacity:titles.count];
+        const CGFloat radioWidth = groupColumnWidth - helpButtonSize - helpButtonGap;
         CGFloat ry = startY - radioRowHeight;
         for (NSUInteger i = 0; i < titles.count; ++i) {
             NSButton *radio = [NSButton radioButtonWithTitle:titles[i] target:radioTarget action:groupAction];
-            radio.frame = NSMakeRect(startX, ry, groupColumnWidth - helpButtonSize - helpButtonGap, radioRowHeight);
+            radio.frame = NSMakeRect(hexFlippedX(naturalStartX, radioWidth, size.width, isRTL),
+                                       ry, radioWidth, radioRowHeight);
             radio.accessibilityIdentifier = [NSString stringWithFormat:@"%@.%@",
                 axIdPrefix, [titles[i] stringByReplacingOccurrencesOfString:@" " withString:@"_"]];
             [view addSubview:radio];
             [group addObject:radio];
             ry -= (radioRowHeight + radioGap);
         }
-        // Help button next to the first radio in the group.
+        // Help button next to the first radio in the group (trailing
+        // side of the column under LTR; leading side under RTL after
+        // the mirror).
         HexHelpButton *help = makeHexHelpButton(helpText, helpAxId);
-        help.frame = NSMakeRect(startX + groupColumnWidth - helpButtonSize,
+        const CGFloat helpNaturalX = naturalStartX + groupColumnWidth - helpButtonSize;
+        help.frame = NSMakeRect(hexFlippedX(helpNaturalX, helpButtonSize, size.width, isRTL),
                                  startY - radioRowHeight + (radioRowHeight - helpButtonSize) / 2.0,
                                  helpButtonSize, helpButtonSize);
         [view addSubview:help];
@@ -7480,17 +7616,22 @@ static NSView *makeStartLayoutTab(NSSize size,
     // Drop down to the field block.
     y -= radioBlockHeight + blockGap;
 
-    // Column Count + Address Width fields stack vertically. Label on the
-    // left, numeric text field on the right, help button beyond that.
+    // Column Count + Address Width fields stack vertically. Under LTR:
+    // label leading, numeric field trailing, help button beyond. Under
+    // RTL all three mirror about the container midline so label ends up
+    // on the right (leading-physical) and field+help on the left.
     const CGFloat fieldX = size.width - innerMargin - helpButtonSize - helpButtonGap - numericFieldWidth;
     const CGFloat labelMaxWidth = fieldX - innerMargin - labelToFieldGap;
+    const CGFloat helpFieldNaturalX = fieldX + numericFieldWidth + helpButtonGap;
 
     NSTextField *colLabel = [NSTextField labelWithString:L(@"options.startLayout.columnCount")];
-    colLabel.alignment = NSTextAlignmentRight;
-    colLabel.frame = NSMakeRect(innerMargin, y - fieldRowHeight, labelMaxWidth, fieldRowHeight);
+    colLabel.alignment = hexFlippedAlignment(NSTextAlignmentRight, isRTL);
+    colLabel.frame = NSMakeRect(hexFlippedX(innerMargin, labelMaxWidth, size.width, isRTL),
+                                  y - fieldRowHeight, labelMaxWidth, fieldRowHeight);
     [view addSubview:colLabel];
 
-    NSTextField *colField = [[NSTextField alloc] initWithFrame:NSMakeRect(fieldX, y - fieldRowHeight, numericFieldWidth, fieldRowHeight)];
+    NSTextField *colField = [[NSTextField alloc] initWithFrame:NSMakeRect(hexFlippedX(fieldX, numericFieldWidth, size.width, isRTL),
+                                                                            y - fieldRowHeight, numericFieldWidth, fieldRowHeight)];
     colField.alignment = NSTextAlignmentCenter;
     colField.accessibilityIdentifier = @"hex-editor.options.startLayout.columnCount";
     NSNumberFormatter *colFormatter = [[NSNumberFormatter alloc] init];
@@ -7502,7 +7643,7 @@ static NSView *makeStartLayoutTab(NSSize size,
 
     HexHelpButton *colHelp = makeHexHelpButton(L(@"options.startLayout.columnCount.help"),
                                                 @"hex-editor.options.startLayout.columnCount.help");
-    colHelp.frame = NSMakeRect(fieldX + numericFieldWidth + helpButtonGap,
+    colHelp.frame = NSMakeRect(hexFlippedX(helpFieldNaturalX, helpButtonSize, size.width, isRTL),
                                 y - fieldRowHeight + (fieldRowHeight - helpButtonSize) / 2.0,
                                 helpButtonSize, helpButtonSize);
     [view addSubview:colHelp];
@@ -7510,11 +7651,13 @@ static NSView *makeStartLayoutTab(NSSize size,
     y -= (fieldRowHeight + fieldRowGap);
 
     NSTextField *addrLabel = [NSTextField labelWithString:L(@"options.startLayout.addressWidth")];
-    addrLabel.alignment = NSTextAlignmentRight;
-    addrLabel.frame = NSMakeRect(innerMargin, y - fieldRowHeight, labelMaxWidth, fieldRowHeight);
+    addrLabel.alignment = hexFlippedAlignment(NSTextAlignmentRight, isRTL);
+    addrLabel.frame = NSMakeRect(hexFlippedX(innerMargin, labelMaxWidth, size.width, isRTL),
+                                   y - fieldRowHeight, labelMaxWidth, fieldRowHeight);
     [view addSubview:addrLabel];
 
-    NSTextField *addrField = [[NSTextField alloc] initWithFrame:NSMakeRect(fieldX, y - fieldRowHeight, numericFieldWidth, fieldRowHeight)];
+    NSTextField *addrField = [[NSTextField alloc] initWithFrame:NSMakeRect(hexFlippedX(fieldX, numericFieldWidth, size.width, isRTL),
+                                                                              y - fieldRowHeight, numericFieldWidth, fieldRowHeight)];
     addrField.alignment = NSTextAlignmentCenter;
     addrField.accessibilityIdentifier = @"hex-editor.options.startLayout.addressWidth";
     NSNumberFormatter *addrFormatter = [[NSNumberFormatter alloc] init];
@@ -7527,7 +7670,7 @@ static NSView *makeStartLayoutTab(NSSize size,
 
     HexHelpButton *addrHelp = makeHexHelpButton(L(@"options.startLayout.addressWidth.help"),
                                                  @"hex-editor.options.startLayout.addressWidth.help");
-    addrHelp.frame = NSMakeRect(fieldX + numericFieldWidth + helpButtonGap,
+    addrHelp.frame = NSMakeRect(hexFlippedX(helpFieldNaturalX, helpButtonSize, size.width, isRTL),
                                  y - fieldRowHeight + (fieldRowHeight - helpButtonSize) / 2.0,
                                  helpButtonSize, helpButtonSize);
     [view addSubview:addrHelp];

@@ -3997,6 +3997,8 @@ func testContextMenuCommands() throws {
     //   - ru        → "Strings: ru"                (full Russian translation)
     //   - uk        → "Strings: uk"                (full Ukrainian translation)
     //   - zh-Hans   → "Strings: zh-Hans"           (Simplified Chinese)
+    //   - he        → "Strings: he"                (Hebrew, RTL)
+    //   - ar        → "Strings: ar"                (Arabic, RTL)
     //   - ja (etc.) → "Strings: (embedded)"        (no shipped file → defaults)
     //
     // For en-GB / en-US, only the localeTag is overridden — every other key
@@ -4119,6 +4121,121 @@ func testContextMenuCommands() throws {
         try assertAboutDialog(app: app, helpItem: "Pomoc...",
                               expectedTag: "Strings: pl",
                               expectedBodyContains: "Natywny port")
+    }
+
+    func testLocalizationCascadeHebrew() throws {
+        let app = try launchNotepad(language: "he")
+        defer { app.terminate() }
+        try assertAboutDialog(app: app, helpItem: "עזרה...",
+                              expectedTag: "Strings: he",
+                              expectedBodyContains: "פורט מקורי",
+                              okButtonLabel: "אישור")
+    }
+
+    func testLocalizationCascadeArabic() throws {
+        let app = try launchNotepad(language: "ar")
+        defer { app.terminate() }
+        try assertAboutDialog(app: app, helpItem: "مساعدة...",
+                              expectedTag: "Strings: ar",
+                              expectedBodyContains: "نقل أصلي",
+                              okButtonLabel: "موافق")
+    }
+
+    /// Verifies the LTR pin on the hex view holds under an RTL locale —
+    /// Offset stays on the leading-physical edge (smaller x), ASCII stays
+    /// on the trailing-physical edge (larger x). Without the pin, AppKit
+    /// would flip the table's column order under -AppleLanguages '(he)'
+    /// and the canonical hex-dump form would be mirrored. Tested under
+    /// Hebrew; the pin is locale-independent so this also covers Arabic
+    /// and any future RTL locale.
+    func testHexTableStaysLTRUnderHebrewLocale() throws {
+        let app = try launchNotepad(language: "he")
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "abcdefghijklmnop")
+        // Hebrew locale renames "View in HEX" → "תצוגה ב-HEX"; that's the
+        // leaf we have to invoke through the localized menu hierarchy.
+        try invokeHexEditorMenu(app: app, item: "תצוגה ב-HEX")
+        Thread.sleep(forTimeInterval: 0.5)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5),
+                      "Hex table did not appear after View in HEX under Hebrew locale.")
+
+        let firstRow = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 3),
+                      "First row should exist with the seeded 16-byte buffer.")
+
+        let cells = firstRow.staticTexts
+        let cellCount = cells.count
+        XCTAssertGreaterThanOrEqual(cellCount, 3,
+                                    "Row should have at least offset + bytes + ASCII (got \(cellCount)).")
+
+        // boundBy:0 is the offset cell; the last staticText is the ASCII
+        // cell that runs the row's text gloss. Under LTR, offset.minX <
+        // ascii.minX. Under unpinned RTL it would invert.
+        let offsetCell = cells.element(boundBy: 0)
+        let asciiCell = cells.element(boundBy: cellCount - 1)
+        XCTAssertTrue(offsetCell.exists, "Offset cell should exist.")
+        XCTAssertTrue(asciiCell.exists, "ASCII cell should exist.")
+
+        let offsetX = offsetCell.frame.minX
+        let asciiX = asciiCell.frame.minX
+        XCTAssertLessThan(offsetX, asciiX,
+                          "Hex table must stay LTR under -AppleLanguages '(he)'. " +
+                          "Got offset.minX=\(offsetX), ascii.minX=\(asciiX). " +
+                          "If offset > ascii, the LTR pin in HexEditor.mm regressed and " +
+                          "AppKit flipped the column order under RTL.")
+    }
+
+    /// Verifies the Options dialog form content mirrors under an RTL
+    /// locale — on the Start Layout tab, the column-count label sits
+    /// on the leading edge of its row and the column-count field on
+    /// the trailing edge. Under LTR that means label.minX < field.minX;
+    /// under RTL the hexFlippedX retrofit mirrors both about the
+    /// container midline so label.minX > field.minX. Without the
+    /// retrofit, the manual NSMakeRect frames render LTR-positioned
+    /// regardless of locale and this assertion fails.
+    ///
+    /// (The Options-dialog labels themselves cascade to embedded English
+    /// — the translations don't ship those keys yet — so we look up the
+    /// label by its English text "Column Count:" which holds across
+    /// locales. The test exercises the LAYOUT mirror, not the strings
+    /// translation.)
+    func testOptionsDialogFlipsUnderHebrew() throws {
+        let app = try launchNotepad(language: "he")
+        defer { app.terminate() }
+
+        // Hebrew locale renames "Options..." → "אפשרויות..."
+        try invokeHexEditorMenu(app: app, item: "אפשרויות...")
+
+        let columnField = app.textFields["hex-editor.options.startLayout.columnCount"]
+        XCTAssertTrue(columnField.waitForExistence(timeout: 5),
+                      "Start Layout tab should expose the column-count field under Hebrew locale.")
+
+        // The "Column Count:" label sits to the leading side of the
+        // numeric field. AppKit doesn't expose labels by AX identifier
+        // here, so query by the label's English text (Options-dialog
+        // labels currently cascade to embedded English defaults — see
+        // HexEditor.mm gEmbeddedDefaults).
+        let columnLabel = app.staticTexts["Column Count:"]
+        XCTAssertTrue(columnLabel.waitForExistence(timeout: 3),
+                      "Column-count label should be reachable as a static text in the dialog.")
+
+        let labelX = columnLabel.frame.minX
+        let fieldX = columnField.frame.minX
+        XCTAssertGreaterThan(labelX, fieldX,
+                             "Under -AppleLanguages '(he)' the Start Layout column-count " +
+                             "row should mirror — label on the trailing-physical edge " +
+                             "(larger x), field on the leading-physical edge (smaller x). " +
+                             "Got label.minX=\(labelX), field.minX=\(fieldX). If label < " +
+                             "field, the hexFlippedX retrofit on makeStartLayoutTab regressed " +
+                             "and the form is rendering LTR-positioned under Hebrew.")
+
+        // Cancel without committing.
+        app.buttons["hex-editor.options.button.cancel"].click()
+        XCTAssertTrue(columnField.waitForNonExistence(timeout: 5),
+                      "Options dialog should dismiss after Cancel.")
     }
 
     func testLocalizationCascadeUnsupportedFallsBackToEmbedded() throws {

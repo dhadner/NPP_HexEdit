@@ -72,14 +72,19 @@ Windows version" below).
   so dark mode and accent colours follow the host with zero plugin-
   side code. No font / colour pickers — appearance is the host's
   job.
-- **Localized.** 13 `.strings` files: full translations for English,
-  German, Spanish, French, Italian, Polish, Russian, Ukrainian, and
-  Simplified Chinese; regional overrides for British, American,
-  Peninsular Spanish, and Mexican Spanish. Cascade falls through
-  exact tag → base tag → next preferred language → embedded English
-  defaults. The About dialog shows which file the runtime is using
-  and links to [LOCALIZATION.md](LOCALIZATION.md) on GitHub for users
-  whose language isn't yet supported.
+- **Localized.** 15 `.strings` files: full translations for English,
+  German, Spanish, French, Italian, Polish, Russian, Ukrainian,
+  Simplified Chinese, Hebrew, and Arabic; regional overrides for
+  British, American, Peninsular Spanish, and Mexican Spanish.
+  Cascade falls through exact tag → base tag → next preferred
+  language → embedded English defaults. The About dialog shows which
+  file the runtime is using and links to
+  [LOCALIZATION.md](LOCALIZATION.md) on GitHub for users whose
+  language isn't yet supported.
+- **RTL support.** Menus and dialogs auto-flip under Hebrew and
+  Arabic. The hex view itself stays LTR (hex dumps are universally
+  read left-to-right even by RTL-language developers, so flipping
+  would break the canonical form).
 - **Two-finger pinch / Cmd+Scroll zoom.** Discrete steps; algorithm
   matches Scintilla's so the gesture feels identical to the host's
   main text editor.
@@ -163,11 +168,11 @@ required gate before merging to master.
 - **Multiple rectangular selections** (Scintilla-style) and
   **column-mode typing** across a rectangle are not on the v1.1.x
   roadmap.
-- **Right-to-left languages** (Hebrew, Arabic) aren't shipped. The
-  hex view itself will stay LTR even under RTL locales (hex dumps
-  are universally LTR), but the surrounding dialog chrome would need
-  Auto Layout retrofit to flip correctly — pending until a real
-  user request lands.
+- The hex view is intentionally pinned LTR even under Hebrew and
+  Arabic — hex dumps are universally read left-to-right and flipping
+  the table would break the canonical form for RTL-language
+  developers. All other surfaces (menus, NSAlert dialogs, the four
+  Options dialog tabs, the host's window chrome) flip naturally.
 - The plugin still tracks Notepad++ macOS upstream API growth — see
   CHANGELOG for items that depend on host-side plumbing not yet
   exposed (e.g. comparing two split panes, intercepting
