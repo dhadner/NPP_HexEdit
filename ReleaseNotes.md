@@ -1,19 +1,93 @@
 # HEX-Editor for Notepad++ macOS — v1.1.0
 
-The big v1.1.0 addition: full **rectangular (block) selection**, matching the Windows plugin's `eSel::HEX_SEL_BLOCK` capability that v1.0.0 had to leave on the cutting-room floor. Plus a real **Options dialog** (where the rect-modifier preference lives) and a translator-friendly localization pass.
+The first public release of the macOS-native HEX-Editor plugin for
+Notepad++ — Jens Lorenz's Windows plugin from 2006, ported and rewritten
+for AppKit. Distributed through the Notepad++ macOS plugin manager.
+
+## What it is
+
+An inline hex view that swaps the active editor for an offset / hex
+bytes / ASCII grid. Direct byte editing, range and rectangular
+selection, find/replace, file-based compare, and pattern operations —
+all reachable via the Plugins menu and a context menu over the hex
+view.
+
+The macOS port is a from-scratch native rewrite, not a Wine wrapper
+around the Windows binary. It links against an AppKit-shaped plugin
+ABI and shares no runtime code with the Windows tree (which remains
+in `HexEditor/` for reference). Where the macOS and Windows plugins
+do the same thing, they do it the same way; where they differ, it's a
+deliberate choice to fit Mac conventions (see "Differences from the
+Windows version" below).
 
 ## Highlights
 
-- **Option-drag in the hex pane, ASCII pane, or address column** draws a 2D rectangle. In bytes / ASCII the drag is cell-granular; in the address column it spans whole rows. The modifier is configurable in Options (Option, matching Scintilla / the Windows plugin; or Shift+Option, matching VS Code).
-- **Shift+Option+arrow keys** grow / shrink the rectangle. The first such press while no rect exists creates a 1×1 rect at the caret. Plain arrows / typing collapse it.
-- **Cut / Copy / Paste / Delete** work on the rectangle as a unit. Copy emits both a public-text fallback (hex per row, or ASCII per row, or address strings joined by newlines, depending on the source pane) and a custom pasteboard type carrying the kind tag plus the rectangle's shape — so paste-back into the plugin preserves geometry. Delete is zero-fill (file size unchanged, offsets preserved).
-- **Strict shape-match paste**: pasting a rectangular payload requires the destination to be a rectangle of the exact same width × height. Mismatch shows a clarifying dialog. Address-source clipboards are rejected as "cannot paste as bytes". External text-only clipboards (no custom UTI) are parsed as `\n`-separated rows per the same rules; single-line text falls through to the existing linear paste so cross-app workflows are unaffected.
-- **Pattern Replace on a rectangle** fills row-by-row with the pattern restarting at each row's first byte (matches the Windows `eSel::HEX_SEL_BLOCK` semantics). Linear Pattern Replace is unchanged.
-- **Options dialog** (Plugins → HEX-Editor → Options...) returns, this time with real settings instead of a stub. Today: rectangular-modifier choice. Designed to grow without churning the main menu.
-- **Numbered localized parameters** — every multi-parameter `.strings` key now uses `%1$`, `%2$`, ... so translators can reorder freely. The dynamic-width hex strings in `goto.message` are pre-formatted at the call site so translators see plain `%1$@` / `%2$@` slots.
-- **IDE quieter** — `.vscode/c_cpp_properties.json` no longer trips the Microsoft C/C++ extension on the universal build's dual `-arch` flags. clangd users keep their existing `macos/.clangd` setup.
+- **Inline hex view.** `NSTableView` overlay with offset / hex bytes /
+  ASCII columns. Bookmark on the offset gutter, view-mode submenu
+  (8/16/32/64-bit grouping; hex / binary notation; big- / little-
+  endian display), configurable address width and columns.
+  Bit-precise editing in binary mode.
+- **Linear and rectangular selection.** Drag, Shift+click, or
+  Shift+arrow / Shift+Page-Up/Down for linear; Option-drag (or
+  Shift+Option, configurable) for rectangular. Shift+Option+arrows
+  grow / shrink the rectangle. Cut / Copy / Paste / Delete and
+  Pattern Replace work on either selection kind.
+- **Multi-GB clipboard.** Copy / paste of multi-gigabyte hex
+  selections doesn't serialise the buffer into pasteboard bytes — the
+  plugin promises the data via `NSPasteboardTypeOwner` and
+  materialises lazily on consumer request (or at quit time, after a
+  Word-style "keep clipboard contents?" prompt above 16 MB). Find,
+  Compare, and rectangular paste iterate via 256 KB `ByteSource`
+  chunks straight off the Scintilla doc, so RAM use is O(window) not
+  O(file).
+- **Cross-app paste from debugger / hex-tool output.** Paste strips
+  the address column and ASCII gloss from output of lldb
+  (`memory read`), gdb (`x/16xb`), xxd, x64dbg, IDA, C-string escape
+  sequences, and C array literals. Just copy from the tool, paste
+  into the hex view.
+- **Strict-shape rectangular paste.** A rectangular payload requires
+  a same-shape destination rect; mismatch shows a clarifying dialog.
+  A custom pasteboard type carries the rect's shape and source-pane
+  kind so a copy-then-paste round-trip preserves geometry.
+- **Search and navigation.** Find (Cmd+F), Find and Replace
+  (Cmd+Alt+F), Find Next (Cmd+G), Find Previous (Cmd+Shift+G).
+  Auto-detects ASCII vs hex byte patterns (`0x` prefix or hex digits
+  with separators trigger byte-pattern search). Go to Offset (Cmd+L)
+  accepts decimal, `0x`-prefixed hex, and relative `+` / `-` offsets.
+  Cmd+Home / Cmd+End jump to document edges; Shift+Cmd+arrow extends
+  selection by line / to document edges.
+- **Mac-native keyboard nav.** Bare Up / Down / Left / Right arrows
+  scroll the viewport so the cursor never walks off-screen. Page Up
+  / Down keep at least one row of any active selection visible.
+  Asymmetric Left / Right byte-stride matches Windows: from nibble 0
+  Left moves a full byte; from nibble 1 it moves one nibble back.
+- **File-based Compare HEX.** Pick any file via the system Open
+  panel; differing bytes highlight in red; one click clears the
+  result.
+- **Pattern operations.** Insert Columns (inject a hex pattern into
+  every row at a chosen column position) and Pattern Replace (fill
+  a selection with a repeating pattern, restarting at each row's
+  first byte for rectangular selections).
+- **Mac-native appearance.** Semantic `NSColor` values throughout,
+  so dark mode and accent colours follow the host with zero plugin-
+  side code. No font / colour pickers — appearance is the host's
+  job.
+- **Localized.** 13 `.strings` files: full translations for English,
+  German, Spanish, French, Italian, Polish, Russian, Ukrainian, and
+  Simplified Chinese; regional overrides for British, American,
+  Peninsular Spanish, and Mexican Spanish. Cascade falls through
+  exact tag → base tag → next preferred language → embedded English
+  defaults. The About dialog shows which file the runtime is using
+  and links to [LOCALIZATION.md](LOCALIZATION.md) on GitHub for users
+  whose language isn't yet supported.
+- **Two-finger pinch / Cmd+Scroll zoom.** Discrete steps; algorithm
+  matches Scintilla's so the gesture feels identical to the host's
+  main text editor.
 
 ## Install
+
+The plugin ships through the Notepad++ macOS plugin manager — install
+it from there. To build from source instead:
 
 ```sh
 cmake -S macos -B macos/build-universal -DCMAKE_BUILD_TYPE=Release
@@ -21,30 +95,85 @@ cmake --build macos/build-universal
 cmake --install macos/build-universal
 ```
 
-Restart Notepad++ macOS. The plugin appears as **Plugins → HEX-Editor** with seven entries: View in HEX, Compare HEX, Clear Compare Result, Insert Columns, Pattern Replace, Options, and Help.
+Restart Notepad++ macOS. The plugin appears as **Plugins → HexEditor**
+with seven entries: View in HEX, Compare HEX, Clear Compare Result,
+Insert Columns, Pattern Replace, Options, and Help.
 
-The build expects a checkout of `notepad-plus-plus-macos` next to this repo; pass `-DNPP_MACOS_DIR=/path/to/notepad-plus-plus-macos` if it lives elsewhere.
+The build expects a checkout of `notepad-plus-plus-macos` next to this
+repo; pass `-DNPP_MACOS_DIR=/path/to/notepad-plus-plus-macos` if it
+lives elsewhere.
 
 ## Differences from the Windows version
 
-- v1.1.0 closes v1.0.0's biggest gap — rectangular Pattern Replace now works on macOS with per-row pattern restart matching the Windows semantics.
-- The Options dialog scope is plugin behavior (rect modifier), not appearance. Color / font choices remain delegated to the host's `NSAppearance` and Style Configurator.
-- All other v1.0.0 divergences (Compare HEX picks a file rather than a second split; lowercase hex copy by default; macOS Help is a simple About dialog; Goto reached via Cmd+L) carry over unchanged. See [CHANGELOG.md](CHANGELOG.md) for the full list.
+The macOS port deliberately diverges from the Windows plugin in a
+handful of places — every divergence preserves Windows feature
+semantics while adopting the platform-native shape:
+
+- **Compare HEX picks a file from disk** instead of comparing the two
+  panes of a split-view editor. Notepad++ macOS doesn't expose a
+  plugin API for reading a second split pane's contents; the
+  file-picker approach also makes "compare my unsaved edits against
+  the saved version" a one-step workflow.
+- **Goto Offset** is reached via Cmd+L (matches macOS browser/Pages
+  convention) and a context-menu entry.
+- **No `Capital` preference.** Copy emits lowercase hex text; on-
+  screen rendering is lowercase too.
+- **No font / colour pickers in Options.** Plugin colours are
+  semantic and follow the host automatically; the host owns
+  appearance via `NSAppearance` + Style Configurator.
+- **Toolbar registration** isn't wired yet — the toolbar PNGs ship in
+  the install directory ready for the host's eventual toolbar-
+  registration API.
+- **macOS-only context-menu additions:** Undo / Redo and Zoom In /
+  Out / Restore Default Zoom. Useful on macOS where Cmd+Plus to zoom
+  is universally expected.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full divergence list and the
+engineering-notes section.
 
 ## Tests
 
-- **HexCore** unit tests — 30 suites, ~750 assertions, runs in milliseconds. New in v1.1.0: rect extract / format / parse coverage including the external-text inbound parser (Q2.b), shape-mismatch rejection, EOF clipping, and CRLF tolerance.
-- **Plugin smoke** — dlopen + verify the 7-item menu. ~400 ms.
-- **XCTest UI** — full suite against the running app. New: Options dialog opens-and-cancels-cleanly. Diagnostic AX value extended with rect fields so future tests can verify rect state structurally rather than via fragile drag mechanics.
+Three tiers, all green at release.
 
-Run the fast pair (`unit | smoke`) with `ctest --test-dir macos/build-universal -L "unit|smoke" --output-on-failure`. Run the UI tier via `macos/ui-tests-xcode/run-tests.sh` (or in a Parallels VM per [DEVELOPER.md](DEVELOPER.md) to avoid locking your keyboard for ~14 minutes).
+- **HexCore unit tests** — pure C++, ~750 assertions. Milliseconds.
+  `ctest -L unit`.
+- **Plugin smoke tests** — `dlopen`s the dylib, asserts the NPP
+  exports, the menu shape, and English titles. `ctest -L smoke`.
+- **XCTest UI** — full suite against the running Notepad++.app:
+  toggle, undo/redo, append-at-EOF, cut/copy/paste/delete round-
+  trips (linear and rectangular, including 1.5 GB scale), rectangle
+  drag and extend, view-submode rendering, all dialog flows,
+  bit-precise editing, mirror-cursor rendering, and the localization
+  cascade for all 13 shipped tags + an unsupported-language fallback.
+  Runs via `macos/ui-tests-xcode/run-tests.sh` (or in a Parallels VM
+  per [DEVELOPER.md](DEVELOPER.md) to avoid locking your keyboard for
+  ~14 minutes).
 
-## Known limitations / planned
+The pre-commit suite (`macos/scripts/pre-commit-tests.sh`) runs all
+five tiers (unit, unit+ASan/UBSan, smoke, fuzz, full UI) and is the
+required gate before merging to master.
 
-- **Rectangular paste at a bare caret** is intentionally not supported in v1.1.0 — the strict-shape rule requires a same-shape destination rect. A future release may add an optional "auto-create destination from clipboard shape at caret" behavior; for now the safer path is the strict rule.
-- **Multiple rectangular selections** (Scintilla-style) and **column-mode typing** across a rectangle are not on the v1.1.x roadmap.
-- The plugin still tracks Notepad++ macOS upstream API growth — see CHANGELOG for items that depend on host-side plumbing not yet exposed (e.g. comparing two split panes, intercepting `IDM_SEARCH_GOTOLINE`).
+## Known limitations
+
+- **Rectangular paste at a bare caret** is intentionally not
+  supported — the strict-shape rule requires a same-shape destination
+  rect. A future release may add an opt-in "auto-create destination
+  from clipboard shape at caret" behaviour; for now the safer rule
+  wins.
+- **Multiple rectangular selections** (Scintilla-style) and
+  **column-mode typing** across a rectangle are not on the v1.1.x
+  roadmap.
+- **Right-to-left languages** (Hebrew, Arabic) aren't shipped. The
+  hex view itself will stay LTR even under RTL locales (hex dumps
+  are universally LTR), but the surrounding dialog chrome would need
+  Auto Layout retrofit to flip correctly — pending until a real
+  user request lands.
+- The plugin still tracks Notepad++ macOS upstream API growth — see
+  CHANGELOG for items that depend on host-side plumbing not yet
+  exposed (e.g. comparing two split panes, intercepting
+  `IDM_SEARCH_GOTOLINE`, toolbar registration).
 
 ## License
 
-GPLv2, inherited from the original Jens Lorenz source. See [HexEditor/license.txt](HexEditor/license.txt).
+GPLv2, inherited from the original Jens Lorenz source. See
+[HexEditor/license.txt](HexEditor/license.txt).
