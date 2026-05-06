@@ -24,6 +24,9 @@
 "menu.context.copy"                = "Copy";
 "menu.context.paste"               = "Paste";
 "menu.context.delete"              = "Delete";
+"menu.context.selectAll"           = "Select All";
+"menu.context.selectToStart"       = "Select to Start of File";
+"menu.context.selectToEnd"         = "Select to End of File";
 "menu.context.cutBinary"           = "Cut Binary Content";
 "menu.context.copyBinary"          = "Copy Binary Content";
 "menu.context.pasteBinary"         = "Paste Binary Content";
@@ -65,8 +68,8 @@
 
 /* Columns dialog */
 "columns.title"                    = "Columns";
-"columns.message"                  = "Number of cells per row (1–%d at the current bit width).";
-"columns.invalidMaximum"           = "Maximum of %d bytes can be shown in a row.";
+"columns.message"                  = "Number of cells per row (1–%1$d at the current bit width).";
+"columns.invalidMaximum"           = "Maximum of %1$d bytes can be shown in a row.";
 
 /* Go to Offset dialog */
 "goto.title"                       = "Go to Offset";
@@ -97,7 +100,7 @@
 "find.errorReplaceLength"          = "Current selection does not match the find pattern's length.";
 "find.errorReplaceFailedShort"     = "Replacement failed.";
 "find.replacedSingular"            = "Replaced 1 occurrence.";
-"find.replacedPlural"              = "Replaced %d occurrences.";
+"find.replacedPlural"              = "Replaced %1$d occurrences.";
 
 /* Compare HEX */
 "compare.openHexFirstCompare"      = "Open the hex view (View in HEX) before using Compare HEX.";
@@ -110,7 +113,7 @@
 "compare.openPanelMessage"         = "Pick a file to compare against the current buffer.";
 "compare.summaryMatch"             = "Files match.";
 "compare.summaryDifferSingular"    = "1 byte differs.\nUse Clear Compare Result to remove the highlight.";
-"compare.summaryDifferPlural"      = "%d bytes differ.\nUse Clear Compare Result to remove the highlight.";
+"compare.summaryDifferPlural"      = "%1$d bytes differ.\nUse Clear Compare Result to remove the highlight.";
 "compare.noActiveResult"           = "No active comparison to clear.";
 
 /* Insert Columns */
@@ -123,8 +126,8 @@
 "insertColumns.placeholder.position" = "Position (column index, 0 = left edge)";
 "insertColumns.errorEmptyPattern"  = "Pattern is empty.";
 "insertColumns.errorParsePattern"  = "Pattern must be a sequence of hex bytes (e.g. 0x00, DE AD BE EF).";
-"insertColumns.errorRangeCount"    = "Column count must be between 1 and %d at the current bit width.";
-"insertColumns.errorRangePosition" = "Insert position must be between 0 and %d (the current column count).";
+"insertColumns.errorRangeCount"    = "Column count must be between 1 and %1$d at the current bit width.";
+"insertColumns.errorRangePosition" = "Insert position must be between 0 and %1$d (the current column count).";
 "insertColumns.errorBufferEmpty"   = "Buffer is empty — nothing to insert into.";
 "insertColumns.errorRowSize"       = "Invalid current row size.";
 "insertColumns.errorFailed"        = "Insert failed.";
@@ -135,18 +138,18 @@
 "patternReplace.openHexFirst"      = "Open the hex view (View in HEX) before using Pattern Replace.";
 "patternReplace.requireSelection"  = "Select something in the hex view first — Pattern Replace fills the selection.";
 "patternReplace.title"             = "Pattern Replace";
-"patternReplace.message"           = "Fill the current %zu-byte selection with a repeating hex pattern.\n\nPattern: hex bytes only (e.g. 0xFF or DE AD).";
+"patternReplace.message"           = "Fill the current %1$zu-byte selection with a repeating hex pattern.\n\nPattern: hex bytes only (e.g. 0xFF or DE AD).";
 "patternReplace.button"            = "Replace";
 "patternReplace.placeholder"       = "Pattern (hex): 0xFF or DE AD";
 "patternReplace.errorEmptyPattern" = "Pattern is empty.";
 "patternReplace.errorParsePattern" = "Pattern must be a sequence of hex bytes (e.g. 0xFF or DE AD BE EF).";
 "patternReplace.errorFailed"       = "Pattern Replace failed.";
 "patternReplace.summarySingular"   = "Replaced 1 byte with the pattern.";
-"patternReplace.summaryPlural"     = "Replaced %d bytes with the pattern.";
+"patternReplace.summaryPlural"     = "Replaced %1$d bytes with the pattern.";
 
 /* Status bar (substring-matched by UI tests — wording is contractual) */
 "status.empty"                     = "Current document is empty.";
-"status.showing"                   = "Showing %zu bytes.";
+"status.showing"                   = "Showing %1$zu bytes.";
 "status.rectangle"                 = "Rectangle: %1$lu × %2$lu (%3$lu bytes)";
 
 /* Rectangular paste error dialogs (strict shape-match, see DEVELOPER.md) */
@@ -166,18 +169,18 @@
    running host (which on Mac is Nextpad++). */
 "about.body"                       = "Native macOS port of the N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+ HEX-Editor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.";
 /* Plugin version line. %@ is the version string (e.g. "1.1.0"). */
-"about.version"                    = "Version %@";
-/* Build tag line. %@ is the git short-hash captured at configure time
-   (e.g. "a1b2c3d", or "a1b2c3d-dirty" when the working tree had uncommitted
-   changes when the dylib was built). Lets a user paste an exact identifier
-   when reporting an issue so the maintainer can reproduce against that commit. */
-"about.build"                      = "Build %@";
+"about.version"                    = "Version %1$@";
 /* GitHub project URL line. Hard-coded — translators don't localize it. */
 "about.url"                        = "Project: https://github.com/dhadner/NPP_HexEdit";
 /* Diagnostic line in the About dialog — names the .strings file currently in
    use, so users (and the cascade XCTest) can see at a glance whether their
    translation loaded. Each shipped .strings file declares its own tag. */
 "about.localeTag"                  = "Strings: en";
+/* Pointer to the translator-facing LOCALIZATION.md guide on GitHub.
+   Shown directly under the locale tag in the About dialog so a curious
+   user (especially one whose preferred language isn't yet supported)
+   can find the contribution path in one click. */
+"about.localizationGuide"          = "Help translate: https://github.com/dhadner/NPP_HexEdit/blob/master/LOCALIZATION.md";
 
 /* Quit-time clipboard prompt (Office/Word pattern). Shown when the user
    has copied a large selection in the HEX view and HEX-Editor is about

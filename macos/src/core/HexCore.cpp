@@ -89,99 +89,59 @@ CursorState cursorToDocumentEnd(const CursorState &cursor, const DocumentView &v
     return clampCursor(next, view);
 }
 
+// Asymmetric arrow navigation in hex pane:
+//   • from FIRST nibble (nibble == 0): arrow moves one BYTE.
+//   • from SECOND nibble (nibble == 1): arrow snaps to the FIRST nibble
+//     of the same byte (Left) or the next byte (Right) — i.e. one
+//     NIBBLE of motion either way.
+// The cursor never stops at a second nibble via arrow keys; the only
+// way to land there is a mouse click that hits the right half of a
+// byte's hex cell. This matches the Notepad++ Windows source. Earlier
+// 2026-05-05 work mistakenly converted Right's "first → second nibble"
+// case into "first → first of next byte" too aggressively, but then
+// also lost the Left "second → first of same byte" snap; this is the
+// corrected version.
 CursorState navigateLeft(const CursorState &cursor, const DocumentView &view)
 {
+    // From second nibble: snap to first nibble of CURRENT byte (1 nibble back).
     if (cursor.field == CursorField::Hex && cursor.nibble > 0) {
         CursorState next = cursor;
         next.nibble = 0;
         return next;
     }
+    // From first nibble: move one byte back (lands at first nibble).
     return moveCursor(cursor, -1, view);
 }
 
 CursorState navigateRight(const CursorState &cursor, const DocumentView &view)
 {
-    if (cursor.field == CursorField::Hex && cursor.nibble == 0 && cursor.offset < view.totalLength) {
-        CursorState next = cursor;
-        next.nibble = 1;
-        return next;
+    // From any nibble: land at first nibble of NEXT byte. (For nibble == 0
+    // that's a 1-byte move; for nibble == 1 that's a 1-nibble move.)
+    CursorState next = cursor;
+    next.nibble = 0;
+    const std::size_t maxOff = view.maxEditableOffset();
+    if (next.offset < maxOff) {
+        next.offset += 1;
     }
-    return moveCursor(cursor, 1, view);
+    return clampCursor(next, view);
 }
 
 CursorState navigateLeft(const CursorState &cursor, const DocumentView &view, const ViewMode &mode, int bytesPerRow)
 {
-    if (cursor.field != CursorField::Hex || bytesPerRow <= 0 || !isValidBytesPerCell(mode.bytesPerCell)) {
-        return navigateLeft(cursor, view);
-    }
-
-    const std::size_t bpr = static_cast<std::size_t>(bytesPerRow);
-    const std::size_t row = cursor.offset / bpr;
-    const std::size_t byteInRow = cursor.offset - row * bpr;
-    DisplayPosition dp = displayPositionForByte(byteInRow, cursor.nibble, mode);
-    const int dpc = digitsPerCell(mode);
-    long flatDigit = static_cast<long>(dp.cellIndex) * dpc + dp.digitInCell;
-
-    if (flatDigit > 0) {
-        --flatDigit;
-    } else {
-        // At first display digit of row: walk to last digit of previous row, if any.
-        if (row == 0) {
-            return cursor;
-        }
-        const long perRow = static_cast<long>(bpr / static_cast<std::size_t>(mode.bytesPerCell)) * dpc;
-        flatDigit = perRow - 1;
-        const std::size_t newCell = static_cast<std::size_t>(flatDigit / dpc);
-        const int newDigit = static_cast<int>(flatDigit % dpc);
-        const PhysicalPosition pp = physicalPositionForDisplay(newCell, newDigit, mode);
-        CursorState next = cursor;
-        next.offset = (row - 1) * bpr + pp.byteInRow;
-        next.nibble = pp.subInByte;
-        return clampCursor(next, view, mode);
-    }
-
-    const std::size_t newCell = static_cast<std::size_t>(flatDigit / dpc);
-    const int newDigit = static_cast<int>(flatDigit % dpc);
-    const PhysicalPosition pp = physicalPositionForDisplay(newCell, newDigit, mode);
-    CursorState next = cursor;
-    next.offset = row * bpr + pp.byteInRow;
-    next.nibble = pp.subInByte;
-    return clampCursor(next, view, mode);
+    // 4-arg variant: byte-stride doesn't depend on ViewMode or
+    // bytesPerRow, so we just delegate. (Previously this did digit-by-
+    // digit navigation for the hex pane; that was the user-reported
+    // 2026-05-05 nibble-stride bug.)
+    (void)mode;
+    (void)bytesPerRow;
+    return navigateLeft(cursor, view);
 }
 
 CursorState navigateRight(const CursorState &cursor, const DocumentView &view, const ViewMode &mode, int bytesPerRow)
 {
-    if (cursor.field != CursorField::Hex || bytesPerRow <= 0 || !isValidBytesPerCell(mode.bytesPerCell)) {
-        return navigateRight(cursor, view);
-    }
-
-    const std::size_t bpr = static_cast<std::size_t>(bytesPerRow);
-    const std::size_t row = cursor.offset / bpr;
-    const std::size_t byteInRow = cursor.offset - row * bpr;
-    DisplayPosition dp = displayPositionForByte(byteInRow, cursor.nibble, mode);
-    const int dpc = digitsPerCell(mode);
-    const long perRow = static_cast<long>(bpr / static_cast<std::size_t>(mode.bytesPerCell)) * dpc;
-    long flatDigit = static_cast<long>(dp.cellIndex) * dpc + dp.digitInCell;
-
-    if (flatDigit < perRow - 1) {
-        ++flatDigit;
-        const std::size_t newCell = static_cast<std::size_t>(flatDigit / dpc);
-        const int newDigit = static_cast<int>(flatDigit % dpc);
-        const PhysicalPosition pp = physicalPositionForDisplay(newCell, newDigit, mode);
-        CursorState next = cursor;
-        next.offset = row * bpr + pp.byteInRow;
-        next.nibble = pp.subInByte;
-        return clampCursor(next, view, mode);
-    }
-
-    // At last digit of row: advance to first digit of next row (or append slot).
-    CursorState next = cursor;
-    next.offset = (row + 1) * bpr;
-    next.nibble = 0;
-    if (next.offset > view.maxEditableOffset()) {
-        next.offset = view.maxEditableOffset();
-    }
-    return clampCursor(next, view, mode);
+    (void)mode;
+    (void)bytesPerRow;
+    return navigateRight(cursor, view);
 }
 
 ByteRange selectedOrCurrentRange(const DocumentView &view, const CursorState &cursor, const Selection &selection)

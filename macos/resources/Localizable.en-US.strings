@@ -11,7 +11,6 @@
  */
 
 /* About / help dialog — diagnostic locale tag */
-"about.version"                    = "Version %@";
-"about.build"                      = "Build %@";
+"about.version"                    = "Version %1$@";
 "about.url"                        = "Project: https://github.com/dhadner/NPP_HexEdit";
 "about.localeTag"                  = "Strings: en-US";

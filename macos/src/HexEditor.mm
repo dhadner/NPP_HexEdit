@@ -24,14 +24,6 @@
 #define HEX_PLUGIN_VERSION "0.0.0"
 #endif
 
-// Build tag — git short-hash at configure time, possibly with "-dirty"
-// suffix for builds against an uncommitted working tree. Same fallback
-// pattern as HEX_PLUGIN_VERSION: IDE indexers see "unknown"; the shipped
-// build always carries the CMake-provided real hash. See macos/CMakeLists.txt.
-#ifndef HEX_PLUGIN_BUILD
-#define HEX_PLUGIN_BUILD "unknown"
-#endif
-
 static const char *PLUGIN_NAME = "HexEditor";
 static const int NB_FUNC = 7;
 
@@ -223,6 +215,9 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"menu.context.copy":                @"Copy",
             @"menu.context.paste":               @"Paste",
             @"menu.context.delete":              @"Delete",
+            @"menu.context.selectAll":           @"Select All",
+            @"menu.context.selectToStart":       @"Select to Start of File",
+            @"menu.context.selectToEnd":         @"Select to End of File",
             @"menu.context.cutBinary":           @"Cut Binary Content",
             @"menu.context.copyBinary":          @"Copy Binary Content",
             @"menu.context.pasteBinary":         @"Paste Binary Content",
@@ -264,8 +259,8 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
 
             // Columns dialog
             @"columns.title":                    @"Columns",
-            @"columns.message":                  @"Number of cells per row (1–%d at the current bit width).",
-            @"columns.invalidMaximum":           @"Maximum of %d bytes can be shown in a row.",
+            @"columns.message":                  @"Number of cells per row (1–%1$d at the current bit width).",
+            @"columns.invalidMaximum":           @"Maximum of %1$d bytes can be shown in a row.",
 
             // Go to Offset dialog
             @"goto.title":                       @"Go to Offset",
@@ -296,7 +291,7 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"find.errorReplaceLength":          @"Current selection does not match the find pattern's length.",
             @"find.errorReplaceFailedShort":    @"Replacement failed.",
             @"find.replacedSingular":            @"Replaced 1 occurrence.",
-            @"find.replacedPlural":              @"Replaced %d occurrences.",
+            @"find.replacedPlural":              @"Replaced %1$d occurrences.",
 
             // Compare HEX
             @"compare.openHexFirstCompare":      @"Open the hex view (View in HEX) before using Compare HEX.",
@@ -309,7 +304,7 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"compare.openPanelMessage":         @"Pick a file to compare against the current buffer.",
             @"compare.summaryMatch":             @"Files match.",
             @"compare.summaryDifferSingular":    @"1 byte differs.\nUse Clear Compare Result to remove the highlight.",
-            @"compare.summaryDifferPlural":      @"%d bytes differ.\nUse Clear Compare Result to remove the highlight.",
+            @"compare.summaryDifferPlural":      @"%1$d bytes differ.\nUse Clear Compare Result to remove the highlight.",
             @"compare.noActiveResult":           @"No active comparison to clear.",
 
             // Insert Columns
@@ -322,8 +317,8 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"insertColumns.placeholder.position": @"Position (column index, 0 = left edge)",
             @"insertColumns.errorEmptyPattern":  @"Pattern is empty.",
             @"insertColumns.errorParsePattern":  @"Pattern must be a sequence of hex bytes (e.g. 0x00, DE AD BE EF).",
-            @"insertColumns.errorRangeCount":    @"Column count must be between 1 and %d at the current bit width.",
-            @"insertColumns.errorRangePosition": @"Insert position must be between 0 and %d (the current column count).",
+            @"insertColumns.errorRangeCount":    @"Column count must be between 1 and %1$d at the current bit width.",
+            @"insertColumns.errorRangePosition": @"Insert position must be between 0 and %1$d (the current column count).",
             @"insertColumns.errorBufferEmpty":   @"Buffer is empty — nothing to insert into.",
             @"insertColumns.errorRowSize":       @"Invalid current row size.",
             @"insertColumns.errorFailed":        @"Insert failed.",
@@ -334,18 +329,18 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             @"patternReplace.openHexFirst":      @"Open the hex view (View in HEX) before using Pattern Replace.",
             @"patternReplace.requireSelection": @"Select something in the hex view first — Pattern Replace fills the selection.",
             @"patternReplace.title":             @"Pattern Replace",
-            @"patternReplace.message":           @"Fill the current %zu-byte selection with a repeating hex pattern.\n\nPattern: hex bytes only (e.g. 0xFF or DE AD).",
+            @"patternReplace.message":           @"Fill the current %1$zu-byte selection with a repeating hex pattern.\n\nPattern: hex bytes only (e.g. 0xFF or DE AD).",
             @"patternReplace.button":            @"Replace",
             @"patternReplace.placeholder":       @"Pattern (hex): 0xFF or DE AD",
             @"patternReplace.errorEmptyPattern": @"Pattern is empty.",
             @"patternReplace.errorParsePattern": @"Pattern must be a sequence of hex bytes (e.g. 0xFF or DE AD BE EF).",
             @"patternReplace.errorFailed":       @"Pattern Replace failed.",
             @"patternReplace.summarySingular":   @"Replaced 1 byte with the pattern.",
-            @"patternReplace.summaryPlural":     @"Replaced %d bytes with the pattern.",
+            @"patternReplace.summaryPlural":     @"Replaced %1$d bytes with the pattern.",
 
             // Status bar (substring-matched by UI tests, so wording is contractual)
             @"status.empty":                     @"Current document is empty.",
-            @"status.showing":                   @"Showing %zu bytes.",
+            @"status.showing":                   @"Showing %1$zu bytes.",
             @"status.rectangle":                 @"Rectangle: %1$lu × %2$lu (%3$lu bytes)",
 
             // Rectangular paste error dialogs (strict shape-match)
@@ -364,10 +359,12 @@ static NSDictionary<NSString *, NSString *> *hexEnglishDefaults()
             // the plugin's origin (a Notepad++ plugin on Windows that we
             // ported), not the running host (Nextpad++ on Mac).
             @"about.body":                       @"Native macOS port of the N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+ HEX-Editor plugin. Provides an inline hex table with direct byte editing, selection, bookmarks, find/replace, compare, and view-mode switching.",
-            @"about.version":                    @"Version %@",
+            @"about.version":                    @"Version %1$@",
+            @"about.url":                        @"Project: https://github.com/dhadner/NPP_HexEdit",
             // Embedded fallback when no .strings file is loaded — distinct from
             // any shipped tag so the cascade XCTest can detect this state.
             @"about.localeTag":                  @"Strings: (embedded)",
+            @"about.localizationGuide":          @"Help translate: https://github.com/dhadner/NPP_HexEdit/blob/master/LOCALIZATION.md",
 
             // Quit-time clipboard prompt (Office/Word pattern). Shown when
             // we hold an outstanding pasteboard promise larger than the
@@ -662,6 +659,12 @@ static CGFloat g_caretLastRenderedCellMinX = 0.0;
 // positive when drawn, so 0 is a clear unambiguous "not drawn" marker
 // (no NaN-sentinel needed — width is bounded below by glyphWidth ≥ 1).
 static CGFloat g_mirrorLastRenderedWidth = 0.0;
+// Height of the last-drawn mirror indicator. For "Mirror as Rect" mode
+// this matches the rectangle's full height (~16 px at default font);
+// for the underline-only mode (Mirror toggle off) this is 2 px. Used
+// by UI tests to deterministically distinguish the two visual styles
+// without diffing screenshots.
+static CGFloat g_mirrorLastRenderedHeight = 0.0;
 // Per-category, per-mode colour overrides. nil = "use the factory default
 // for this mode" (which the resolve helpers fetch from hexFactory*Light()
 // / hexFactory*Dark() at draw time). This lets us change hard-coded factory
@@ -1191,6 +1194,8 @@ static void clearByteSelection();
 static void clearRectSelection();
 static void clearAllByteSelections();
 static void extendByteSelectionToOffset(size_t target);
+static void scrollHexTableToActiveOffset();
+static void scrollHexTableByPage(bool up);
 static void updateRectSelectionToOffset(size_t endOffset);
 static void captureScintillaSelection();
 static BOOL isBookmarkedRow(size_t row);
@@ -1376,7 +1381,7 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
             @";rectActive=%d;rectOrigin=%zu;rectWidth=%zu;rectHeight=%zu;rectBpr=%zu;rectOriginPane=%@"
             @";hdrAlignMatch=%d;cellFontPt=%.1f;headerFontPt=%.1f"
             @";caretX=%.1f;caretRow=%ld;caretCellMinX=%.1f;caretCellOffsetX=%.1f"
-            @";mirrorWidth=%.1f;fontFlags=%@",
+            @";mirrorWidth=%.1f;mirrorHeight=%.1f;fontFlags=%@",
             activeByteOffset, selectedByteStart, selectedByteEnd,
             (selectedByteEnd > selectedByteStart) ? 1 : 0,
             statusFrameHeight, statusFontLineHeight,
@@ -1399,6 +1404,7 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
             g_caretLastRenderedValid ? g_caretLastRenderedCellMinX : -1.0,
             caretCellOffsetX,
             g_mirrorLastRenderedWidth,
+            g_mirrorLastRenderedHeight,
             fontFlags];
 }
 @end
@@ -1898,6 +1904,7 @@ static HexTableDataSource *hexTableDataSource = nil;
     // paint actually draws something.
     g_caretLastRenderedValid = false;
     g_mirrorLastRenderedWidth = 0.0;
+    g_mirrorLastRenderedHeight = 0.0;
 
     if (!isVisibleEditableOffset(activeByteOffset)) {
         return;
@@ -2022,49 +2029,57 @@ static HexTableDataSource *hexTableDataSource = nil;
     g_caretLastRenderedCellMinX = NSMinX(cellFrame);
     g_caretLastRenderedValid = true;
 
-    // Mirror Cursor: draw a hollow rectangle in the OPPOSITE pane around
-    // the byte the caret is currently associated with. Cross-references
-    // hex digits with their ASCII characters at a glance, so the user
-    // doesn't have to count columns to find the matching glyph in the
-    // other pane. Gated on the Font tab toggle (g_mirrorAsciiCursor).
-    // Skipped if caretByteOffset is past the last selected/visible byte
-    // (the caret-render block above already returned in that case for
-    // out-of-bounds offsets, but we re-check the resolved byte here so a
-    // forward-linear post-mouseUp caret at byte "selEnd" — which can be
-    // exactly at totalLength — doesn't draw a mirror box around a byte
-    // that doesn't exist yet).
-    // Suppress the mirror rectangle whenever any selection is active —
-    // linear or rectangular. The selection wash already gives the user a
-    // visual cross-reference (both panes show the highlighted bytes); a
-    // hollow rectangle on top would clutter the display rather than aid
-    // navigation. The mirror is most useful for free-roaming caret
-    // movement (no selection), which is when this branch fires.
-    if (g_mirrorAsciiCursor && caretByteOffset < previewTotalLength
+    // Mirror cursor: indicate the byte in the OPPOSITE pane that the
+    // caret is currently associated with. Cross-references hex digits
+    // with their ASCII characters at a glance, so the user doesn't
+    // have to count columns to find the matching glyph in the other
+    // pane.
+    //
+    // Two visual styles, selected by the Font tab's "Mirror Cursor as
+    // Rect" toggle (g_mirrorAsciiCursor):
+    //   • toggle ON  → hollow rectangle around the byte/char.
+    //   • toggle OFF → 2-pixel underline under the byte/char.
+    //                 (Windows-source parity — when the rectangle option
+    //                 is off, Windows draws the bottom edge of the rect
+    //                 only, giving a subtle "current byte" hint.)
+    //
+    // Suppressed whenever any selection is active (linear or rect): the
+    // selection wash already gives the user a visual cross-reference
+    // (both panes show the highlighted bytes); an extra rectangle or
+    // underline on top would clutter rather than aid navigation. Also
+    // skipped when caretByteOffset is past the last visible byte —
+    // a forward-linear post-mouseUp caret at byte "selEnd" can be
+    // exactly at totalLength, with no byte to indicate.
+    if (caretByteOffset < previewTotalLength
         && !hasByteSelection() && !hasRectSelection()) {
-        NSColor *mirrorColor = [[NSColor selectedContentBackgroundColor] colorWithAlphaComponent:0.55];
-        [mirrorColor setStroke];
+        NSColor *indicatorColor = [[NSColor selectedContentBackgroundColor] colorWithAlphaComponent:0.55];
         const size_t byteInRow = caretByteOffset % caretBpr;
+        // Compute the rect that bounds the byte/char in the opposite pane.
+        // Both styles (rect outline + underline) share the same bounds
+        // calc; only the drawing primitive differs.
+        NSRect mirrorRect = NSZeroRect;
+        bool haveMirrorRect = false;
         if (activeCursorField == HexCursorField::Hex) {
-            // Mirror into the ASCII pane: outline the one ASCII char
-            // corresponding to the caret byte.
+            // Indicator goes in the ASCII pane: outline (or underline)
+            // the one ASCII char corresponding to the caret byte.
             const NSInteger asciiCol = [self columnWithIdentifier:@"ascii"];
             if (asciiCol >= 0) {
                 NSRect asciiCellFrame = [self frameOfCellAtColumn:asciiCol row:row];
                 const CGFloat asciiOriginX = asciiGlyphLeft(self, asciiCol, row);
                 const CGFloat charWidth = monospacedGlyphWidth(font);
-                NSRect mirrorRect = NSMakeRect(asciiOriginX + static_cast<CGFloat>(byteInRow) * charWidth,
-                                                 NSMinY(asciiCellFrame) + 1.0,
-                                                 charWidth,
-                                                 std::max<CGFloat>(NSHeight(asciiCellFrame) - 2.0, 1.0));
-                NSFrameRectWithWidth(mirrorRect, 1.0);
-                g_mirrorLastRenderedWidth = NSWidth(mirrorRect);
+                mirrorRect = NSMakeRect(asciiOriginX + static_cast<CGFloat>(byteInRow) * charWidth,
+                                        NSMinY(asciiCellFrame) + 1.0,
+                                        charWidth,
+                                        std::max<CGFloat>(NSHeight(asciiCellFrame) - 2.0, 1.0));
+                haveMirrorRect = true;
             }
         } else {
-            // Mirror into the hex pane: outline JUST the caret byte's
-            // digits within its hex cell. For bpc > 1 the cell holds
-            // multiple bytes; we pick the byte at the cell's
-            // little/big-endian-aware sub-position so the outline
-            // tracks the actual visible digits in the displayed order.
+            // Indicator goes in the hex pane: outline (or underline)
+            // JUST the caret byte's digits within its hex cell. For
+            // bpc > 1 the cell holds multiple bytes; we pick the byte
+            // at the cell's little/big-endian-aware sub-position so
+            // the indicator tracks the actual visible digits in the
+            // displayed order.
             const hexedit::ViewMode mode = currentViewMode();
             const hexedit::DisplayPosition pos = hexedit::displayPositionForByte(byteInRow, 0, mode);
             const NSInteger hexCol = [self columnWithIdentifier:[NSString stringWithFormat:@"cell%02zu", pos.cellIndex]];
@@ -2080,13 +2095,33 @@ static HexTableDataSource *hexTableDataSource = nil;
                 // already accounts for endianness via the displayed-byte
                 // mapping in displayPositionForByte.
                 const CGFloat byteX = hexGlyphLeftX + static_cast<CGFloat>(pos.digitInCell) * glyphWidth;
-                NSRect mirrorRect = NSMakeRect(byteX,
-                                                 NSMinY(hexCellFrame) + 1.0,
-                                                 static_cast<CGFloat>(digitsPerByte) * glyphWidth,
-                                                 std::max<CGFloat>(NSHeight(hexCellFrame) - 2.0, 1.0));
-                NSFrameRectWithWidth(mirrorRect, 1.0);
-                g_mirrorLastRenderedWidth = NSWidth(mirrorRect);
+                mirrorRect = NSMakeRect(byteX,
+                                        NSMinY(hexCellFrame) + 1.0,
+                                        static_cast<CGFloat>(digitsPerByte) * glyphWidth,
+                                        std::max<CGFloat>(NSHeight(hexCellFrame) - 2.0, 1.0));
+                haveMirrorRect = true;
             }
+        }
+        if (haveMirrorRect) {
+            if (g_mirrorAsciiCursor) {
+                [indicatorColor setStroke];
+                NSFrameRectWithWidth(mirrorRect, 1.0);
+                g_mirrorLastRenderedHeight = NSHeight(mirrorRect);
+            } else {
+                // Underline = solid 2px line at the bottom of the rect.
+                // 2px tracks Windows-source's PatBlt(... bottom-2, ...
+                // height=2 ...) — a single pixel reads too thin at
+                // typical hex-view font sizes.
+                [indicatorColor setFill];
+                const CGFloat underlineHeight = 2.0;
+                NSRect underlineRect = NSMakeRect(NSMinX(mirrorRect),
+                                                   NSMaxY(mirrorRect) - underlineHeight,
+                                                   NSWidth(mirrorRect),
+                                                   underlineHeight);
+                NSRectFill(underlineRect);
+                g_mirrorLastRenderedHeight = underlineHeight;
+            }
+            g_mirrorLastRenderedWidth = NSWidth(mirrorRect);
         }
     }
 }
@@ -2149,6 +2184,23 @@ static HexTableDataSource *hexTableDataSource = nil;
     pasteItem.target = self;
     NSMenuItem *deleteItem = [menu addItemWithTitle:L(@"menu.context.delete") action:@selector(hexDelete:) keyEquivalent:@""];
     deleteItem.target = self;
+    [menu addItem:[NSMenuItem separatorItem]];
+    // Selection helpers — Select All is wired to Cmd+A through the
+    // responder-chain selectAll: action; Select to Start / End use the
+    // Cmd+UpArrow / Cmd+DownArrow shortcuts (the macOS-native chord that
+    // works on MacBook keyboards which lack dedicated Home/End keys).
+    // Surfacing them in the context menu makes the keyboard shortcuts
+    // discoverable — a user right-clicks to look up the chord rather
+    // than guessing.
+    NSMenuItem *selectAllItem = [menu addItemWithTitle:L(@"menu.context.selectAll") action:@selector(selectAll:) keyEquivalent:@"a"];
+    selectAllItem.target = self;
+    selectAllItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+    NSMenuItem *selectToStartItem = [menu addItemWithTitle:L(@"menu.context.selectToStart") action:@selector(hexSelectToStart:) keyEquivalent:[NSString stringWithFormat:@"%C", (unichar)NSUpArrowFunctionKey]];
+    selectToStartItem.target = self;
+    selectToStartItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+    NSMenuItem *selectToEndItem = [menu addItemWithTitle:L(@"menu.context.selectToEnd") action:@selector(hexSelectToEnd:) keyEquivalent:[NSString stringWithFormat:@"%C", (unichar)NSDownArrowFunctionKey]];
+    selectToEndItem.target = self;
+    selectToEndItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
     [menu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *cutBinaryItem = [menu addItemWithTitle:L(@"menu.context.cutBinary") action:@selector(hexCutBinary:) keyEquivalent:@""];
     cutBinaryItem.target = self;
@@ -2297,7 +2349,14 @@ static HexTableDataSource *hexTableDataSource = nil;
             [pasteboard dataForType:kHexRectPasteboardType] != nil ||
             [pasteboard stringForType:NSPasteboardTypeString] != nil;
     }
-    if (action == @selector(selectAll:)) {
+    if (action == @selector(selectAll:) ||
+        action == @selector(hexSelectToStart:) ||
+        action == @selector(hexSelectToEnd:)) {
+        // Selection helpers all need at least one byte in the buffer.
+        // We don't bother gating them on cursor position (e.g. Select to
+        // Start when cursor is already at 0 is a no-op) because the menu
+        // would then flicker enabled/disabled on every cursor move,
+        // which is more confusing than a no-op click.
         return !hexBufferEmpty();
     }
     return YES;
@@ -2321,6 +2380,20 @@ static HexTableDataSource *hexTableDataSource = nil;
 - (void)hexDelete:(id)sender
 {
     deleteHexSelection();
+}
+
+- (void)hexSelectToStart:(id)sender
+{
+    NSPoint scrollOrigin = [self currentScrollOrigin];
+    extendByteSelectionToOffset(0);
+    [self reloadDataPreservingScrollOrigin:scrollOrigin];
+}
+
+- (void)hexSelectToEnd:(id)sender
+{
+    NSPoint scrollOrigin = [self currentScrollOrigin];
+    extendByteSelectionToOffset(previewTotalLength);
+    [self reloadDataPreservingScrollOrigin:scrollOrigin];
 }
 
 - (void)hexCutBinary:(id)sender
@@ -2663,30 +2736,73 @@ static HexTableDataSource *hexTableDataSource = nil;
     const NSEventModifierFlags modifiers = event.modifierFlags;
     const NSEventModifierFlags commandOrControl = modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagControl);
     if (commandOrControl != 0) {
-        // Cmd+Home / Cmd+End jump to document start/end. This mirrors the Notepad++
-        // Windows shortcut and lets editing reach EOF on documents larger than one row.
-        // Holding Shift turns the jump into a selection-extend (matches macOS text-view
-        // convention), letting a user select large ranges without an arrow-key drag.
+        // Document-start / document-end keyboard shortcuts. Two routes are
+        // wired so both Apple-keyboard users and full-keyboard users find
+        // a shortcut that works:
+        //
+        //   • Cmd+Home / Cmd+End     — Windows / external-keyboard route.
+        //                              Notepad++ Windows shortcut.
+        //   • Cmd+UpArrow / Cmd+Down — macOS-native route. Mirrors what
+        //                              Pages / TextEdit / Mail use, and
+        //                              works on MacBook keyboards which
+        //                              have no dedicated Home/End keys.
+        //
+        // With Shift held, both routes extend the linear byte selection
+        // instead of clearing + jumping — matches macOS text-view
+        // convention so a user can select a range from the cursor to
+        // either end of the document in one chord.
         if ((modifiers & NSEventModifierFlagCommand) != 0) {
             const bool shiftHeld = (modifiers & NSEventModifierFlagShift) != 0;
-            if (character == NSHomeFunctionKey) {
+            const bool isStartKey = character == NSHomeFunctionKey || character == NSUpArrowFunctionKey;
+            const bool isEndKey = character == NSEndFunctionKey || character == NSDownArrowFunctionKey;
+            if (isStartKey) {
                 if (shiftHeld) {
                     extendByteSelectionToOffset(0);
                 } else {
                     clearByteSelection();
                     writeBackCursor(hexedit::cursorToDocumentStart(currentCursor()));
                 }
-                [self reloadDataPreservingScrollOrigin:scrollOrigin];
+                // Document-jump shortcuts deliberately do NOT preserve
+                // scroll position — the user wants the new cursor row in
+                // view, not the previous viewport. reloadData picks up
+                // any selection-extent change, then scrollHexTableToActiveOffset
+                // brings the new caret row on-screen.
+                [self reloadData];
+                scrollHexTableToActiveOffset();
                 return;
             }
-            if (character == NSEndFunctionKey) {
+            if (isEndKey) {
                 if (shiftHeld) {
                     extendByteSelectionToOffset(previewTotalLength);
                 } else {
                     clearByteSelection();
                     writeBackCursor(hexedit::cursorToDocumentEnd(currentCursor(), currentDocumentView()));
                 }
-                [self reloadDataPreservingScrollOrigin:scrollOrigin];
+                [self reloadData];
+                scrollHexTableToActiveOffset();
+                return;
+            }
+            // Cmd+LeftArrow / Cmd+RightArrow → cursor to start/end of
+            // current row (the hex-view analogue of "start/end of line"
+            // in macOS text views). Holding Shift extends the selection
+            // to that row boundary instead of clearing.
+            const bool isRowStartKey = (character == NSLeftArrowFunctionKey);
+            const bool isRowEndKey = (character == NSRightArrowFunctionKey);
+            if ((isRowStartKey || isRowEndKey) && previewTotalLength > 0) {
+                const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+                const size_t rowStart = (activeByteOffset / bpr) * bpr;
+                const size_t rowEnd = std::min(rowStart + bpr, previewTotalLength);
+                const size_t target = isRowStartKey ? rowStart : rowEnd;
+                if (shiftHeld) {
+                    extendByteSelectionToOffset(target);
+                } else {
+                    clearByteSelection();
+                    activeByteOffset = target;
+                    activeHexNibble = 0;
+                    clampActiveCursor();
+                }
+                [self reloadData];
+                scrollHexTableToActiveOffset();
                 return;
             }
             // Cmd+L → Go to Offset (matches the macOS browser/Pages convention for jump-to-location).
@@ -2772,40 +2888,159 @@ static HexTableDataSource *hexTableDataSource = nil;
         return;
     }
 
+    // Linear shift-arrow extend (no Option, no Cmd, no Control). Mac
+    // text-view convention: Shift+Left/Right extends one character at
+    // a time; Shift+Up/Down extends one line at a time. Hex-view
+    // analogue: byte-by-byte (Left/Right) or row-by-row (Up/Down).
+    // Without these the arrow handlers below clear selection on every
+    // press, leaving no keyboard route to grow a sized linear selection.
+    const NSEventModifierFlags shiftOnlyArrow = NSEventModifierFlagShift;
+    if (relevantMods == shiftOnlyArrow && previewTotalLength > 0) {
+        const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+        size_t target = activeByteOffset;
+        bool isExtendArrow = true;
+        switch (character) {
+        case NSLeftArrowFunctionKey:
+            target = (target > 0) ? (target - 1) : 0;
+            break;
+        case NSRightArrowFunctionKey:
+            target = std::min(target + 1, previewTotalLength);
+            break;
+        case NSUpArrowFunctionKey:
+            target = (target >= bpr) ? (target - bpr) : 0;
+            break;
+        case NSDownArrowFunctionKey:
+            target = std::min(target + bpr, previewTotalLength);
+            break;
+        default:
+            isExtendArrow = false;
+            break;
+        }
+        if (isExtendArrow) {
+            extendByteSelectionToOffset(target);
+            [self reloadData];
+            scrollHexTableToActiveOffset();
+            return;
+        }
+    }
+
+    // All bare cursor-navigation keys below use `reloadData +
+    // scrollHexTableToActiveOffset` so the viewport follows the cursor
+    // off-screen — text-view convention, also what the user expects
+    // from a hex editor (pre-fix the Up/Down keys moved cursor but did
+    // NOT scroll the viewport, so cursor disappeared off-screen and
+    // typing Down at the bottom of the viewport had no visible effect).
     switch (character) {
     case NSBackspaceCharacter:
     case NSLeftArrowFunctionKey:
-        clearAllByteSelections();
-        writeBackCursor(hexedit::navigateLeft(currentCursor(), currentDocumentView(),
-                                               currentViewMode(), currentBytesPerRow()));
-        [self reloadDataPreservingScrollOrigin:scrollOrigin];
+        // Plain Left with active selection collapses the selection to
+        // its left edge — matches Windows-source HexEditor behavior plus
+        // standard macOS text-view convention. Only navigate one byte
+        // further when there's no selection to collapse.
+        if (hasByteSelection()) {
+            const size_t collapseTarget = selectedByteStart;
+            clearAllByteSelections();
+            activeByteOffset = collapseTarget;
+            activeHexNibble = 0;
+            clampActiveCursor();
+        } else {
+            clearAllByteSelections();
+            writeBackCursor(hexedit::navigateLeft(currentCursor(), currentDocumentView(),
+                                                   currentViewMode(), currentBytesPerRow()));
+        }
+        [self reloadData];
+        scrollHexTableToActiveOffset();
         return;
     case NSRightArrowFunctionKey:
-        clearAllByteSelections();
-        writeBackCursor(hexedit::navigateRight(currentCursor(), currentDocumentView(),
-                                                currentViewMode(), currentBytesPerRow()));
-        [self reloadDataPreservingScrollOrigin:scrollOrigin];
+        // Plain Right with active selection collapses the selection to
+        // its right edge — Windows + macOS convention.
+        if (hasByteSelection()) {
+            const size_t collapseTarget = selectedByteEnd;
+            clearAllByteSelections();
+            activeByteOffset = collapseTarget;
+            activeHexNibble = 0;
+            clampActiveCursor();
+        } else {
+            clearAllByteSelections();
+            writeBackCursor(hexedit::navigateRight(currentCursor(), currentDocumentView(),
+                                                    currentViewMode(), currentBytesPerRow()));
+        }
+        [self reloadData];
+        scrollHexTableToActiveOffset();
         return;
     case NSUpArrowFunctionKey:
         clearAllByteSelections();
         moveActiveCursor(-16);
-        [self reloadDataPreservingScrollOrigin:scrollOrigin];
+        [self reloadData];
+        scrollHexTableToActiveOffset();
         return;
     case NSDownArrowFunctionKey:
         clearAllByteSelections();
         moveActiveCursor(16);
-        [self reloadDataPreservingScrollOrigin:scrollOrigin];
+        [self reloadData];
+        scrollHexTableToActiveOffset();
         return;
     case NSHomeFunctionKey:
         clearAllByteSelections();
         writeBackCursor(hexedit::cursorToLineStart(currentCursor()));
-        [self reloadDataPreservingScrollOrigin:scrollOrigin];
+        [self reloadData];
+        scrollHexTableToActiveOffset();
         return;
     case NSEndFunctionKey:
         clearAllByteSelections();
         writeBackCursor(hexedit::cursorToLineEnd(currentCursor(), currentDocumentView()));
-        [self reloadDataPreservingScrollOrigin:scrollOrigin];
+        [self reloadData];
+        scrollHexTableToActiveOffset();
         return;
+    case NSPageUpFunctionKey:
+    case NSPageDownFunctionKey: {
+        // Page Up / Page Down — Windows-source parity, plus the macOS
+        // chord Fn+UpArrow/Fn+DownArrow which the system translates to
+        // the same NSPageUp/DownFunctionKey events. Without modifier:
+        // jump cursor by one viewport-page-of-rows. With Shift: extend
+        // selection. Computed page size from the visible viewport so it
+        // tracks user resize / font changes.
+        const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+        if (bpr == 0 || previewTotalLength == 0) {
+            return;
+        }
+        NSScrollView *scrollView = self.enclosingScrollView;
+        const CGFloat viewportHeight = scrollView ? NSHeight(scrollView.contentView.bounds) : 0;
+        const CGFloat rowHeight = self.rowHeight + self.intercellSpacing.height;
+        // At least one row of jump even when the viewport calc is bogus
+        // (e.g. mid-layout). Subtract one row so a Page Down keeps
+        // continuity — the row that was at the bottom is now at the top.
+        size_t pageRows = 1;
+        if (rowHeight > 0 && viewportHeight > 0) {
+            const NSInteger rowsPerPage = std::max<NSInteger>(1, static_cast<NSInteger>(viewportHeight / rowHeight) - 1);
+            pageRows = static_cast<size_t>(rowsPerPage);
+        }
+        const long jumpBytes = static_cast<long>(pageRows * bpr);
+        const bool isUp = (character == NSPageUpFunctionKey);
+        size_t target = activeByteOffset;
+        if (isUp) {
+            target = (jumpBytes >= 0 && static_cast<size_t>(jumpBytes) <= activeByteOffset)
+                ? activeByteOffset - static_cast<size_t>(jumpBytes)
+                : 0;
+        } else {
+            target = std::min(activeByteOffset + static_cast<size_t>(jumpBytes), previewTotalLength);
+        }
+        if ((modifiers & NSEventModifierFlagShift) != 0) {
+            extendByteSelectionToOffset(target);
+        } else {
+            clearByteSelection();
+            activeByteOffset = target;
+            activeHexNibble = 0;
+            clampActiveCursor();
+        }
+        [self reloadData];
+        // Scroll viewport by one full page in the same direction the
+        // cursor moved — Windows-style Page Up/Down model. The helper
+        // also clamps by one row so an active selection stays visible
+        // even when cursor lands at the edge.
+        scrollHexTableByPage(isUp);
+        return;
+    }
     default:
         break;
     }
@@ -3370,19 +3605,124 @@ static void scrollHexTableToActiveOffset()
         resetHexTableScrollOrigin();
         return;
     }
-    const auto rowForOffset = ^NSInteger {
+    const auto scrollOnce = ^{
         const size_t bpr = static_cast<size_t>(currentBytesPerRow());
-        if (bpr == 0) {
-            return 0;
-        }
-        const NSInteger raw = static_cast<NSInteger>(activeByteOffset / bpr);
+        if (bpr == 0) return;
         const NSInteger maxRow = std::max<NSInteger>(hexTableView.numberOfRows - 1, 0);
-        return std::clamp<NSInteger>(raw, 0, maxRow);
+        const NSInteger cursorRow = std::clamp<NSInteger>(
+            static_cast<NSInteger>(activeByteOffset / bpr), 0, maxRow);
+        [hexTableView scrollRowToVisible:cursorRow];
+        // Selection-visible safety net: when the cursor sits on a row
+        // PAST the selection's edge (e.g. after Cmd-A — cursor lands
+        // at byte == totalLength on the trailing-empty row that's not
+        // in the selection — or after row-aligned Shift+arrow extends
+        // where the cursor row is the boundary just past the last
+        // selected byte), `scrollRowToVisible(cursorRow)` alone leaves
+        // the entire selection off-screen above (or below) the
+        // viewport. Ensuring the row at the selection edge nearest the
+        // cursor is also visible is a one-row clamp that keeps at
+        // least one selected row in view — the user's "I can still
+        // tell I'm in selection mode" requirement.
+        if (hasByteSelection() && selectedByteEnd > selectedByteStart) {
+            const NSInteger selStartRow = static_cast<NSInteger>(selectedByteStart / bpr);
+            const NSInteger selLastRow = static_cast<NSInteger>((selectedByteEnd - 1) / bpr);
+            NSInteger nearestSel = cursorRow;
+            if (cursorRow < selStartRow) {
+                nearestSel = selStartRow;
+            } else if (cursorRow > selLastRow) {
+                nearestSel = selLastRow;
+            }
+            nearestSel = std::clamp<NSInteger>(nearestSel, 0, maxRow);
+            [hexTableView scrollRowToVisible:nearestSel];
+        }
     };
-    [hexTableView scrollRowToVisible:rowForOffset()];
+    scrollOnce();
     dispatch_async(dispatch_get_main_queue(), ^{
         if (hexTableView != nil && hexTableView.numberOfRows > 0) {
-            [hexTableView scrollRowToVisible:rowForOffset()];
+            scrollOnce();
+        }
+    });
+}
+
+// Page-jump scroll: move the viewport by one full page in the given
+// direction (the natural Windows / NSScrollView Page Up/Down model),
+// then clamp by one line if needed so at least one SELECTED row stays
+// visible. User's 2026-05-05 preference: "scroll a whole page but
+// just limit the scroll up or down by one line if the scroll would
+// result in the selected text no longer being visible at all."
+//
+// Why "selected row visible" not "cursor row visible": when the user
+// has selected entire rows and continued the selection one row further
+// (e.g. with Shift+Down at row N's end), the cursor lands on row N+1
+// column 0 — i.e. the cursor row is JUST PAST the selection, not in
+// it. Ensuring only the cursor row is visible would leave the entire
+// selection off-screen above (or below). Instead we find the row in
+// the selection nearest the cursor and ensure THAT row is visible.
+//
+// Manual scrollToPoint on the clipView for the page move (rather than
+// NSScrollView's scrollPageUp:/scrollPageDown:, which weren't
+// reliably moving the viewport in our test runs).
+static void scrollHexTableByPage(bool up)
+{
+    if (hexTableView == nil || hexTableView.numberOfRows == 0) {
+        resetHexTableScrollOrigin();
+        return;
+    }
+    NSScrollView *sv = hexTableView.enclosingScrollView;
+    if (sv == nil) {
+        return;
+    }
+    NSClipView *cv = sv.contentView;
+    const CGFloat rowHeight = hexTableView.rowHeight + hexTableView.intercellSpacing.height;
+    const CGFloat viewportHeight = NSHeight(cv.bounds);
+    if (rowHeight <= 0 || viewportHeight <= 0) {
+        return;
+    }
+    // One-page scroll = viewport rows minus one row of overlap, so the
+    // last row of the previous page is at the top (or bottom) of the
+    // new page.
+    const NSInteger pageRows = std::max<NSInteger>(1, static_cast<NSInteger>(viewportHeight / rowHeight) - 1);
+    const CGFloat pageDelta = static_cast<CGFloat>(pageRows) * rowHeight;
+    const CGFloat currentY = cv.bounds.origin.y;
+    CGFloat newY = up ? (currentY - pageDelta) : (currentY + pageDelta);
+    const CGFloat docHeight = static_cast<CGFloat>(hexTableView.numberOfRows) * rowHeight;
+    const CGFloat maxY = std::max<CGFloat>(0, docHeight - viewportHeight);
+    newY = std::clamp<CGFloat>(newY, 0, maxY);
+    [cv scrollToPoint:NSMakePoint(cv.bounds.origin.x, newY)];
+    [sv reflectScrolledClipView:cv];
+
+    // Safety net — ensure that an active selection has at least one
+    // row visible, and that the cursor row is also visible. Two
+    // scrollRowToVisible calls; NSTableView no-ops the call whose row
+    // is already inside the viewport, so this is the "clamp by one
+    // line if needed" the user asked for.
+    const auto fixUp = ^{
+        const size_t bpr = static_cast<size_t>(currentBytesPerRow());
+        if (bpr == 0) return;
+        const NSInteger maxRow = std::max<NSInteger>(hexTableView.numberOfRows - 1, 0);
+        const NSInteger cursorRow = std::clamp<NSInteger>(static_cast<NSInteger>(activeByteOffset / bpr), 0, maxRow);
+        [hexTableView scrollRowToVisible:cursorRow];
+        if (hasByteSelection() && selectedByteEnd > selectedByteStart) {
+            const NSInteger selStartRow = static_cast<NSInteger>(selectedByteStart / bpr);
+            const NSInteger selLastRow = static_cast<NSInteger>((selectedByteEnd - 1) / bpr);
+            // Pick the selected row nearest the cursor — the one most
+            // likely already in the viewport, so the scroll is a no-op
+            // in the common case and only adjusts by one row when the
+            // selection's edge fell just off-screen.
+            NSInteger nearestSel = cursorRow;
+            if (cursorRow < selStartRow) {
+                nearestSel = selStartRow;
+            } else if (cursorRow > selLastRow) {
+                nearestSel = selLastRow;
+            }
+            nearestSel = std::clamp<NSInteger>(nearestSel, 0, maxRow);
+            [hexTableView scrollRowToVisible:nearestSel];
+        }
+    };
+    fixUp();
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (hexTableView != nil && hexTableView.numberOfRows > 0) {
+            fixUp();
         }
     });
 }
@@ -6210,14 +6550,12 @@ static void showAbout()
 {
     NSString *versionLine = [NSString stringWithFormat:L(@"about.version"),
                              [NSString stringWithUTF8String:HEX_PLUGIN_VERSION]];
-    NSString *buildLine = [NSString stringWithFormat:L(@"about.build"),
-                           [NSString stringWithUTF8String:HEX_PLUGIN_BUILD]];
-    NSString *body = [NSString stringWithFormat:@"%@\n\n%@\n%@\n%@\n\n%@",
+    NSString *body = [NSString stringWithFormat:@"%@\n\n%@\n%@\n\n%@\n%@",
                       L(@"about.body"),
                       versionLine,
-                      buildLine,
                       L(@"about.url"),
-                      L(@"about.localeTag")];
+                      L(@"about.localeTag"),
+                      L(@"about.localizationGuide")];
     showMessage(L(@"app.titleMac"), body);
 }
 

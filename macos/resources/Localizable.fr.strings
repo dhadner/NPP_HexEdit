@@ -1,0 +1,200 @@
+/* Notepad++ HexEditor — French (fr)
+ *
+ * Full translation. Keys mirror Localizable.en.strings; comments stay in
+ * English so future translators can diff against the canonical source.
+ *
+ * Format specifiers (%@, %d, %zu, %lu, %1$d, %1$@, etc.) are preserved
+ * verbatim — re-ordering positional args is the translator's job. The
+ * "N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+" form embeds U+2060 Word Joiners and must be copied
+ * byte-for-byte from the English source (see about.body).
+ *
+ * GitHub URLs are hard-coded — never localize the URL itself, only the
+ * surrounding label text.
+ */
+
+/* Plugin menu (Plugins > HexEditor > …) */
+"menu.plugin.viewInHex"            = "Afficher en HEX";
+"menu.plugin.compareHex"           = "Comparer HEX";
+"menu.plugin.clearCompareResult"   = "Effacer le résultat de comparaison";
+"menu.plugin.insertColumns"        = "Insérer des colonnes...";
+"menu.plugin.patternReplace"       = "Remplacer par motif...";
+"menu.plugin.options"              = "Options...";
+"menu.plugin.help"                 = "Aide...";
+
+/* Right-click context menu on the hex view */
+"menu.context.undo"                = "Annuler";
+"menu.context.redo"                = "Rétablir";
+"menu.context.cut"                 = "Couper";
+"menu.context.copy"                = "Copier";
+"menu.context.paste"               = "Coller";
+"menu.context.delete"              = "Supprimer";
+"menu.context.selectAll"           = "Tout sélectionner";
+"menu.context.selectToStart"       = "Sélectionner jusqu'au début du fichier";
+"menu.context.selectToEnd"         = "Sélectionner jusqu'à la fin du fichier";
+"menu.context.cutBinary"           = "Couper le contenu binaire";
+"menu.context.copyBinary"          = "Copier le contenu binaire";
+"menu.context.pasteBinary"         = "Coller le contenu binaire";
+"menu.context.find"                = "Rechercher…";
+"menu.context.findReplace"         = "Rechercher et remplacer…";
+"menu.context.findNext"            = "Suivant";
+"menu.context.findPrevious"        = "Précédent";
+"menu.context.gotoOffset"          = "Aller à l'offset…";
+"menu.context.viewIn"              = "Afficher en";
+"menu.context.addressWidth"        = "Largeur d'adresse...";
+"menu.context.columns"             = "Colonnes...";
+"menu.context.zoomIn"              = "Zoom avant";
+"menu.context.zoomOut"             = "Zoom arrière";
+"menu.context.zoomReset"           = "Restaurer le zoom par défaut";
+
+/* View-in submenu */
+"menu.viewIn.bits8"                = "8 bits";
+"menu.viewIn.bits16"               = "16 bits";
+"menu.viewIn.bits32"               = "32 bits";
+"menu.viewIn.bits64"               = "64 bits";
+"menu.viewIn.toBinary"             = "en binaire";
+"menu.viewIn.toHex"                = "en hexadécimal";
+"menu.viewIn.toBigEndian"          = "en BigEndian";
+"menu.viewIn.toLittleEndian"       = "en LittleEndian";
+
+/* Common buttons */
+"button.ok"                        = "OK";
+"button.cancel"                    = "Annuler";
+
+/* App / dialog identity */
+"app.title"                        = "HexEditor";
+"app.titleMac"                     = "HexEditor pour macOS";
+"app.titleCompare"                 = "Comparaison HexEditor";
+
+/* Address Width dialog */
+"addressWidth.title"               = "Largeur d'adresse";
+"addressWidth.message"             = "Nombre de chiffres dans la colonne d'offset (%1$d–%2$d).";
+"addressWidth.invalidRange"        = "Seules les valeurs entre %1$d et %2$d sont autorisées.";
+
+/* Columns dialog */
+"columns.title"                    = "Colonnes";
+"columns.message"                  = "Nombre de cellules par ligne (1–%1$d à la largeur de bits actuelle).";
+"columns.invalidMaximum"           = "Maximum de %1$d octets affichables par ligne.";
+
+/* Go to Offset dialog */
+"goto.title"                       = "Aller à l'offset";
+"goto.message"                     = "Saisissez un offset d'octet.\n  • Décimal : 1234\n  • Hexa : 0x4A2 (ou 0X4A2)\n  • Relatif : +0x10 saute en avant, -100 saute en arrière\n\nActuel : 0x%1$@    Fin : 0x%2$@";
+"goto.button"                      = "Aller";
+"goto.placeholder"                 = "p. ex. 0x1F ou +16";
+"goto.errorParse"                  = "Impossible d'analyser l'offset. Utilisez une valeur décimale, une valeur hexadécimale préfixée par 0x, ou un préfixe + / − pour des sauts relatifs.";
+
+/* Find / Find and Replace dialog */
+"find.titleFind"                   = "Rechercher en hexadécimal";
+"find.titleReplace"                = "Rechercher et remplacer";
+"find.message"                     = "Le texte simple recherche le tampon comme des octets ASCII.\nUtilisez le préfixe 0x ou de l'hexadécimal séparé par des espaces (p. ex. 0xDEADBEEF ou DE AD BE EF) pour des motifs d'octets.";
+"find.button.findNext"             = "Suivant";
+"find.button.replaceAll"           = "Tout remplacer";
+"find.placeholder.find"            = "Rechercher : texte ou 0xDEADBEEF";
+"find.placeholder.replace"         = "Remplacer par : texte ou octets hexa";
+"find.toggle.matchCase"            = "Respecter la casse (ASCII uniquement)";
+"find.toggle.wrap"                 = "Boucler à la fin du tampon";
+"find.errorNotFound"               = "Motif non trouvé.";
+"find.errorNoPriorSearch"          = "Aucune recherche précédente. Utilisez d'abord Rechercher (Cmd+F).";
+"find.errorParseFind"              = "Impossible d'analyser le motif de recherche.";
+"find.errorParseReplace"           = "Impossible d'analyser le motif de remplacement.";
+"find.errorPatternEmpty"           = "Le motif de recherche est vide.";
+"find.errorNoBuffer"               = "Aucun tampon hexa actif.";
+"find.errorNoEditor"               = "Aucun éditeur actif.";
+"find.errorReplaceFailed"          = "Échec du remplacement.";
+"find.errorReplaceCurrent"         = "Aucune sélection à remplacer. Utilisez d'abord Suivant.";
+"find.errorReplaceLength"          = "La sélection actuelle ne correspond pas à la longueur du motif de recherche.";
+"find.errorReplaceFailedShort"     = "Échec du remplacement.";
+"find.replacedSingular"            = "1 occurrence remplacée.";
+"find.replacedPlural"              = "%1$d occurrences remplacées.";
+
+/* Compare HEX */
+"compare.openHexFirstCompare"      = "Ouvrez la vue hexadécimale (Afficher en HEX) avant d'utiliser Comparer HEX.";
+"compare.openHexFirstRun"          = "Ouvrez la vue hexadécimale (Afficher en HEX) avant de lancer la comparaison.";
+"compare.errorNoFile"              = "Aucun fichier de comparaison sélectionné.";
+"compare.errorReadFile"            = "Impossible de lire %1$@ : %2$@";
+"compare.errorReadUnknown"         = "erreur inconnue";
+"compare.errorFailed"              = "Échec de la comparaison.";
+"compare.openPanelTitle"           = "Comparer HEX avec…";
+"compare.openPanelMessage"         = "Choisissez un fichier à comparer au tampon actuel.";
+"compare.summaryMatch"             = "Les fichiers correspondent.";
+"compare.summaryDifferSingular"    = "1 octet diffère.\nUtilisez Effacer le résultat de comparaison pour supprimer la surbrillance.";
+"compare.summaryDifferPlural"      = "%1$d octets diffèrent.\nUtilisez Effacer le résultat de comparaison pour supprimer la surbrillance.";
+"compare.noActiveResult"           = "Aucune comparaison active à effacer.";
+
+/* Insert Columns */
+"insertColumns.openHexFirst"       = "Ouvrez la vue hexadécimale (Afficher en HEX) avant d'utiliser Insérer des colonnes.";
+"insertColumns.title"              = "Insérer des colonnes";
+"insertColumns.message"            = "Insère un motif hexa dans chaque ligne à une position de colonne choisie. Chaque ligne grandit de (compte × %1$d) octets ; le nombre de colonnes augmente de `compte`.\n\nMotif : octets hexa uniquement (p. ex. 0x00 ou DE AD).\nCompte : 1 à %2$d à la largeur %3$d bits actuelle.\nPosition : 0 à %4$d (nombre actuel de colonnes).";
+"insertColumns.button"             = "Insérer";
+"insertColumns.placeholder.pattern"  = "Motif (hexa) : 0xFF ou DE AD";
+"insertColumns.placeholder.count"    = "Nombre (colonnes à insérer)";
+"insertColumns.placeholder.position" = "Position (index de colonne, 0 = bord gauche)";
+"insertColumns.errorEmptyPattern"  = "Le motif est vide.";
+"insertColumns.errorParsePattern"  = "Le motif doit être une séquence d'octets hexa (p. ex. 0x00, DE AD BE EF).";
+"insertColumns.errorRangeCount"    = "Le nombre de colonnes doit être entre 1 et %1$d à la largeur de bits actuelle.";
+"insertColumns.errorRangePosition" = "La position d'insertion doit être entre 0 et %1$d (le nombre actuel de colonnes).";
+"insertColumns.errorBufferEmpty"   = "Le tampon est vide — rien dans quoi insérer.";
+"insertColumns.errorRowSize"       = "Taille de ligne actuelle invalide.";
+"insertColumns.errorFailed"        = "Échec de l'insertion.";
+"insertColumns.summarySingularRows" = "%1$d colonne%2$@ insérée%2$@ sur 1 ligne.";
+"insertColumns.summaryPluralRows"   = "%1$d colonne%2$@ insérée%2$@ sur %3$d lignes.";
+
+/* Pattern Replace */
+"patternReplace.openHexFirst"      = "Ouvrez la vue hexadécimale (Afficher en HEX) avant d'utiliser Remplacer par motif.";
+"patternReplace.requireSelection"  = "Sélectionnez d'abord quelque chose dans la vue hexadécimale — Remplacer par motif remplit la sélection.";
+"patternReplace.title"             = "Remplacer par motif";
+"patternReplace.message"           = "Remplit la sélection actuelle de %1$zu octets avec un motif hexa répétitif.\n\nMotif : octets hexa uniquement (p. ex. 0xFF ou DE AD).";
+"patternReplace.button"            = "Remplacer";
+"patternReplace.placeholder"       = "Motif (hexa) : 0xFF ou DE AD";
+"patternReplace.errorEmptyPattern" = "Le motif est vide.";
+"patternReplace.errorParsePattern" = "Le motif doit être une séquence d'octets hexa (p. ex. 0xFF ou DE AD BE EF).";
+"patternReplace.errorFailed"       = "Échec de Remplacer par motif.";
+"patternReplace.summarySingular"   = "1 octet remplacé par le motif.";
+"patternReplace.summaryPlural"     = "%1$d octets remplacés par le motif.";
+
+/* Status bar (substring-matched by UI tests — wording is contractual) */
+"status.empty"                     = "Le document actuel est vide.";
+"status.showing"                   = "Affichage de %1$zu octets.";
+"status.rectangle"                 = "Rectangle : %1$lu × %2$lu (%3$lu octets)";
+
+/* Rectangular paste error dialogs (strict shape-match, see DEVELOPER.md) */
+"paste.rect.errorNeedsRectDestination" = "La destination doit être une sélection rectangulaire de %1$lu × %2$lu octets. Glissez avec Option (ou Maj+Option, selon les Options) pour en créer une.";
+"paste.rect.errorShapeMismatch"      = "La destination a la mauvaise taille — doit faire %1$lu octets de largeur et %2$lu octets de hauteur.";
+
+/* Pattern Replace — rectangular variant (per-row pattern restart) */
+"patternReplace.messageRect"         = "Remplit le rectangle actuel de %1$lu × %2$lu avec un motif hexa répétitif.\nLe motif redémarre au premier octet de chaque ligne.\n\nMotif : octets hexa uniquement (p. ex. 0xFF ou DE AD).";
+"patternReplace.summaryRect"         = "Rectangle %1$lu × %2$lu (%3$lu octets) rempli avec le motif.";
+
+/* About / help dialog. The "N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+" form preserves the U+2060
+   Word Joiners and must be copied byte-for-byte from the English source. */
+"about.body"                       = "Portage natif macOS du plugin HEX-Editor de N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+. Fournit une table hexadécimale en ligne avec édition directe d'octets, sélection, signets, recherche/remplacement, comparaison et changement de mode d'affichage.";
+"about.version"                    = "Version %1$@";
+"about.url"                        = "Projet : https://github.com/dhadner/NPP_HexEdit";
+"about.localeTag"                  = "Strings: fr";
+"about.localizationGuide"          = "Aider à traduire : https://github.com/dhadner/NPP_HexEdit/blob/master/LOCALIZATION.md";
+
+/* Quit-time clipboard prompt */
+"clipboard.saveOnQuit.title"       = "Conserver le contenu du presse-papiers ?";
+"clipboard.saveOnQuit.body"        = "Vous avez copié %1$@ depuis la vue HEX. Le conserver dans le presse-papiers pour que d'autres applications puissent le coller après la fermeture de HEX-Editor ? Le rejet libère immédiatement la mémoire.";
+"clipboard.saveOnQuit.keepButton"  = "Conserver";
+"clipboard.saveOnQuit.discardButton" = "Rejeter";
+
+/* Generic error paths used when toggling between Scintilla / hex view */
+"editor.noActiveBuffer"            = "Aucun tampon d'éditeur actif n'est disponible.";
+"editor.noActiveView"              = "Impossible de trouver la vue d'éditeur active à remplacer.";
+
+/* Column headers in the hex table */
+"table.header.offset"              = "Offset";
+"table.header.ascii"               = "ASCII";
+
+/* Help popovers (shared) */
+"help.button.axLabel"              = "Aide";
+
+/* Options dialog (Plugins > HexEditor > Options...) */
+"options.title"                    = "Options HexEditor";
+"options.message"                  = "Préférences globales du plugin. Réinitialiser restaure les valeurs par défaut affichées ci-dessous ; cliquez sur Appliquer pour valider.";
+"options.button.apply"             = "Appliquer";
+"options.button.reset"             = "Réinitialiser";
+"options.rectModifier.label"       = "Touche modificatrice pour la sélection rectangulaire (par bloc) :";
+"options.rectModifier.option"      = "Option (par défaut ; correspond au plugin HexEditor de Windows)";
+"options.rectModifier.shiftOption" = "Maj+Option (correspond à VS Code)";
+"options.rectModifier.help"        = "Lors d'un glissement dans le panneau hexa ou ASCII, maintenir cette touche transforme le glissement en sélection rectangulaire (par bloc) — le même type de sélection utilisé par les éditeurs hexa et les éditeurs de texte en mode colonne.\n\nOption est la valeur par défaut — il correspond au plugin HexEditor de Windows et à la convention de sélection en colonne sur macOS. Choisissez Maj+Option si votre mémoire musculaire vient de Visual Studio Code.";

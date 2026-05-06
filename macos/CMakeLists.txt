@@ -103,42 +103,8 @@ target_link_libraries(HexEditor PRIVATE
     "-framework Cocoa"
 )
 
-# Capture the git short-hash at configure time so the About box can show
-# which commit the dylib was built from. Adds "-dirty" if the working tree
-# has uncommitted changes — distinguishes a clean release build from a
-# local dev build that won't reproduce. Falls back to "unknown" if git
-# isn't available or this isn't a checkout (e.g. a tarball release).
-find_package(Git QUIET)
-set(HEX_PLUGIN_BUILD "unknown")
-if(Git_FOUND)
-    execute_process(
-        COMMAND "${GIT_EXECUTABLE}" rev-parse --short HEAD
-        WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/.."
-        OUTPUT_VARIABLE _git_short
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        RESULT_VARIABLE _git_rev_result
-        ERROR_QUIET
-    )
-    if(_git_rev_result EQUAL 0 AND _git_short)
-        execute_process(
-            COMMAND "${GIT_EXECUTABLE}" status --porcelain
-            WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/.."
-            OUTPUT_VARIABLE _git_status
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_QUIET
-        )
-        if(_git_status)
-            set(HEX_PLUGIN_BUILD "${_git_short}-dirty")
-        else()
-            set(HEX_PLUGIN_BUILD "${_git_short}")
-        endif()
-    endif()
-endif()
-message(STATUS "Plugin build tag: ${HEX_PLUGIN_BUILD}")
-
 target_compile_definitions(HexEditor PRIVATE
     HEX_PLUGIN_VERSION="${PROJECT_VERSION}"
-    HEX_PLUGIN_BUILD="${HEX_PLUGIN_BUILD}"
 )
 
 set_target_properties(HexEditor PROPERTIES
@@ -164,6 +130,15 @@ set(HEX_LOCALIZATION_FILES
     "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.en-GB.strings"
     "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.en-US.strings"
     "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.de.strings"
+    "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.es.strings"
+    "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.es-ES.strings"
+    "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.es-MX.strings"
+    "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.fr.strings"
+    "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.it.strings"
+    "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.pl.strings"
+    "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.ru.strings"
+    "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.uk.strings"
+    "${CMAKE_CURRENT_LIST_DIR}/resources/Localizable.zh-Hans.strings"
 )
 install(FILES ${HEX_LOCALIZATION_FILES} DESTINATION "${PLUGIN_INSTALL_DIR}")
 

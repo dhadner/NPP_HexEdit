@@ -64,6 +64,11 @@ private struct HexCursorState {
     /// be resolved). > 0 = mirror was drawn — width is the rectangle's
     /// pixel width.
     let mirrorWidth: Double?
+    /// Height in pt of the last-drawn mirror indicator. ~16 pt for the
+    /// rectangle (Mirror toggle ON), 2 pt for the underline (Mirror
+    /// toggle OFF), 0 if not drawn this paint. Lets tests
+    /// deterministically distinguish the two visual styles.
+    let mirrorHeight: Double?
     /// Font-tab toggle flags as currently held in plugin globals. Order:
     /// Bold, Italic, Underline, UppercaseHex, MirrorAsciiCursor — each
     /// 1 (on) or 0 (off). Lets a test confirm a Font-tab dialog round-
@@ -137,6 +142,7 @@ private struct HexCursorState {
             caretCellMinX: fields["caretCellMinX"].flatMap({ Double($0) }),
             caretCellOffsetX: fields["caretCellOffsetX"].flatMap({ Double($0) }),
             mirrorWidth: fields["mirrorWidth"].flatMap({ Double($0) }),
+            mirrorHeight: fields["mirrorHeight"].flatMap({ Double($0) }),
             fontBold:               flagAt(fields["fontFlags"], index: 0),
             fontItalic:             flagAt(fields["fontFlags"], index: 1),
             fontUnderline:          flagAt(fields["fontFlags"], index: 2),
@@ -798,13 +804,18 @@ final class HexEditorUITests: HexEditorBaseUITests {
     }
 
     func testFontTabMirrorCursorToggleControlsRendering() throws {
-        // Phase 4: Mirror Cursor as Rect — when on, drawRect: paints a
-        // hollow rectangle in the OPPOSITE pane around the byte the
-        // caret is currently associated with. Default is OFF (the user
-        // opts into the indicator if they want it). Diagnostic exposes
-        // mirrorWidth (>0 ⇒ rectangle drawn this paint, 0 ⇒ not drawn);
-        // this test confirms the dialog → flag → render path round-trips
-        // in both directions.
+        // The "Mirror Cursor as Rect" Font-tab toggle now controls the
+        // STYLE of the inactive-pane indicator, not whether one is drawn:
+        //
+        //   • toggle OFF (default) → 2 px UNDERLINE under the byte/char
+        //     in the opposite pane (Windows-source parity, added
+        //     2026-05-05). mirrorWidth > 0, mirrorHeight ≈ 2.
+        //   • toggle ON → hollow rectangle around the byte/char.
+        //     mirrorWidth > 0, mirrorHeight ≈ row-height (~16 pt).
+        //
+        // The selection-suppression rule is unchanged: any active
+        // selection (linear or rect) suppresses both styles. That's
+        // covered by testMirrorCursorIsSuppressedDuringSelection.
         let app = try launchNotepad()
         defer { app.terminate() }
 
@@ -812,28 +823,27 @@ final class HexEditorUITests: HexEditorBaseUITests {
         try invokeHexEditorMenu(app: app, item: "View in HEX")
         Thread.sleep(forTimeInterval: 0.5)
 
-        // Position the caret at byte 0 — without this, the post-paste
-        // Scintilla caret sits at end-of-buffer (offset 8), which is
-        // past the last valid byte; the mirror would skip drawing for
-        // an unrelated reason and the toggle assertion below would be
-        // vacuous.
+        // Position caret at byte 0 — post-paste Scintilla caret sits at
+        // EOF (offset 8) which is past the last valid byte; the mirror
+        // skips drawing in that case and the assertion would be vacuous.
         let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
         XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
         try positionHexCursorAtZero(app: app, hexTable: hexTable)
         Thread.sleep(forTimeInterval: 0.3)
 
-        // Default: mirror DISABLED. No rectangle should be drawn even
-        // with a valid caret.
+        // Default: toggle OFF, underline drawn.
         guard let s0 = HexCursorState.read(from: app) else {
             XCTFail("Failed to read cursor diagnostic.")
             return
         }
         XCTAssertEqual(s0.fontMirrorAsciiCursor, false,
                        "Mirror Cursor as Rect default should be OFF. Diagnostic: \(s0.debugDescription)")
-        XCTAssertEqual(s0.mirrorWidth, 0,
-                       "With Mirror Cursor disabled (default), drawRect: should NOT paint the mirror rectangle. mirrorWidth=\(s0.mirrorWidth ?? -1). Diagnostic: \(s0.debugDescription)")
+        XCTAssertGreaterThan(s0.mirrorWidth ?? 0, 0,
+                             "With Mirror Cursor as Rect OFF (default), the inactive pane should still show a 2 px underline indicator. mirrorWidth=\(s0.mirrorWidth ?? -1). Diagnostic: \(s0.debugDescription)")
+        XCTAssertEqual(s0.mirrorHeight ?? 0, 2.0, accuracy: 0.5,
+                       "With Mirror Cursor as Rect OFF, the indicator should be a 2 px underline. mirrorHeight=\(s0.mirrorHeight ?? -1). Diagnostic: \(s0.debugDescription)")
 
-        // Toggle ON via the Font tab.
+        // Toggle ON via the Font tab — should switch to rectangle.
         try invokeHexEditorMenu(app: app, item: "Options...")
         let fontTab = app.tabs["Font"]
         XCTAssertTrue(fontTab.waitForExistence(timeout: 5))
@@ -853,14 +863,12 @@ final class HexEditorUITests: HexEditorBaseUITests {
         }
         XCTAssertEqual(s1.fontMirrorAsciiCursor, true,
                        "Flag should be ON after toggle. Diagnostic: \(s1.debugDescription)")
-        guard let mw1 = s1.mirrorWidth else {
-            XCTFail("Diagnostic missing mirrorWidth after enable. Raw: \(s1.debugDescription)")
-            return
-        }
-        XCTAssertGreaterThan(mw1, 0,
-                             "After enabling Mirror Cursor with a valid caret, drawRect: should paint the rectangle. mirrorWidth=\(mw1). Diagnostic: \(s1.debugDescription)")
+        XCTAssertGreaterThan(s1.mirrorWidth ?? 0, 0,
+                             "After enabling Mirror Cursor as Rect with a valid caret, the rectangle should be drawn. mirrorWidth=\(s1.mirrorWidth ?? -1).")
+        XCTAssertGreaterThan(s1.mirrorHeight ?? 0, 8.0,
+                             "Mirror Cursor as Rect ON should produce a tall rectangle (>8 pt), not the 2 px underline. mirrorHeight=\(s1.mirrorHeight ?? -1).")
 
-        // Toggle OFF, verify it stops drawing.
+        // Toggle OFF — should switch back to underline (NOT vanish).
         try invokeHexEditorMenu(app: app, item: "Options...")
         let fontTab2 = app.tabs["Font"]
         XCTAssertTrue(fontTab2.waitForExistence(timeout: 5))
@@ -878,8 +886,10 @@ final class HexEditorUITests: HexEditorBaseUITests {
         }
         XCTAssertEqual(s2.fontMirrorAsciiCursor, false,
                        "Flag should be OFF after second toggle. Diagnostic: \(s2.debugDescription)")
-        XCTAssertEqual(s2.mirrorWidth, 0,
-                       "Disabling Mirror Cursor should stop the rendering. mirrorWidth=\(s2.mirrorWidth ?? -1). Diagnostic: \(s2.debugDescription)")
+        XCTAssertGreaterThan(s2.mirrorWidth ?? 0, 0,
+                             "After disabling Mirror Cursor as Rect, the underline indicator should still be drawn. mirrorWidth=\(s2.mirrorWidth ?? -1).")
+        XCTAssertEqual(s2.mirrorHeight ?? 0, 2.0, accuracy: 0.5,
+                       "After disabling Mirror Cursor as Rect, the indicator should be back to a 2 px underline. mirrorHeight=\(s2.mirrorHeight ?? -1).")
     }
 
     func testMirrorCursorIsSuppressedDuringSelection() throws {
@@ -1697,6 +1707,9 @@ func testStatusLabelReportsByteCount() throws {
     /// dragging or holding an arrow key. Sanity-checked at small scale
     /// here so a regression is caught even when the multi-GB tests aren't
     /// run.
+    ///
+    /// Covers the Home/End route. The Mac-native Up/Down route is
+    /// covered by testShiftCmdUpDownExtendsByteSelection below.
     func testShiftCmdHomeEndExtendsByteSelection() throws {
         let app = try launchNotepad()
         defer { app.terminate() }
@@ -1743,6 +1756,683 @@ func testStatusLabelReportsByteCount() throws {
         let copied2 = pasteboard.string(forType: .string) ?? ""
         XCTAssertEqual(copied2, "41 42 43 44 45 46 47 48",
                        "Cmd+Home then Shift+Cmd+End should select all 8 bytes; Copy should put '41 42 ... 48' on the pasteboard. Got: '\(copied2)'.")
+    }
+
+    /// Regression test for the user-reported bug 2026-05-05: Cmd+Up/Down
+    /// (and Cmd+Home/End) moved the cursor to document start/end but did
+    /// NOT scroll the viewport, so the user couldn't see the new cursor
+    /// position. The test seeds a buffer larger than the visible
+    /// viewport, forces the cursor far from the buffer's start, then
+    /// asserts row 0 becomes hittable after Cmd+Up. Repeats for Cmd+Down
+    /// and the last row. Hittability is the right gate: NSTableView
+    /// only marks rows hittable when they're inside the visible viewport.
+    func testCmdUpDownJumpScrollsViewportToCursor() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 2048 bytes = 128 rows of 16 bytes — well beyond a default
+        // viewport's row count, so row 0 and the last row can't both
+        // be visible at once.
+        let seed = String(repeating: "0123456789ABCDEF", count: 128)
+        try createBufferWithText(app: app, text: seed)
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForStatus(in: app, contains: "2048 bytes", timeout: 5))
+
+        // Cursor lands deep (post-paste = end of buffer = offset 2048).
+        // Row 0 starts off-screen.
+        let row0 = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(row0.waitForExistence(timeout: 3))
+
+        // Cmd+Up should jump cursor to offset 0 AND scroll the viewport
+        // there. Row 0 must become hittable. Pre-fix the viewport stayed
+        // at the bottom and row 0 was non-hittable even though it
+        // existed in the AX tree.
+        app.typeKey(.upArrow, modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertTrue(row0.isHittable,
+                      "After Cmd+UpArrow, row 0 must be in the visible viewport (hittable). Pre-fix this failed because reloadDataPreservingScrollOrigin kept the old scroll position.")
+
+        // Cmd+Down should jump to EOF and scroll there. We can't reach
+        // the last row by boundBy: index alone (NSTableView's AX tree
+        // only publishes currently-rendered rows after the scroll
+        // settles), so verify by checking a high-index row becomes
+        // hittable. Row 127 is the last data row; row 128 is the
+        // trailing-empty sentinel. Either should be hittable post-jump.
+        app.typeKey(.downArrow, modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        let lastDataRow = hexTable.tableRows.element(boundBy: 127)
+        XCTAssertTrue(lastDataRow.waitForExistence(timeout: 3),
+                      "After Cmd+DownArrow, last data row should be in the AX tree.")
+        XCTAssertTrue(lastDataRow.isHittable,
+                      "After Cmd+DownArrow, last data row must be in the visible viewport.")
+    }
+
+    /// Mac-native counterpart to the Shift+Cmd+Home/End test:
+    /// Shift+Cmd+UpArrow / DownArrow extend selection to document
+    /// start / end. MacBook keyboards have no dedicated Home/End keys
+    /// (Fn+Left/Right is the Apple-suggested chord, but it doesn't
+    /// reliably emit NSHomeFunctionKey when combined with other
+    /// modifiers), so users discover the Up/Down route. This test
+    /// ensures THAT path is wired in addition to the Home/End path.
+    func testShiftCmdUpDownExtendsByteSelection() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "ABCDEFGH")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForStatus(in: app, contains: "8 bytes", timeout: 5))
+
+        // Cursor lands at EOF after engaging hex view; Shift+Cmd+UpArrow
+        // should extend selection back to offset 0.
+        app.typeKey(.upArrow, modifierFlags: [.command, .shift])
+        Thread.sleep(forTimeInterval: 0.2)
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("__sentinel__", forType: .string)
+        app.typeKey("c", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertEqual(pasteboard.string(forType: .string), "41 42 43 44 45 46 47 48",
+                       "Shift+Cmd+UpArrow from EOF should select all 8 bytes (Mac-native shortcut).")
+
+        // Cmd+UpArrow (no shift) — clears selection and jumps cursor to
+        // offset 0. Then Shift+Cmd+DownArrow extends back to EOF.
+        app.typeKey(.upArrow, modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.2)
+        app.typeKey(.downArrow, modifierFlags: [.command, .shift])
+        Thread.sleep(forTimeInterval: 0.2)
+
+        pasteboard.clearContents()
+        pasteboard.setString("__sentinel__", forType: .string)
+        app.typeKey("c", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertEqual(pasteboard.string(forType: .string), "41 42 43 44 45 46 47 48",
+                       "Cmd+UpArrow then Shift+Cmd+DownArrow should select all 8 bytes (Mac-native shortcut).")
+    }
+
+    /// Mac-native byte-by-byte and row-by-row selection extend.
+    /// Convention from Pages / TextEdit / Mail: Shift+Left/Right extends
+    /// the linear selection one char (here, one byte); Shift+Up/Down
+    /// extends one line (here, one 16-byte row). Pre-fix the arrow
+    /// handlers cleared the selection unconditionally, leaving no
+    /// keyboard route to grow a sized linear selection.
+    func testShiftArrowExtendsSelectionByByteAndRow() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 32 bytes = "abcdefghijklmnopqrstuvwxyzABCDEF" = 0x61..0x7a then 0x41..0x46
+        // — two full 16-byte rows. Cursor lands at EOF after engage.
+        try createBufferWithText(app: app, text: "abcdefghijklmnopqrstuvwxyzABCDEF")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForStatus(in: app, contains: "32 bytes", timeout: 5))
+
+        // Cursor at offset 32 (EOF). Shift+Left → extend selection to
+        // offset 31 (last byte = 0x46 = 'F'). Copy and verify the bytes.
+        app.typeKey(.leftArrow, modifierFlags: .shift)
+        Thread.sleep(forTimeInterval: 0.2)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("__sentinel__", forType: .string)
+        app.typeKey("c", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertEqual(pasteboard.string(forType: .string), "46",
+                       "Shift+LeftArrow from EOF should select 1 byte (0x46 = 'F'). Got: '\(pasteboard.string(forType: .string) ?? "")'.")
+
+        // Shift+Up from current cursor (now at 31) → extend by 16 bytes
+        // backward to offset 15. Selection [15, 32) = bytes 0x70..0x7a 0x41..0x46
+        // (i.e. 'pqrstuvwxyzABCDEF').
+        app.typeKey(.upArrow, modifierFlags: .shift)
+        Thread.sleep(forTimeInterval: 0.2)
+        pasteboard.clearContents()
+        pasteboard.setString("__sentinel__", forType: .string)
+        app.typeKey("c", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertEqual(pasteboard.string(forType: .string),
+                       "70 71 72 73 74 75 76 77 78 79 7a 41 42 43 44 45 46",
+                       "Shift+UpArrow should extend selection one row backward (17 bytes total: 'pqrstuvwxyzABCDEF').")
+    }
+
+    /// Cmd+Left/Right (Mac-native row-jump) and the Shift variant
+    /// (extend to row boundary). Mirrors the macOS text-view "go to
+    /// start/end of line" / "extend selection to start/end of line"
+    /// convention with the hex view's row standing in for "line".
+    func testCmdArrowJumpsAndShiftExtendsToRowBoundary() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 32 bytes — two rows. Cursor lands at EOF (offset 32).
+        try createBufferWithText(app: app, text: "abcdefghijklmnopqrstuvwxyzABCDEF")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForStatus(in: app, contains: "32 bytes", timeout: 5))
+
+        // Cmd+LeftArrow from EOF (offset 32, on the trailing-empty row)
+        // jumps to start of current row (offset 32 still, since the
+        // trailing row's start is itself). Shift+Cmd+Left from offset
+        // 16 (start of last data row) extends selection to offset 0
+        // — but to make the test deterministic, position cursor first.
+        //
+        // Sequence: Cmd+Up to offset 0 (start of buffer), then
+        // Shift+Cmd+RightArrow to extend to end of current row (offset 16).
+        app.typeKey(.upArrow, modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.2)
+        app.typeKey(.rightArrow, modifierFlags: [.command, .shift])
+        Thread.sleep(forTimeInterval: 0.2)
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("__sentinel__", forType: .string)
+        app.typeKey("c", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertEqual(pasteboard.string(forType: .string),
+                       "61 62 63 64 65 66 67 68 69 6a 6b 6c 6d 6e 6f 70",
+                       "Shift+Cmd+RightArrow from offset 0 should extend selection to end of row 0 (16 bytes 'abcdefghijklmnop' = 0x61..0x70).")
+
+        // Cmd+Right with no shift jumps to end of current row, clears
+        // selection. From cursor==16 the row-end is also 16 (cursor sits
+        // on the start of row 1, whose row-end is 32). Test: from offset
+        // 16 (start of row 1), Cmd+Right jumps to offset 32 (end of row 1).
+        // We can verify by selecting the row first to land in the middle,
+        // then Cmd+Right to go to row-end, then Shift+Cmd+Left to extend
+        // back to row-start.
+        //
+        // For this we need to reach the middle of a row. Use Goto.
+        app.typeKey("l", modifierFlags: .command)
+        let gotoInput = app.textFields["hex-editor.goto.input"]
+        XCTAssertTrue(gotoInput.waitForExistence(timeout: 5))
+        gotoInput.replaceFieldText(with: "20")   // offset 20, mid-row-1
+        app.buttons["Go"].firstMatch.click()
+        Thread.sleep(forTimeInterval: 0.3)
+
+        // Shift+Cmd+LeftArrow → extend to start of row 1 (offset 16).
+        // Selection [16, 20) = "qrst" = 0x71 0x72 0x73 0x74.
+        app.typeKey(.leftArrow, modifierFlags: [.command, .shift])
+        Thread.sleep(forTimeInterval: 0.2)
+
+        pasteboard.clearContents()
+        pasteboard.setString("__sentinel__", forType: .string)
+        app.typeKey("c", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertEqual(pasteboard.string(forType: .string),
+                       "71 72 73 74",
+                       "Shift+Cmd+LeftArrow from offset 20 should extend selection to start of row 1 (4 bytes 'qrst').")
+    }
+
+    /// Regression test for the Mac-side parity bug found 2026-05-05
+    /// during the Windows-source audit: pressing the bare Left or Right
+    /// arrow with an active selection should COLLAPSE the selection
+    /// (cursor lands at the near edge, no further movement) instead of
+    /// clearing the selection AND advancing one byte. Both Windows
+    /// HexEditor and standard macOS text views collapse — only this
+    /// plugin diverged.
+    func testArrowWithSelectionCollapsesNotNavigates() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        try createBufferWithText(app: app, text: "ABCDEFGH")
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForStatus(in: app, contains: "8 bytes", timeout: 5))
+
+        // Cmd-A selects all 8 bytes. Cursor is at offset 8 (selection
+        // end). Left arrow with selection should collapse: cursor jumps
+        // to offset 0 (selection start), selection cleared, no further
+        // navigation. Verify by selecting one byte forward via Shift+Right
+        // and confirming we get byte 0 (0x41) — not byte -1 (would have
+        // been impossible) or byte 7 (collapse-to-end + advance, the
+        // pre-fix behaviour).
+        app.typeKey("a", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.2)
+        app.typeKey(.leftArrow, modifierFlags: [])
+        Thread.sleep(forTimeInterval: 0.2)
+        app.typeKey(.rightArrow, modifierFlags: .shift)
+        Thread.sleep(forTimeInterval: 0.2)
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("__sentinel__", forType: .string)
+        app.typeKey("c", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertEqual(pasteboard.string(forType: .string), "41",
+                       "After Cmd-A + LeftArrow (collapse) + Shift+RightArrow (extend by 1), the selection should be byte 0 = 0x41 ('A'). Pre-fix the LeftArrow cleared selection AND advanced left, so the next extend started elsewhere.")
+
+        // And the symmetric case: Cmd-A + RightArrow should collapse to
+        // offset 8 (selection end / EOF). Shift+Left then selects byte 7
+        // = 0x48 ('H'). Verify.
+        app.typeKey("a", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.2)
+        app.typeKey(.rightArrow, modifierFlags: [])
+        Thread.sleep(forTimeInterval: 0.2)
+        app.typeKey(.leftArrow, modifierFlags: .shift)
+        Thread.sleep(forTimeInterval: 0.2)
+
+        pasteboard.clearContents()
+        pasteboard.setString("__sentinel__", forType: .string)
+        app.typeKey("c", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertEqual(pasteboard.string(forType: .string), "48",
+                       "After Cmd-A + RightArrow (collapse) + Shift+LeftArrow (extend by 1), the selection should be byte 7 = 0x48 ('H').")
+    }
+
+    /// Page Up / Page Down — Windows-source parity from the same
+    /// 2026-05-05 audit. Without modifier: jump cursor by ~one
+    /// viewport-page of rows. With Shift: extend selection by the same
+    /// amount. The page size is computed from the live viewport (rather
+    /// than a fixed N) so it tracks user resize / font changes.
+    ///
+    /// On a MacBook keyboard there is no dedicated Page Up/Down key;
+    /// users get the same NSPageUp/DownFunctionKey events via Fn+Up
+    /// and Fn+Down. XCUI's `.pageUp` / `.pageDown` synthesizes the
+    /// function-key event directly so the test is platform-agnostic.
+    func testPageUpDownJumpsByViewportPage() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 4096 bytes = 256 rows of 16 bytes — far more than any
+        // reasonable viewport, so a Page Down moves the cursor visibly
+        // (a fraction of total). Cursor lands at EOF after engage.
+        let seed = String(repeating: "0123456789ABCDEF", count: 256)
+        try createBufferWithText(app: app, text: seed)
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForStatus(in: app, contains: "4096 bytes", timeout: 5))
+
+        // Cmd+Up to start of file. Then Page Down — cursor jumps
+        // forward by one viewport-page. Cursor should no longer be at
+        // offset 0; the cursor's diagnostic AX surface (HexCursorState)
+        // reads the offset.
+        app.typeKey(.upArrow, modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        let startCursor = HexCursorState.read(from: app)
+        XCTAssertEqual(startCursor?.offset, 0,
+                       "Cmd+Up should land cursor at offset 0.")
+
+        app.typeKey(.pageDown, modifierFlags: [])
+        Thread.sleep(forTimeInterval: 0.3)
+        let afterPageDown = HexCursorState.read(from: app)
+        XCTAssertNotNil(afterPageDown)
+        XCTAssertGreaterThan(afterPageDown?.offset ?? 0, 16,
+                             "Page Down should advance the cursor by at least one row's worth of bytes.")
+        XCTAssertLessThan(afterPageDown?.offset ?? 4096, 4096,
+                          "Page Down should not jump all the way to EOF on a 256-row buffer (that's Cmd+Down's job).")
+
+        // Page Up should move back. Should land at or near offset 0
+        // (depending on viewport size — exact 0 if one Page Up matches
+        // one Page Down, but the viewport-aware math may round).
+        app.typeKey(.pageUp, modifierFlags: [])
+        Thread.sleep(forTimeInterval: 0.3)
+        let afterPageUp = HexCursorState.read(from: app)
+        XCTAssertNotNil(afterPageUp)
+        XCTAssertLessThan(afterPageUp?.offset ?? 4096, afterPageDown?.offset ?? 0,
+                          "Page Up should move cursor backward from where Page Down left it.")
+
+        // Shift+Page Down extends selection. Verify by copying and
+        // checking the pasteboard receives many bytes (≥ one row's
+        // worth: 16 bytes = 47 chars in "XX XX ... XX" hex format).
+        // We can't use the status bar — it only surfaces a "selection"
+        // line for rect selections, not for linear ones.
+        app.typeKey(.upArrow, modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        app.typeKey(.pageDown, modifierFlags: .shift)
+        Thread.sleep(forTimeInterval: 0.3)
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("__sentinel__", forType: .string)
+        app.typeKey("c", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        let copied = pasteboard.string(forType: .string) ?? ""
+        XCTAssertNotEqual(copied, "__sentinel__",
+                          "Cmd+C after Shift+Page Down should produce hex bytes (selection was active).")
+        // 16 bytes copied → "XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX" = 47 chars.
+        // Anything ≥ 47 chars proves the selection covered ≥ 1 full row.
+        XCTAssertGreaterThanOrEqual(copied.count, 47,
+                                    "Shift+Page Down should select at least one full row's worth of bytes (47 chars on pasteboard). Got \(copied.count) chars: '\(copied.prefix(80))...'.")
+    }
+
+    /// Regression test for the user-reported bug 2026-05-05: when
+    /// Shift+Page Up'ing to back off an existing selection, the viewport
+    /// scrolled the cursor row to the top edge, leaving the entire
+    /// selection (which extended from offset 0 up to the cursor row's
+    /// boundary) off-screen above the viewport. The user couldn't see
+    /// they were still in selection mode.
+    ///
+    /// Fix: scrollHexTableToActiveOffsetCentered places the cursor row
+    /// at the middle of the viewport, so a Page-up-shrunk selection's
+    /// trailing edge stays visible above the cursor.
+    func testShiftPageUpKeepsSelectionVisible() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 4096 bytes = 256 rows. Big enough that one Page Up shrinks the
+        // selection by a meaningful number of rows but doesn't snap all
+        // the way to row 0.
+        let seed = String(repeating: "0123456789ABCDEF", count: 256)
+        try createBufferWithText(app: app, text: seed)
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForStatus(in: app, contains: "4096 bytes", timeout: 5))
+
+        // Build a "select all" state with cursor at EOF: Cmd+Up to move
+        // cursor to byte 0, then Shift+Cmd+Down to extend selection to
+        // byte 4096. After this the cursor is at offset 4096 with
+        // selection [0, 4096].
+        app.typeKey(.upArrow, modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+        app.typeKey(.downArrow, modifierFlags: [.command, .shift])
+        Thread.sleep(forTimeInterval: 0.3)
+
+        // Sanity: cursor at EOF.
+        let beforeCursor = HexCursorState.read(from: app)
+        XCTAssertNotNil(beforeCursor)
+        XCTAssertEqual(beforeCursor?.offset, 4096,
+                       "After Cmd+Up + Shift+Cmd+Down, cursor should be at EOF (byte 4096).")
+
+        // Shift+Page Up — cursor moves up by ~one viewport-page; the
+        // selection shrinks from the right (cursor side). Cursor lands
+        // at the boundary; rows above are still selected.
+        app.typeKey(.pageUp, modifierFlags: .shift)
+        Thread.sleep(forTimeInterval: 0.5)
+
+        let afterCursor = HexCursorState.read(from: app)
+        XCTAssertNotNil(afterCursor)
+        XCTAssertLessThan(afterCursor?.offset ?? 0, 4096,
+                          "Shift+Page Up should have moved the cursor backward.")
+        XCTAssertGreaterThan(afterCursor?.offset ?? 0, 16,
+                             "Shift+Page Up should not have moved cursor all the way to row 0.")
+
+        // User's specific scenario (2026-05-05): when entire rows are
+        // selected, the cursor lands on the row JUST PAST the selection
+        // (e.g. at byte 3616 = row 226 column 0, with selection
+        // [0, 3616) covering rows 0..225). The cursor row itself is NOT
+        // in the selection. Asserting only that the cursor row is
+        // visible would pass while the entire selection went off-screen
+        // above the viewport — the user's "I think I exited selection
+        // mode" complaint.
+        //
+        // Right assertion: the LAST SELECTED row must be in the visible
+        // viewport. After Shift+Page Up shrinking [0, 4096] by one
+        // page, the last selected row is `cursorRow - 1` (cursor at
+        // byte 3616, last selected byte at 3615 = row 225).
+        let cursorRow = (afterCursor?.offset ?? 0) / 16
+        let lastSelectedRow = max(0, Int(cursorRow) - 1)
+        let lastSel = hexTable.tableRows.element(boundBy: lastSelectedRow)
+        XCTAssertTrue(lastSel.waitForExistence(timeout: 3),
+                      "Last selected row \(lastSelectedRow) (cursor - 1, since cursor lands on the row past the selection) should exist in the AX tree after Shift+Page Up.")
+        XCTAssertTrue(lastSel.isHittable,
+                      "Last selected row \(lastSelectedRow) MUST be in the visible viewport — cursor lands on the row PAST the selection, so making the cursor row visible is not sufficient. Pre-fix the viewport scrolled cursor to top and the entire selection went off-screen above.")
+    }
+
+    /// Same scroll-follow regression as the Up/Down test below, but for
+    /// LEFT and RIGHT arrows. Verifies (a) byte-stride: each Right
+    /// advances by exactly one byte regardless of starting nibble; and
+    /// (b) when the cursor crosses a row boundary, the viewport scrolls
+    /// to keep cursor visible. Test uses a small fixed key-press count
+    /// (~50) — earlier 800-press version triggered XCUI to lose its
+    /// connection to NPP-Mac on the VM after ~1000 s of typeKey calls.
+    func testPlainLeftRightArrowsScrollViewportWhenCrossingRows() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        let seed = String(repeating: "0123456789ABCDEF", count: 64)   // 1024 bytes / 64 rows
+        try createBufferWithText(app: app, text: seed)
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        // Cmd+Up to land cursor at byte 0 = row 0 column 0.
+        app.typeKey(.upArrow, modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+
+        // 48 RightArrows = exactly 3 row crossings (16 bytes/row). Each
+        // press advances by 1 byte (byte-stride; pre-fix this was
+        // nibble-stride and the cursor only got to byte 24).
+        for _ in 0..<48 {
+            app.typeKey(.rightArrow, modifierFlags: [])
+        }
+        Thread.sleep(forTimeInterval: 0.3)
+        let cursorAfterRight = HexCursorState.read(from: app)
+        XCTAssertEqual(cursorAfterRight?.offset, 48,
+                       "After 48 RightArrows from offset 0, cursor should be at byte 48 = row 3 column 0. Byte-stride means each press = 1 byte.")
+        // Row 3 (cursor row) must be visible.
+        let row3 = hexTable.tableRows.element(boundBy: 3)
+        XCTAssertTrue(row3.waitForExistence(timeout: 3))
+        XCTAssertTrue(row3.isHittable,
+                      "Row 3 (cursor row after 48 RightArrows) must be in the visible viewport.")
+
+        // Now walk back via LeftArrow. From byte 48 nibble 0, each Left
+        // moves -1 byte (lands at first nibble of previous byte).
+        for _ in 0..<48 {
+            app.typeKey(.leftArrow, modifierFlags: [])
+        }
+        Thread.sleep(forTimeInterval: 0.3)
+        let cursorAfterLeft = HexCursorState.read(from: app)
+        XCTAssertEqual(cursorAfterLeft?.offset, 0,
+                       "After 48 LeftArrows back, cursor should be at offset 0.")
+    }
+
+    /// Regression test for the user-reported bug 2026-05-05: plain
+    /// UpArrow / DownArrow moved the cursor but the viewport did NOT
+    /// scroll, so cursor walked off-screen and the user couldn't see
+    /// where it landed. Pre-fix the bare-arrow handlers used
+    /// reloadDataPreservingScrollOrigin which preserves the scroll
+    /// position rather than following the cursor.
+    func testPlainUpDownArrowsScrollViewportToFollowCursor() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        // 4096 bytes / 256 rows — the viewport holds maybe 30 rows so
+        // walking down 50 rows from the top forces multiple scrolls.
+        let seed = String(repeating: "0123456789ABCDEF", count: 256)
+        try createBufferWithText(app: app, text: seed)
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+
+        // Cmd+Up to position cursor at byte 0 with viewport at top.
+        app.typeKey(.upArrow, modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+
+        // Walk DownArrow 50 times. Cursor should end at row 50.
+        for _ in 0..<50 {
+            app.typeKey(.downArrow, modifierFlags: [])
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        let cursorAfterDown = HexCursorState.read(from: app)
+        let downRow = (cursorAfterDown?.offset ?? 0) / 16
+        XCTAssertEqual(downRow, 50,
+                       "After 50 DownArrows from offset 0, cursor should be at row 50.")
+
+        // Cursor row must be in the visible viewport — the user-facing
+        // assertion. Pre-fix the cursor walked off-screen below.
+        let row50 = hexTable.tableRows.element(boundBy: 50)
+        XCTAssertTrue(row50.waitForExistence(timeout: 3))
+        XCTAssertTrue(row50.isHittable,
+                      "Row 50 (cursor row) must be in the visible viewport after 50 DownArrows. Pre-fix the viewport stayed at the top of the file and the cursor disappeared off-screen below.")
+
+        // Walk UpArrow 70 times — past offset 0 (clamped). Cursor should
+        // end at row 0. Viewport must scroll back up.
+        for _ in 0..<70 {
+            app.typeKey(.upArrow, modifierFlags: [])
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        let cursorAfterUp = HexCursorState.read(from: app)
+        XCTAssertEqual(cursorAfterUp?.offset, 0,
+                       "After 70 UpArrows, cursor should be clamped at offset 0.")
+
+        let row0 = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(row0.waitForExistence(timeout: 3))
+        XCTAssertTrue(row0.isHittable,
+                      "Row 0 (cursor row) must be in the visible viewport after walking UpArrow back to top.")
+    }
+
+    /// Same selection-visibility bug class as Shift+Page Up, but for
+    /// Shift+UpArrow (extend selection one row at a time): user
+    /// reported 2026-05-05 that after Cmd-A and many Shift+UpArrows,
+    /// the cursor reaches the top of the viewport, then continues
+    /// scrolling with the cursor pinned at the top edge — and "no
+    /// selected bytes visible even though all of the bytes in the
+    /// file ahead of the cursor are selected." Same root cause: the
+    /// cursor lands on a row JUST PAST the selection (after Cmd-A
+    /// the cursor is at byte == totalLength, on the trailing-empty
+    /// sentinel row that's not in the selection); only making the
+    /// cursor row visible isn't enough. Fixed by extending
+    /// scrollHexTableToActiveOffset's selection-visible safety net to
+    /// all keyboard navigation paths, not just Page Up/Down.
+    func testShiftUpArrowKeepsSelectionVisibleAtTopOfViewport() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        let seed = String(repeating: "0123456789ABCDEF", count: 64)   // 1024 bytes, 64 rows
+        try createBufferWithText(app: app, text: seed)
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForStatus(in: app, contains: "1024 bytes", timeout: 5))
+
+        // Cmd-A: cursor at EOF (byte 1024 = row 64 column 0). Selection
+        // [0, 1024] = rows 0..63 selected. Cursor row 64 is the
+        // trailing-empty sentinel — NOT in selection. This is the
+        // cursor-past-selection scenario the user reported.
+        app.typeKey("a", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.3)
+
+        // Repeated Shift+UpArrow walks cursor up one row at a time.
+        // 50 presses on a 64-row buffer pulls the cursor well above
+        // any reasonable viewport's bottom (forces multiple scroll
+        // adjustments).
+        for _ in 0..<50 {
+            app.typeKey(.upArrow, modifierFlags: .shift)
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        let cursor = HexCursorState.read(from: app)
+        XCTAssertNotNil(cursor)
+        // Cursor moved up by 50 rows from row 64 → row 14.
+        let cursorRow = (cursor?.offset ?? 0) / 16
+        XCTAssertEqual(cursorRow, 14,
+                       "After 50 Shift+UpArrows from offset 1024, cursor should be at byte 224 = row 14.")
+
+        // Last selected row = cursor row - 1 = 13. Must be hittable so
+        // user sees they're still in selection mode. Pre-fix the cursor
+        // row was visible at the top of the viewport but the selection
+        // (rows 0..13) was off-screen above.
+        let lastSelectedRow = max(0, Int(cursorRow) - 1)
+        let lastSel = hexTable.tableRows.element(boundBy: lastSelectedRow)
+        XCTAssertTrue(lastSel.waitForExistence(timeout: 3))
+        XCTAssertTrue(lastSel.isHittable,
+                      "Last selected row \(lastSelectedRow) must be in the visible viewport after Shift+UpArrow walks the cursor toward the top of the file. Pre-fix the cursor row landed at the top edge and the selection went off-screen above.")
+    }
+
+    /// Plain Page Up (no Shift) navigating toward the top of the file.
+    /// Same regression class as the Shift+Page Up version: the user
+    /// reported that the viewport stops scrolling short of row 0, so
+    /// the top lines stay out of view. Plain Page Up has no selection
+    /// involved, so we only need to assert row 0 becomes hittable.
+    func testRepeatedPageUpEventuallyShowsRow0() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        let seed = String(repeating: "0123456789ABCDEF", count: 256)   // 4096 bytes
+        try createBufferWithText(app: app, text: seed)
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForStatus(in: app, contains: "4096 bytes", timeout: 5))
+
+        // Cursor at EOF. Plain Page Up (no Shift) — clears any selection
+        // and moves cursor up by one page each press. 12 presses on a
+        // 256-row buffer is more than enough to reach offset 0.
+        for _ in 0..<12 {
+            app.typeKey(.pageUp, modifierFlags: [])
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+
+        let cursor = HexCursorState.read(from: app)
+        XCTAssertNotNil(cursor)
+        XCTAssertEqual(cursor?.offset, 0,
+                       "After 12 Page Ups on a 256-row buffer, the cursor should be clamped at offset 0.")
+
+        let row0 = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(row0.waitForExistence(timeout: 3))
+        XCTAssertTrue(row0.isHittable,
+                      "Row 0 must be in the visible viewport after plain Page Up walks the cursor to offset 0. Pre-fix the viewport scrolled short and offset 0 stayed off-screen above.")
+    }
+
+    /// Regression test for the second user-reported scrolling bug
+    /// 2026-05-05: as repeated Shift+Page Ups walk the cursor toward the
+    /// top of the file, eventually offset 0 should come into view at the
+    /// top of the viewport. Pre-fix the viewport "stopped scrolling
+    /// short" leaving the top few rows out of view above. Test does
+    /// many Shift+Page Ups starting from EOF, then asserts row 0 is
+    /// hittable (in the visible viewport).
+    func testRepeatedShiftPageUpEventuallyShowsRow0() throws {
+        let app = try launchNotepad()
+        defer { app.terminate() }
+
+        let seed = String(repeating: "0123456789ABCDEF", count: 256)   // 4096 bytes
+        try createBufferWithText(app: app, text: seed)
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let hexTable = app.descendants(matching: .table).matching(identifier: AXID.table).firstMatch
+        XCTAssertTrue(hexTable.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForStatus(in: app, contains: "4096 bytes", timeout: 5))
+
+        // Cursor at EOF. Press Shift+Page Up enough times to walk back
+        // through the entire file. 256 rows / ~30 rows per page = ~9
+        // pages; press 12 to be safe.
+        for _ in 0..<12 {
+            app.typeKey(.pageUp, modifierFlags: .shift)
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+
+        let cursor = HexCursorState.read(from: app)
+        XCTAssertNotNil(cursor)
+        XCTAssertEqual(cursor?.offset, 0,
+                       "After 12 Shift+Page Ups on a 256-row buffer, the cursor should be clamped at offset 0.")
+
+        // Row 0 must be hittable — that's the user-facing assertion.
+        // Pre-fix the viewport stopped scrolling short and row 0 stayed
+        // above the visible area.
+        let row0 = hexTable.tableRows.element(boundBy: 0)
+        XCTAssertTrue(row0.waitForExistence(timeout: 3),
+                      "Row 0 should exist in the AX tree after Shift+Page Up walked to top.")
+        XCTAssertTrue(row0.isHittable,
+                      "Row 0 must be in the visible viewport after Shift+Page Up reaches offset 0. Pre-fix the viewport scrolled short, leaving the top few lines (including row 0) out of view above the viewport.")
+        captureToDashboard("testRepeatedShiftPageUpEventuallyShowsRow0")
     }
 
     /// Routine-suite gate for the multi-100-MB pbs-IPC threshold the
@@ -3298,7 +3988,16 @@ func testContextMenuCommands() throws {
     //   - en-GB     → "Strings: en-GB"             (regional override layer 1)
     //   - en-US     → "Strings: en-US"             (regional override layer 1)
     //   - de        → "Strings: de"                (full German translation)
-    //   - fr (etc.) → "Strings: (embedded)"        (no shipped file → defaults)
+    //   - fr        → "Strings: fr"                (full French translation)
+    //   - es        → "Strings: es"                (full Spanish translation)
+    //   - es-ES     → "Strings: es-ES"             (Peninsular regional override)
+    //   - es-MX     → "Strings: es-MX"             (Mexican regional override)
+    //   - it        → "Strings: it"                (full Italian translation)
+    //   - pl        → "Strings: pl"                (full Polish translation)
+    //   - ru        → "Strings: ru"                (full Russian translation)
+    //   - uk        → "Strings: uk"                (full Ukrainian translation)
+    //   - zh-Hans   → "Strings: zh-Hans"           (Simplified Chinese)
+    //   - ja (etc.) → "Strings: (embedded)"        (no shipped file → defaults)
     //
     // For en-GB / en-US, only the localeTag is overridden — every other key
     // cascades to en.strings, which we verify by also checking that the body
@@ -3340,11 +4039,93 @@ func testContextMenuCommands() throws {
                               expectedBodyContains: "Native macOS-Portierung")
     }
 
+    func testLocalizationCascadeSimplifiedChinese() throws {
+        let app = try launchNotepad(language: "zh-Hans")
+        defer { app.terminate() }
+        // Simplified Chinese is a full translation. Menu item is "帮助..." and
+        // the body contains the translated phrase that mentions Notepad++ and
+        // macOS. The assertion also exercises UTF-8 round-tripping through the
+        // .strings loader, NSAttributedString rendering, and the AX surface.
+        try assertAboutDialog(app: app, helpItem: "帮助...",
+                              expectedTag: "Strings: zh-Hans",
+                              expectedBodyContains: "原生 macOS 移植版",
+                              okButtonLabel: "确定")
+    }
+
+    func testLocalizationCascadeFrench() throws {
+        let app = try launchNotepad(language: "fr")
+        defer { app.terminate() }
+        try assertAboutDialog(app: app, helpItem: "Aide...",
+                              expectedTag: "Strings: fr",
+                              expectedBodyContains: "Portage natif macOS")
+    }
+
+    func testLocalizationCascadeSpanish() throws {
+        let app = try launchNotepad(language: "es")
+        defer { app.terminate() }
+        try assertAboutDialog(app: app, helpItem: "Ayuda...",
+                              expectedTag: "Strings: es",
+                              expectedBodyContains: "Adaptación nativa para macOS",
+                              okButtonLabel: "Aceptar")
+    }
+
+    func testLocalizationCascadePeninsularSpanish() throws {
+        let app = try launchNotepad(language: "es-ES")
+        defer { app.terminate() }
+        // es-ES only overrides the locale tag; body cascades to es.strings.
+        try assertAboutDialog(app: app, helpItem: "Ayuda...",
+                              expectedTag: "Strings: es-ES",
+                              expectedBodyContains: "Adaptación nativa para macOS",
+                              okButtonLabel: "Aceptar")
+    }
+
+    func testLocalizationCascadeMexicanSpanish() throws {
+        let app = try launchNotepad(language: "es-MX")
+        defer { app.terminate() }
+        // es-MX only overrides the locale tag; body cascades to es.strings.
+        try assertAboutDialog(app: app, helpItem: "Ayuda...",
+                              expectedTag: "Strings: es-MX",
+                              expectedBodyContains: "Adaptación nativa para macOS",
+                              okButtonLabel: "Aceptar")
+    }
+
+    func testLocalizationCascadeItalian() throws {
+        let app = try launchNotepad(language: "it")
+        defer { app.terminate() }
+        try assertAboutDialog(app: app, helpItem: "Aiuto...",
+                              expectedTag: "Strings: it",
+                              expectedBodyContains: "Port nativo per macOS")
+    }
+
+    func testLocalizationCascadeRussian() throws {
+        let app = try launchNotepad(language: "ru")
+        defer { app.terminate() }
+        try assertAboutDialog(app: app, helpItem: "Справка...",
+                              expectedTag: "Strings: ru",
+                              expectedBodyContains: "Нативный порт")
+    }
+
+    func testLocalizationCascadeUkrainian() throws {
+        let app = try launchNotepad(language: "uk")
+        defer { app.terminate() }
+        try assertAboutDialog(app: app, helpItem: "Довідка...",
+                              expectedTag: "Strings: uk",
+                              expectedBodyContains: "Нативний порт")
+    }
+
+    func testLocalizationCascadePolish() throws {
+        let app = try launchNotepad(language: "pl")
+        defer { app.terminate() }
+        try assertAboutDialog(app: app, helpItem: "Pomoc...",
+                              expectedTag: "Strings: pl",
+                              expectedBodyContains: "Natywny port")
+    }
+
     func testLocalizationCascadeUnsupportedFallsBackToEmbedded() throws {
-        // "fr" is unsupported — no Localizable.fr.strings ships. The cascade
+        // "ja" is unsupported — no Localizable.ja.strings ships. The cascade
         // chain ends up empty, L() falls through to the embedded English
         // defaults table, and the diagnostic tag is "Strings: (embedded)".
-        let app = try launchNotepad(language: "fr")
+        let app = try launchNotepad(language: "ja")
         defer { app.terminate() }
         try assertAboutDialog(app: app, helpItem: "Help...",
                               expectedTag: "Strings: (embedded)",
@@ -3370,29 +4151,18 @@ func testContextMenuCommands() throws {
         aboutDialog.buttons["OK"].firstMatch.click()
     }
 
-    /// The About body must surface the build tag (git short-hash captured
-    /// at configure time) and the project's GitHub URL — both added so a
-    /// user filing an issue can paste an unambiguous identifier and find
-    /// the source in seconds. Build tag format: "Build <7+ hex chars>"
-    /// optionally followed by "-dirty" for builds against a modified
-    /// working tree, or "Build unknown" if the build wasn't done from a
-    /// git checkout. URL is the literal string baked into the strings
-    /// file, not a clickable link — a static text search suffices.
-    func testAboutDialogShowsBuildTagAndProjectURL() throws {
+    /// The About body must surface the project's GitHub URL plus a
+    /// pointer to LOCALIZATION.md so users curious about contributing
+    /// have a one-click path to the source / translator guide.
+    /// (An earlier version also asserted a "Build <hash>" line, but
+    /// that was removed 2026-05-05 — the user-facing About box doesn't
+    /// need the developer-facing build hash.)
+    func testAboutDialogShowsProjectURL() throws {
         let app = try launchNotepad(language: "en")
         defer { app.terminate() }
         try invokeHexEditorMenu(app: app, item: "Help...")
         let aboutDialog = app.dialogs.firstMatch
         XCTAssertTrue(aboutDialog.waitForExistence(timeout: 5))
-
-        // Match either a real short-hash ("Build a1b2c3d" or
-        // "Build a1b2c3d-dirty") or the IDE/no-git fallback ("Build unknown").
-        let buildPredicate = NSPredicate(format:
-            "value MATCHES %@ OR label MATCHES %@",
-            ".*Build ([0-9a-f]{4,}(-dirty)?|unknown).*",
-            ".*Build ([0-9a-f]{4,}(-dirty)?|unknown).*")
-        XCTAssertTrue(aboutDialog.staticTexts.element(matching: buildPredicate).exists,
-                      "About dialog should show 'Build <hash>' (or 'Build unknown' for non-git builds).")
 
         let urlPredicate = NSPredicate(format:
             "value CONTAINS %@ OR label CONTAINS %@",
@@ -3400,6 +4170,16 @@ func testContextMenuCommands() throws {
             "github.com/dhadner/NPP_HexEdit")
         XCTAssertTrue(aboutDialog.staticTexts.element(matching: urlPredicate).exists,
                       "About dialog should show the GitHub project URL so a user can find the source quickly.")
+
+        // Localization-guide URL (added 2026-05-05 next to the locale tag) —
+        // gives a translator-curious user a one-click path to LOCALIZATION.md.
+        let locGuidePredicate = NSPredicate(format:
+            "value CONTAINS %@ OR label CONTAINS %@",
+            "LOCALIZATION.md",
+            "LOCALIZATION.md")
+        XCTAssertTrue(aboutDialog.staticTexts.element(matching: locGuidePredicate).exists,
+                      "About dialog should include a link to LOCALIZATION.md so a curious translator can find the contribution path.")
+
         aboutDialog.buttons["OK"].firstMatch.click()
     }
 
@@ -4285,6 +5065,7 @@ func testContextMenuCommands() throws {
                                    helpItem: String,
                                    expectedTag: String,
                                    expectedBodyContains: String,
+                                   okButtonLabel: String = "OK",
                                    file: StaticString = #file,
                                    line: UInt = #line) throws {
         try invokeHexEditorMenu(app: app, item: helpItem)
@@ -4308,11 +5089,12 @@ func testContextMenuCommands() throws {
                       "About dialog should contain '\(expectedBodyContains)'.",
                       file: file, line: line)
 
-        // Dismiss — OK label is localized; under German it's still "OK" (the
-        // string file matches the macOS convention).
-        let okButton = aboutDialog.buttons["OK"].firstMatch
+        // Dismiss — OK label is localized. German keeps "OK" (matches macOS
+        // convention), Simplified Chinese is "确定". Caller can override.
+        let okButton = aboutDialog.buttons[okButtonLabel].firstMatch
         XCTAssertTrue(okButton.waitForExistence(timeout: 3),
-                      "About dialog should have an OK button.", file: file, line: line)
+                      "About dialog should have a '\(okButtonLabel)' button.",
+                      file: file, line: line)
         okButton.click()
     }
 
@@ -4579,10 +5361,11 @@ final class HexEditorLargeFileUITests: HexEditorBaseUITests {
         XCTAssertTrue(gotoInput.waitForNonExistence(timeout: 5),
                       "Goto dialog should dismiss after clicking Go.")
 
-        // Shift+Cmd+Home extends selection back to offset 0 — the new
-        // shortcut wired in this commit. Without it, getting a 200 MB
-        // linear selection through XCUI is essentially impossible.
-        app.typeKey(.home, modifierFlags: [.command, .shift])
+        // Shift+Cmd+UpArrow extends selection back to offset 0 — the
+        // Mac-native shortcut. Without it (or its Home counterpart),
+        // getting a 200 MB linear selection through XCUI is essentially
+        // impossible.
+        app.typeKey(.upArrow, modifierFlags: [.command, .shift])
         Thread.sleep(forTimeInterval: 0.5)
 
         // Cmd-C snapshots the 200 MB selection.

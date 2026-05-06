@@ -24,6 +24,9 @@
 "menu.context.copy"                = "Kopieren";
 "menu.context.paste"               = "Einfügen";
 "menu.context.delete"              = "Löschen";
+"menu.context.selectAll"           = "Alles auswählen";
+"menu.context.selectToStart"       = "Bis Dateianfang auswählen";
+"menu.context.selectToEnd"         = "Bis Dateiende auswählen";
 "menu.context.cutBinary"           = "Binärinhalt ausschneiden";
 "menu.context.copyBinary"          = "Binärinhalt kopieren";
 "menu.context.pasteBinary"         = "Binärinhalt einfügen";
@@ -65,8 +68,8 @@
 
 /* Spalten-Dialog */
 "columns.title"                    = "Spalten";
-"columns.message"                  = "Anzahl der Zellen pro Zeile (1–%d bei der aktuellen Bitbreite).";
-"columns.invalidMaximum"           = "Maximal %d Bytes können in einer Zeile angezeigt werden.";
+"columns.message"                  = "Anzahl der Zellen pro Zeile (1–%1$d bei der aktuellen Bitbreite).";
+"columns.invalidMaximum"           = "Maximal %1$d Bytes können in einer Zeile angezeigt werden.";
 
 /* Gehe-zu-Offset-Dialog */
 "goto.title"                       = "Gehe zu Offset";
@@ -97,7 +100,7 @@
 "find.errorReplaceLength"          = "Aktuelle Auswahl entspricht nicht der Länge des Suchmusters.";
 "find.errorReplaceFailedShort"     = "Ersetzung fehlgeschlagen.";
 "find.replacedSingular"            = "1 Vorkommen ersetzt.";
-"find.replacedPlural"              = "%d Vorkommen ersetzt.";
+"find.replacedPlural"              = "%1$d Vorkommen ersetzt.";
 
 /* HEX vergleichen */
 "compare.openHexFirstCompare"      = "Öffne die Hex-Ansicht (In HEX anzeigen) vor dem Verwenden von HEX vergleichen.";
@@ -110,7 +113,7 @@
 "compare.openPanelMessage"         = "Wähle eine Datei zum Vergleich mit dem aktuellen Puffer.";
 "compare.summaryMatch"             = "Dateien stimmen überein.";
 "compare.summaryDifferSingular"    = "1 Byte unterscheidet sich.\nVerwende Vergleichsergebnis löschen, um die Markierung zu entfernen.";
-"compare.summaryDifferPlural"      = "%d Bytes unterscheiden sich.\nVerwende Vergleichsergebnis löschen, um die Markierung zu entfernen.";
+"compare.summaryDifferPlural"      = "%1$d Bytes unterscheiden sich.\nVerwende Vergleichsergebnis löschen, um die Markierung zu entfernen.";
 "compare.noActiveResult"           = "Kein aktives Vergleichsergebnis zum Löschen.";
 
 /* Spalten einfügen */
@@ -123,8 +126,8 @@
 "insertColumns.placeholder.position" = "Position (Spaltenindex, 0 = linker Rand)";
 "insertColumns.errorEmptyPattern"  = "Muster ist leer.";
 "insertColumns.errorParsePattern"  = "Muster muss eine Folge von Hex-Bytes sein (z. B. 0x00, DE AD BE EF).";
-"insertColumns.errorRangeCount"    = "Spaltenanzahl muss zwischen 1 und %d bei der aktuellen Bitbreite liegen.";
-"insertColumns.errorRangePosition" = "Einfügeposition muss zwischen 0 und %d (aktuelle Spaltenanzahl) liegen.";
+"insertColumns.errorRangeCount"    = "Spaltenanzahl muss zwischen 1 und %1$d bei der aktuellen Bitbreite liegen.";
+"insertColumns.errorRangePosition" = "Einfügeposition muss zwischen 0 und %1$d (aktuelle Spaltenanzahl) liegen.";
 "insertColumns.errorBufferEmpty"   = "Puffer ist leer — nichts zum Einfügen vorhanden.";
 "insertColumns.errorRowSize"       = "Ungültige aktuelle Zeilengröße.";
 "insertColumns.errorFailed"        = "Einfügen fehlgeschlagen.";
@@ -135,30 +138,29 @@
 "patternReplace.openHexFirst"      = "Öffne die Hex-Ansicht (In HEX anzeigen) vor dem Verwenden von Muster ersetzen.";
 "patternReplace.requireSelection"  = "Wähle zuerst etwas in der Hex-Ansicht aus — Muster ersetzen füllt die Auswahl.";
 "patternReplace.title"             = "Muster ersetzen";
-"patternReplace.message"           = "Aktuelle Auswahl von %zu Bytes mit einem sich wiederholenden Hex-Muster füllen.\n\nMuster: nur Hex-Bytes (z. B. 0xFF oder DE AD).";
+"patternReplace.message"           = "Aktuelle Auswahl von %1$zu Bytes mit einem sich wiederholenden Hex-Muster füllen.\n\nMuster: nur Hex-Bytes (z. B. 0xFF oder DE AD).";
 "patternReplace.button"            = "Ersetzen";
 "patternReplace.placeholder"       = "Muster (Hex): 0xFF oder DE AD";
 "patternReplace.errorEmptyPattern" = "Muster ist leer.";
 "patternReplace.errorParsePattern" = "Muster muss eine Folge von Hex-Bytes sein (z. B. 0xFF oder DE AD BE EF).";
 "patternReplace.errorFailed"       = "Muster ersetzen fehlgeschlagen.";
 "patternReplace.summarySingular"   = "1 Byte mit dem Muster ersetzt.";
-"patternReplace.summaryPlural"     = "%d Bytes mit dem Muster ersetzt.";
+"patternReplace.summaryPlural"     = "%1$d Bytes mit dem Muster ersetzt.";
 
 /* Statusleiste (UI-Tests prüfen Substrings — Wortlaut ist vertraglich) */
 "status.empty"                     = "Aktuelles Dokument ist leer.";
-"status.showing"                   = "Zeige %zu Bytes.";
+"status.showing"                   = "Zeige %1$zu Bytes.";
 
 /* Über / Hilfe-Dialog */
 "about.body"                       = "Native macOS-Portierung des HEX-Editor-Plugins für N⁠o⁠t⁠e⁠p⁠a⁠d⁠+⁠+. Bietet eine eingebettete Hex-Tabelle mit direkter Byte-Bearbeitung, Auswahl, Lesezeichen, Suchen/Ersetzen, Vergleich und Ansichtswechsel.";
 /* Plugin-Versionszeile. %@ ist die Versionszeichenfolge (z. B. „1.1.0"). */
-"about.version"                    = "Version %@";
-/* Build-Zeile. %@ ist der git-Kurz-Hash zum Konfigurationszeitpunkt
-   (z. B. „a1b2c3d", oder „a1b2c3d-dirty" bei lokalen Änderungen). */
-"about.build"                      = "Build %@";
+"about.version"                    = "Version %1$@";
 /* GitHub-Projekt-URL — wird nicht übersetzt. */
 "about.url"                        = "Projekt: https://github.com/dhadner/NPP_HexEdit";
 /* Diagnose-Zeile im Über-Dialog — zeigt die aktuell geladene .strings-Datei. */
 "about.localeTag"                  = "Strings: de";
+/* Verweis auf den Übersetzer-Leitfaden LOCALIZATION.md auf GitHub. */
+"about.localizationGuide"          = "Übersetzungs-Leitfaden: https://github.com/dhadner/NPP_HexEdit/blob/master/LOCALIZATION.md";
 
 /* Zwischenablage-Aufforderung beim Beenden (Office/Word-Muster). Erscheint,
    wenn der Benutzer eine große Auswahl in der HEX-Ansicht kopiert hat und

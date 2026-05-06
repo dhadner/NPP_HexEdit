@@ -254,20 +254,33 @@ void testNavigateLeftRight()
     c.nibble = 0;
     c.field = CursorField::Hex;
 
+    // From first nibble of byte 3: Right = +1 byte (lands at first nibble of byte 4).
+    // Asymmetric arrow nav (2026-05-05): nibble == 0 → byte stride; nibble == 1 → nibble stride.
     CursorState right = navigateRight(c, view);
-    HEX_EXPECT_EQ(right.offset, std::size_t(3));
-    HEX_EXPECT_EQ(right.nibble, 1);
-
-    right = navigateRight(right, view);
     HEX_EXPECT_EQ(right.offset, std::size_t(4));
     HEX_EXPECT_EQ(right.nibble, 0);
 
+    // Manually place cursor at second nibble of byte 3 (mouse-click position),
+    // then Right should snap to first nibble of byte 4 (1-nibble move).
+    CursorState atSecondNibble = c;
+    atSecondNibble.nibble = 1;
+    right = navigateRight(atSecondNibble, view);
+    HEX_EXPECT_EQ(right.offset, std::size_t(4));
+    HEX_EXPECT_EQ(right.nibble, 0);
+
+    // Left from first nibble of byte 4 = first nibble of byte 3 (1 byte back).
     CursorState left = navigateLeft(right, view);
     HEX_EXPECT_EQ(left.offset, std::size_t(3));
     HEX_EXPECT_EQ(left.nibble, 0);
 
+    // Left from first nibble of byte 3 = first nibble of byte 2 (1 byte back).
     left = navigateLeft(left, view);
     HEX_EXPECT_EQ(left.offset, std::size_t(2));
+    HEX_EXPECT_EQ(left.nibble, 0);
+
+    // Left from second nibble of byte 3 = first nibble of byte 3 (1 nibble back, stays in byte).
+    left = navigateLeft(atSecondNibble, view);
+    HEX_EXPECT_EQ(left.offset, std::size_t(3));
     HEX_EXPECT_EQ(left.nibble, 0);
 
     c.offset = 0;
@@ -999,59 +1012,60 @@ void testPlanBitEdit()
 
 void testNavigateInDisplayOrder()
 {
-    g_currentSuite = "navigateLeft/Right (display-order)";
+    g_currentSuite = "navigateLeft/Right (byte stride)";
+
+    // 2026-05-05: arrow-key navigation in the hex pane is byte-stride
+    // (not display-digit-stride), so this suite — formerly testing
+    // digit-stride respecting LE cell display order — now just verifies
+    // the byte-stride behaviour is independent of cell mode and
+    // endianness.
 
     std::vector<std::uint8_t> bytes(32, 0x00);
     DocumentView view = makeView(bytes, 32);
 
-    // Default 8-Bit hex big-endian — should match the old byte-order overloads.
+    // Default 8-Bit hex big-endian.
     {
         ViewMode m;  // bpc=1, hex, BE
         const int bpr = 16;
         CursorState c; c.offset = 4; c.nibble = 0;
+        // Right from first nibble = +1 byte.
         CursorState next = navigateRight(c, view, m, bpr);
-        HEX_EXPECT_EQ(next.offset, static_cast<std::size_t>(4));
-        HEX_EXPECT_EQ(next.nibble, 1);
-
-        next = navigateRight(next, view, m, bpr);
         HEX_EXPECT_EQ(next.offset, static_cast<std::size_t>(5));
         HEX_EXPECT_EQ(next.nibble, 0);
 
-        next = navigateLeft(next, view, m, bpr);
-        HEX_EXPECT_EQ(next.offset, static_cast<std::size_t>(4));
-        HEX_EXPECT_EQ(next.nibble, 1);
-    }
-
-    // 16-Bit hex little-endian — the cell holds bytes (0,1) but byte 1 displays first.
-    // Starting at byte 0 nibble 0 (cell 0 digit 2), navigateRight should go to nibble 1
-    // (cell 0 digit 3); the next one should jump to byte 3 nibble 0 (cell 1 digit 0,
-    // because cell 1 in LE displays byte 3 first).
-    {
-        ViewMode m; m.bytesPerCell = 2; m.littleEndian = true;
-        const int bpr = 16;  // 8 cells × 2 bytes
-        CursorState c; c.offset = 0; c.nibble = 0;
-
-        // Verify the starting display position is digit 2 (= second byte of cell 0).
-        DisplayPosition dp = displayPositionForByte(0, 0, m);
-        HEX_EXPECT_EQ(dp.cellIndex, static_cast<std::size_t>(0));
-        HEX_EXPECT_EQ(dp.digitInCell, 2);
-
-        CursorState next = navigateRight(c, view, m, bpr);
-        HEX_EXPECT_EQ(next.offset, static_cast<std::size_t>(0));
-        HEX_EXPECT_EQ(next.nibble, 1);  // byte 0 low nibble (cell 0 digit 3)
-
+        // Right again = +1 byte.
         next = navigateRight(next, view, m, bpr);
-        // cell 0 digit 4 → cell 1 digit 0 → physical = byte 3 high nibble.
-        HEX_EXPECT_EQ(next.offset, static_cast<std::size_t>(3));
+        HEX_EXPECT_EQ(next.offset, static_cast<std::size_t>(6));
         HEX_EXPECT_EQ(next.nibble, 0);
 
-        // Going back should retrace: byte 0 nibble 1.
-        CursorState back = navigateLeft(next, view, m, bpr);
-        HEX_EXPECT_EQ(back.offset, static_cast<std::size_t>(0));
-        HEX_EXPECT_EQ(back.nibble, 1);
+        // Left = -1 byte from first nibble.
+        next = navigateLeft(next, view, m, bpr);
+        HEX_EXPECT_EQ(next.offset, static_cast<std::size_t>(5));
+        HEX_EXPECT_EQ(next.nibble, 0);
     }
 
-    // Row-boundary advance in BE 8-bit: navigateRight at end of row 0 jumps to row 1.
+    // 16-Bit hex little-endian: byte stride is identical to BE — the
+    // cell display order doesn't matter for arrow-key offset advance.
+    {
+        ViewMode m; m.bytesPerCell = 2; m.littleEndian = true;
+        const int bpr = 16;
+        CursorState c; c.offset = 0; c.nibble = 0;
+
+        CursorState next = navigateRight(c, view, m, bpr);
+        HEX_EXPECT_EQ(next.offset, static_cast<std::size_t>(1));
+        HEX_EXPECT_EQ(next.nibble, 0);
+
+        next = navigateRight(next, view, m, bpr);
+        HEX_EXPECT_EQ(next.offset, static_cast<std::size_t>(2));
+        HEX_EXPECT_EQ(next.nibble, 0);
+
+        CursorState back = navigateLeft(next, view, m, bpr);
+        HEX_EXPECT_EQ(back.offset, static_cast<std::size_t>(1));
+        HEX_EXPECT_EQ(back.nibble, 0);
+    }
+
+    // Row-boundary advance: navigateRight from second nibble of byte 15
+    // jumps to byte 16 (1-nibble move = first nibble of next byte).
     {
         ViewMode m;  // bpc=1
         const int bpr = 16;
@@ -1061,14 +1075,16 @@ void testNavigateInDisplayOrder()
         HEX_EXPECT_EQ(next.nibble, 0);
     }
 
-    // Row-boundary retreat in BE 8-bit.
+    // Row-boundary retreat: navigateLeft from byte 16 nibble 0 = byte 15
+    // nibble 0 (1 byte back, lands at first nibble — NOT second nibble
+    // of byte 15 as the old digit-stride code did).
     {
         ViewMode m;
         const int bpr = 16;
         CursorState c; c.offset = 16; c.nibble = 0;
         CursorState back = navigateLeft(c, view, m, bpr);
         HEX_EXPECT_EQ(back.offset, static_cast<std::size_t>(15));
-        HEX_EXPECT_EQ(back.nibble, 1);
+        HEX_EXPECT_EQ(back.nibble, 0);
     }
 
     // navigateLeft from document start is a no-op.
@@ -1078,6 +1094,16 @@ void testNavigateInDisplayOrder()
         CursorState c; c.offset = 0; c.nibble = 0;
         CursorState back = navigateLeft(c, view, m, bpr);
         HEX_EXPECT_EQ(back.offset, static_cast<std::size_t>(0));
+        HEX_EXPECT_EQ(back.nibble, 0);
+    }
+
+    // Asymmetric Left from second nibble: stays in byte (1 nibble back).
+    {
+        ViewMode m;
+        const int bpr = 16;
+        CursorState c; c.offset = 5; c.nibble = 1;
+        CursorState back = navigateLeft(c, view, m, bpr);
+        HEX_EXPECT_EQ(back.offset, static_cast<std::size_t>(5));
         HEX_EXPECT_EQ(back.nibble, 0);
     }
 }
