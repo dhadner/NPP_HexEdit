@@ -64,10 +64,10 @@ SCHEMA_VERSION = 1
 # feature surfaces. Images are resized + recompressed to JPEG so the
 # committed total stays under ~1 MB.
 SCREENSHOT_WHITELIST = [
-    ("diag-row0-initialOpen.png",                            "hex-view-default.jpg",        "Hex view (default state)"),
-    ("setNppAppearanceMode-Dark-afterClick.png",             "dark-appearance.jpg",         "Dark appearance"),
-    ("test-wideContent-horizontalScroll.png",                "wide-content-scroll.jpg",     "Wide-content horizontal scroll"),
-    ("testOptionsHelpPopover-01-dialog-without-popover.png", "options-dialog.jpg",          "Options dialog"),
+    ("diag-row0-initialOpen.png",                            "hex-view-default.jpg",     "Hex view (default state)"),
+    ("testOptionsHelpPopover-02-popover-shown.png",          "options-dialog.jpg",       "Options dialog with help tooltip"),
+    ("testLargeFile_1_5GB-paste-destination-rendering.png",  "large-file-1_5gb.jpg",     "Multi-GB file (1.5 GB) rendering"),
+    ("testRepeatedShiftPageUpEventuallyShowsRow0.png",       "linear-selection.jpg",     "Linear selection with mirrored hex / ASCII highlighting"),
 ]
 # Target longest-edge in pixels and JPEG quality. 1024 / quality 65 keeps
 # UI screenshots readable while landing each image under ~250 KB.
