@@ -6,11 +6,11 @@
 # Run from the repo root:
 #   bash macos/scripts/pre-commit-tests.sh
 #
-# Tiers (cumulative time ~25 min on a quiet machine):
+# Tiers (cumulative time ~27 min on a quiet machine):
 #   1. Unit (host)              ~0.01 s — ctest -L unit
 #   2. Unit + ASan/UBSan (host) ~0.5  s — ctest -L unit (sanitized build)
 #   3. Plugin smoke (host)      ~0.4  s — ctest -L smoke (dlopen contract)
-#   4. Fuzz / robustness (host) ~2    min — 4 libFuzzer harnesses × 30 s
+#   4. Fuzz / robustness (host) ~4    min — 8 libFuzzer harnesses × 30 s
 #   5. Full XCTest UI (VM)      ~22   min — test-ui.sh, locks VM kbd/mouse
 #
 # Tiers 1-4 run on the host. Tier 5 SSH-routes to the Parallels VM (per
@@ -85,6 +85,87 @@ cyan "==> Logs: $LOG_DIR"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
+# ---- Dashboard data capture ----------------------------------------------
+# Each run_tier call appends a TSV line (key, status, duration_sec) to
+# TIER_TSV. After the run completes (success or failure), an EXIT trap
+# converts the TSV into JSON and invokes update-test-dashboard.py to
+# refresh docs/test-status.md. Generator failure is non-fatal — the test
+# suite's exit status, not the dashboard, is the gate.
+TIER_TSV="$LOG_DIR/tier-summary.tsv"
+TIER_RESULTS_JSON="$LOG_DIR/tier-results.json"
+: > "$TIER_TSV"
+RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+RUN_COMMIT_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+
+record_tier() {
+    # $1 = tier key (unit, unit_asan, smoke, fuzz, ui)
+    # $2 = status (pass / fail / skipped)
+    # $3 = duration in seconds (integer)
+    printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$TIER_TSV"
+}
+
+finalize_dashboard() {
+    local exit_code=$?
+    # Build the JSON payload (best effort; do not propagate failure).
+    if command -v python3 >/dev/null 2>&1; then
+        local skip_fuzz="$SKIP_FUZZ"
+        local skip_ui="$SKIP_UI"
+        local kind="full"
+        if [[ "$skip_fuzz" -eq 1 && "$skip_ui" -eq 1 ]]; then
+            kind="skip-fuzz+ui"
+        elif [[ "$skip_fuzz" -eq 1 ]]; then
+            kind="skip-fuzz"
+        elif [[ "$skip_ui" -eq 1 ]]; then
+            kind="skip-ui"
+        fi
+        TIER_TSV="$TIER_TSV" \
+        OUT_PATH="$TIER_RESULTS_JSON" \
+        STARTED_AT="$RUN_STARTED_AT" \
+        COMMIT_SHA="$RUN_COMMIT_SHA" \
+        KIND="$kind" \
+        python3 - <<'PYEOF' || return 0
+import json, os, sys
+tsv = os.environ["TIER_TSV"]
+out = os.environ["OUT_PATH"]
+tiers = {}
+try:
+    with open(tsv) as fp:
+        for line in fp:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 3:
+                continue
+            key, status, dur = parts[0], parts[1], parts[2]
+            try:
+                duration = float(dur)
+            except ValueError:
+                duration = 0.0
+            tiers[key] = {"status": status, "duration_sec": duration}
+except OSError:
+    pass
+finished_at = os.popen("date -u +%Y-%m-%dT%H:%M:%SZ").read().strip()
+payload = {
+    "started_at":  os.environ.get("STARTED_AT", ""),
+    "finished_at": finished_at,
+    "commit_sha":  os.environ.get("COMMIT_SHA", ""),
+    "kind":        os.environ.get("KIND", "full"),
+    "tiers":       tiers,
+}
+with open(out, "w") as fp:
+    json.dump(payload, fp, indent=2)
+PYEOF
+        python3 "$REPO_ROOT/macos/scripts/update-test-dashboard.py" \
+            --tier-results "$TIER_RESULTS_JSON" \
+            --ui-history "$REPO_ROOT/macos/ui-tests-xcode/build/run-history.json" \
+            >/dev/null 2>&1 \
+            || yellow "    (dashboard update failed — see $LOG_DIR for tier logs)"
+    fi
+    return 0
+}
+# Always run the dashboard refresh, even on failure: a red dashboard is
+# more useful than a stale-green one. EXIT trap does NOT change the script
+# exit code (we explicitly `return 0` from the trap).
+trap 'rc=$?; finalize_dashboard; exit $rc' EXIT
+
 require_build_dir() {
     local dir="$1"
     local hint="$2"
@@ -108,8 +189,18 @@ run_tier() {
     local logname="$2"
     shift 2
     local logfile="$LOG_DIR/$logname.log"
+    # Map log-stem to dashboard tier-key (1-unit → unit, 5-ui → ui, etc).
+    local tier_key=""
+    case "$logname" in
+        1-unit)      tier_key="unit" ;;
+        2-unit-asan) tier_key="unit_asan" ;;
+        3-smoke)     tier_key="smoke" ;;
+        4-fuzz)      tier_key="fuzz" ;;
+        5-ui)        tier_key="ui" ;;
+    esac
     cyan "==> [$label]"
     local rc=0
+    local started=$SECONDS
     if [[ $VERBOSE -eq 1 ]]; then
         # set -o pipefail makes tee's failure (which can't happen here)
         # mask the real exit, so capture the inner command's status
@@ -119,9 +210,12 @@ run_tier() {
     else
         "$@" >"$logfile" 2>&1 || rc=$?
     fi
+    local elapsed=$(( SECONDS - started ))
     if [[ $rc -eq 0 ]]; then
+        [[ -n "$tier_key" ]] && record_tier "$tier_key" "pass" "$elapsed"
         green "    PASSED  ($logfile)"
     else
+        [[ -n "$tier_key" ]] && record_tier "$tier_key" "fail" "$elapsed"
         red   "    FAILED ($label) — exit $rc"
         if [[ $VERBOSE -ne 1 ]]; then
             red   "    Last 30 lines of $logfile:"
@@ -158,6 +252,7 @@ run_tier "3/5 plugin smoke (host)" "3-smoke" \
 
 if [[ $SKIP_FUZZ -eq 1 ]]; then
     yellow "==> [4/5 fuzz (host)] SKIPPED via --skip-fuzz"
+    record_tier "fuzz" "skipped" "0"
 else
     require_build_dir "macos/build-fuzz" \
         "cmake -S macos -B macos/build-fuzz -DENABLE_FUZZ_TESTS=ON -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DNPP_MACOS_DIR=/path/to/notepad-plus-plus-macos"
@@ -171,6 +266,7 @@ if [[ $SKIP_UI -eq 1 ]]; then
     yellow "==> [5/5 UI (VM)] SKIPPED via --skip-ui — host tiers green only"
     yellow "    Full sequence including UI is still required before commit."
     yellow "    Logs: $LOG_DIR"
+    record_tier "ui" "skipped" "0"
     exit 0
 fi
 

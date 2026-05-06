@@ -1,0 +1,37 @@
+{
+  "commit_sha": "93852c256707a3feb150a37b2699e1ed97ba9f6e",
+  "generated_at": "2026-05-06T17:41:50+00:00",
+  "last_kind": "skip-ui",
+  "schema_version": 1,
+  "tiers": {
+    "fuzz": {
+      "duration_sec": 248.0,
+      "last_passed_at": "2026-05-06T17:34:01Z",
+      "ran_at": "2026-05-06T17:34:01Z",
+      "status": "pass"
+    },
+    "smoke": {
+      "duration_sec": 0.0,
+      "last_passed_at": "2026-05-06T17:34:01Z",
+      "ran_at": "2026-05-06T17:34:01Z",
+      "status": "pass"
+    },
+    "ui": {
+      "duration_sec": 0.0,
+      "ran_at": "2026-05-06T17:34:01Z",
+      "status": "skipped"
+    },
+    "unit": {
+      "duration_sec": 0.0,
+      "last_passed_at": "2026-05-06T17:34:01Z",
+      "ran_at": "2026-05-06T17:34:01Z",
+      "status": "pass"
+    },
+    "unit_asan": {
+      "duration_sec": 0.0,
+      "last_passed_at": "2026-05-06T17:34:01Z",
+      "ran_at": "2026-05-06T17:34:01Z",
+      "status": "pass"
+    }
+  }
+}

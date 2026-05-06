@@ -240,6 +240,10 @@ if(ENABLE_FUZZ_TESTS)
         fuzz_decodeRectPayload
         fuzz_extractRectBytes
         fuzz_makeRectSelection
+        fuzz_stripHexDumpAddressAndAscii
+        fuzz_parseSearchPattern
+        fuzz_parseHexClipboardText
+        fuzz_resolveGotoOffset
     )
     foreach(harness ${HEX_FUZZ_HARNESSES})
         add_executable(${harness}

@@ -89,10 +89,22 @@ This runs every test tier in dependency order, fastest-first, aborting at the fi
 1. **Unit (host)** — `ctest -L unit` against `macos/build/`. ~0.01 s.
 2. **Unit + ASan/UBSan (host)** — `ctest -L unit` against `macos/build-asan/`. ~0.5 s. Catches heap-buffer-overflow / use-after-free / signed-overflow at < 1 ms feedback so they don't surface 22 minutes deep into the UI run.
 3. **Plugin smoke (host)** — `ctest -L smoke` against `macos/build/`. `dlopen`s the plugin and checks the host contract. ~0.4 s.
-4. **Fuzz / robustness (host)** — `ctest -L fuzz` against `macos/build-fuzz/`. 4 libFuzzer harnesses × 30 s = ~2 min. Exercises the parser/decoder paths against random inputs.
+4. **Fuzz / robustness (host)** — `ctest -L fuzz` against `macos/build-fuzz/`. 8 libFuzzer harnesses × 30 s = ~4 min. Exercises every external-input parser the plugin exposes against random inputs, under ASan + UBSan:
+   - `fuzz_parseRectClipboardText` — rectangular clipboard text fallback
+   - `fuzz_decodeRectPayload` — custom-UTI binary rectangle payload
+   - `fuzz_extractRectBytes` — byte extraction from a rectangle shape
+   - `fuzz_makeRectSelection` — rectangle geometry construction
+   - `fuzz_stripHexDumpAddressAndAscii` — multi-format cleaner that runs on every external-app paste (lldb / gdb / xxd / x64dbg / IDA / C-escape / C-array)
+   - `fuzz_parseSearchPattern` — Find / Find-and-Replace dialog input (auto-detects ASCII vs hex)
+   - `fuzz_parseHexClipboardText` — linear hex-clipboard paste path
+   - `fuzz_resolveGotoOffset` — Goto Offset dialog (`+`/`-` relative, `0x` hex, decimal)
+
+   Each runs ~30 s with a fresh seed, accumulating ~30M+ iterations across the suite per pre-commit run. Adding a new harness is a 3-step pattern: drop a `fuzz_<targetFn>.cpp` under `macos/fuzz/` exposing `LLVMFuzzerTestOneInput`, append the harness name to `HEX_FUZZ_HARNESSES` in `macos/CMakeLists.txt`, and reconfigure `macos/build-fuzz`. See `macos/fuzz/README.md` for harness-writing conventions.
 5. **Full XCTest UI (VM)** — `macos/scripts/test-ui.sh`. ~22 min on the Parallels VM. Locks VM keyboard/mouse; don't use the VM for anything else while this runs.
 
 The script accepts `--skip-fuzz` (cosmetic-only commits) and `--skip-ui` (fast pre-push gate), but the full sequence is required before any commit. Skipping a tier means trusting that nothing it would have caught has been introduced — only OK when the change is genuinely orthogonal (whitespace, a docs file).
+
+After every run (full or partial, success or failure), the script regenerates the committed test-status dashboard at [docs/test-status.md](../docs/test-status.md) — a 5-tier overview that GitHub renders for anyone viewing the repo. State for skipped tiers is preserved across runs (each tier's row shows its last-passed timestamp), so a `--skip-ui` host-only run doesn't blank out the UI tier's prior result. The dashboard pulls UI per-test detail from `macos/ui-tests-xcode/build/run-history.json` when present and copies four representative UI screenshots — resized + recompressed via `sips` to ~100 KB each — into [docs/test-status/screenshots/](../docs/test-status/screenshots/) so the repo stays small (the full UI run produces ~25 screenshots at ~50 MB native; only the curated subset is committed). There is no CI equivalent — the UI tier requires a Parallels VM that GitHub-hosted runners can't provide. After a green run, commit the regenerated `docs/test-status*` files alongside your code change so GitHub always shows the most recent verified state.
 
 **First-time setup.** Each tier expects its own pre-configured CMake build directory. Run these once:
 
