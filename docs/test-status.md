@@ -1,6 +1,6 @@
 # HexEditor test status
 
-_Generated: 2026-05-06 12:36 PDT · commit `7196afaf` · developer machine (no CI — UI tier needs the Parallels VM)._
+_Generated: 2026-05-06 12:44 PDT · commit `7196afaf` · developer machine (no CI — UI tier needs the Parallels VM)._
 
 ## Tier status
 
@@ -36,17 +36,17 @@ _A small curated subset. The full UI run produces ~25 diagnostic screenshots; co
 
 ![Hex view (default state)](test-status/screenshots/hex-view-default.jpg)
 
-### Dark appearance
+### Options dialog with help tooltip
 
-![Dark appearance](test-status/screenshots/dark-appearance.jpg)
+![Options dialog with help tooltip](test-status/screenshots/options-dialog.jpg)
 
-### Wide-content horizontal scroll
+### Multi-GB file (1.5 GB) rendering
 
-![Wide-content horizontal scroll](test-status/screenshots/wide-content-scroll.jpg)
+![Multi-GB file (1.5 GB) rendering](test-status/screenshots/large-file-1_5gb.jpg)
 
-### Options dialog
+### Linear selection with mirrored hex / ASCII highlighting
 
-![Options dialog](test-status/screenshots/options-dialog.jpg)
+![Linear selection with mirrored hex / ASCII highlighting](test-status/screenshots/linear-selection.jpg)
 
 ---
 
