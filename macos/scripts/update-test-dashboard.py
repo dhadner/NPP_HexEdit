@@ -83,17 +83,25 @@ TIER_ORDER = [
 ]
 
 STATUS_ICON = {
-    # Use single-cell-wide Unicode glyphs so markdownlint MD060 (which checks
-    # pipe alignment by visual cell width, not character count) doesn't flag
-    # the table. ✅ / ❓ are East-Asian-Wide — they render as 2 cells, which
-    # shifts every following pipe in the row one column right of the header
-    # row's pipe and breaks the rule even though the character positions
-    # match. ✓ / ✗ / − / ? are all "Neutral" width = 1 cell.
-    "pass":    "✓",
-    "fail":    "✗",
-    "skipped": "−",
-    "unknown": "?",
+    "pass":    "✅",
+    "fail":    "❌",
+    "skipped": "⊘",
+    "unknown": "❓",
 }
+
+# Codepoints that render as 2 display cells in monospace despite being one
+# character. The render_aligned_table padding logic measures cells via
+# display_width() — without that, pipe columns drift right of the header
+# in any row containing one of these (markdownlint MD060). Keep this list
+# in sync with the icons / characters actually used in the dashboard. The
+# Unicode Emoji_Presentation property is the canonical source; we keep a
+# minimal allowlist instead of a full table to avoid a dependency.
+WIDE_CHARS = frozenset({"✅", "❌", "❓"})
+
+
+def display_width(s: str) -> int:
+    """Number of monospace cells the string occupies on screen."""
+    return sum(2 if ch in WIDE_CHARS else 1 for ch in s)
 
 
 def parse_args() -> argparse.Namespace:
@@ -214,23 +222,31 @@ def render_aligned_table(headers: list[str],
     """Render a markdown table with vertically-aligned pipes.
 
     markdownlint rule MD060 (table-column-style) requires every row in a
-    table to share the same pipe positions — i.e. cells must be padded so
-    the pipes line up across header, delimiter, and every data row.
+    table to share the same pipe positions measured by *display cell
+    width*, not character count. Wide emoji like ✅ are one codepoint but
+    occupy two cells on screen; padding by character count would leave
+    rows containing them visually shifted right of the header row even
+    though their character indices match. We compute widths via
+    display_width() and pad with literal spaces so the cells line up
+    visually in any monospace font.
+
     `alignments` is one of "left" / "right" / "center" per column; the
     delimiter row uses the matching `:---` / `---:` / `:---:` pattern.
     """
     n = len(headers)
-    col_widths = [len(headers[i]) for i in range(n)]
+    col_widths = [display_width(headers[i]) for i in range(n)]
     for row in rows:
         for i in range(min(n, len(row))):
-            col_widths[i] = max(col_widths[i], len(row[i]))
+            col_widths[i] = max(col_widths[i], display_width(row[i]))
 
-    def fmt_cell(content: str, width: int, alignment: str) -> str:
+    def pad(content: str, width: int, alignment: str) -> str:
+        deficit = max(width - display_width(content), 0)
         if alignment == "right":
-            return content.rjust(width)
+            return " " * deficit + content
         if alignment == "center":
-            return content.center(width)
-        return content.ljust(width)
+            left = deficit // 2
+            return " " * left + content + " " * (deficit - left)
+        return content + " " * deficit
 
     def fmt_delim(width: int, alignment: str) -> str:
         if width < 1:
@@ -244,12 +260,12 @@ def render_aligned_table(headers: list[str],
         return "-" * width
 
     out: list[str] = []
-    header_cells = [fmt_cell(headers[i], col_widths[i], alignments[i]) for i in range(n)]
+    header_cells = [pad(headers[i], col_widths[i], alignments[i]) for i in range(n)]
     out.append("| " + " | ".join(header_cells) + " |")
     delim_cells = [fmt_delim(col_widths[i], alignments[i]) for i in range(n)]
     out.append("| " + " | ".join(delim_cells) + " |")
     for row in rows:
-        padded = [fmt_cell(row[i] if i < len(row) else "", col_widths[i], alignments[i])
+        padded = [pad(row[i] if i < len(row) else "", col_widths[i], alignments[i])
                   for i in range(n)]
         out.append("| " + " | ".join(padded) + " |")
     return out

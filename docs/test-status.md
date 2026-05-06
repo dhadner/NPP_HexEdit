@@ -1,16 +1,16 @@
 # HexEditor test status
 
-_Generated: 2026-05-06 12:33 PDT · commit `7196afaf` · developer machine (no CI — UI tier needs the Parallels VM)._
+_Generated: 2026-05-06 12:36 PDT · commit `7196afaf` · developer machine (no CI — UI tier needs the Parallels VM)._
 
 ## Tier status
 
-| Tier                 | Status | Duration | Last passed          | Notes                                                     |
-| :------------------- | :----- | -------: | :------------------- | :-------------------------------------------------------- |
-| 1. Unit              | ✓ pass |    `<1s` | 2026-05-06 10:52 PDT | HexCore C++ assertions                                    |
-| 2. Unit + ASan/UBSan | ✓ pass |    `<1s` | 2026-05-06 10:52 PDT | Same suite, AddressSanitizer + UndefinedBehaviorSanitizer |
-| 3. Plugin smoke      | ✓ pass |    `<1s` | 2026-05-06 10:52 PDT | Plugin `dlopen` contract                                  |
-| 4. Fuzz / robustness | ✓ pass |    4m 9s | 2026-05-06 10:52 PDT | 8 libFuzzer harnesses × 30 s, ASan + UBSan                |
-| 5. XCTest UI (VM)    | ✓ pass |  45m 54s | 2026-05-06 10:52 PDT | XCTest UI on Parallels VM                                 |
+| Tier                 | Status  | Duration | Last passed          | Notes                                                     |
+| :------------------- | :------ | -------: | :------------------- | :-------------------------------------------------------- |
+| 1. Unit              | ✅ pass |    `<1s` | 2026-05-06 10:52 PDT | HexCore C++ assertions                                    |
+| 2. Unit + ASan/UBSan | ✅ pass |    `<1s` | 2026-05-06 10:52 PDT | Same suite, AddressSanitizer + UndefinedBehaviorSanitizer |
+| 3. Plugin smoke      | ✅ pass |    `<1s` | 2026-05-06 10:52 PDT | Plugin `dlopen` contract                                  |
+| 4. Fuzz / robustness | ✅ pass |    4m 9s | 2026-05-06 10:52 PDT | 8 libFuzzer harnesses × 30 s, ASan + UBSan                |
+| 5. XCTest UI (VM)    | ✅ pass |  45m 54s | 2026-05-06 10:52 PDT | XCTest UI on Parallels VM                                 |
 
 ## XCTest UI tier
 
