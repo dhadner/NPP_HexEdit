@@ -9,18 +9,18 @@ The current milestone is intentionally small: it loads in Notepad++ for macOS, a
 - macOS 11 or newer
 - Xcode command line tools
 - CMake 3.20 or newer
-- A checkout of `notepad-plus-plus-macos`
+- A checkout of `nextpad-plus-plus`
 
-By default, CMake expects the macOS Notepad++ checkout to be a sibling of this
+By default, CMake expects the Nextpad++ host checkout to be a sibling of this
 repository (both share a parent — the parent's name doesn't matter):
 
 ```text
 <any-parent>/
   NPP_HexEdit/
-  notepad-plus-plus-macos/
+  nextpad-plus-plus/
 ```
 
-If it is elsewhere, pass `-DNPP_MACOS_DIR=/path/to/notepad-plus-plus-macos`.
+If it is elsewhere, pass `-DNPP_MACOS_DIR=/path/to/nextpad-plus-plus`.
 
 ## Build
 

@@ -1441,7 +1441,7 @@ static void writeBackCursor(const hexedit::CursorState &cursor);
 // Trackpad pinch-to-zoom. NSScrollView's built-in magnification (allowsMagnification)
 // scales the documentView, which would distort the hex grid. We translate pinch
 // into discrete font-size steps via zoomHexFont. The threshold + multiplier match
-// Scintilla's implementation (notepad-plus-plus-macos/scintilla/cocoa/ScintillaView.mm,
+// Scintilla's implementation (nextpad-plus-plus/scintilla/cocoa/ScintillaView.mm,
 // magnifyWithEvent: at ~line 1321) so users get an identical pinch feel in our
 // hex view and in the host's main text editor — that's the whole point: same
 // gesture, same response.

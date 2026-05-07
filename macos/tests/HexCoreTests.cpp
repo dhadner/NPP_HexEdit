@@ -3,8 +3,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -13,12 +15,20 @@ namespace {
 int g_assertions = 0;
 int g_failures = 0;
 const char *g_currentSuite = "<none>";
+// Track suites that ran and which of those had at least one failure. Lets
+// the binary emit per-suite pass/fail counts (consumed by the dashboard via
+// HEX_TEST_COUNTS_OUT) without instrumenting every suite-name assignment —
+// hexExpectImpl observes whichever suite is current at assertion time.
+std::set<std::string> g_seenSuites;
+std::set<std::string> g_failedSuites;
 
 void hexExpectImpl(bool condition, const char *expr, const char *file, int line)
 {
     ++g_assertions;
+    g_seenSuites.insert(g_currentSuite);
     if (!condition) {
         ++g_failures;
+        g_failedSuites.insert(g_currentSuite);
         std::fprintf(stderr, "FAIL [%s] %s:%d: %s\n", g_currentSuite, file, line, expr);
     }
 }
@@ -27,10 +37,36 @@ template <typename A, typename B>
 void hexExpectEqImpl(const A &lhs, const B &rhs, const char *lhsExpr, const char *rhsExpr, const char *file, int line)
 {
     ++g_assertions;
+    g_seenSuites.insert(g_currentSuite);
     if (!(lhs == rhs)) {
         ++g_failures;
+        g_failedSuites.insert(g_currentSuite);
         std::fprintf(stderr, "FAIL [%s] %s:%d: %s == %s\n", g_currentSuite, file, line, lhsExpr, rhsExpr);
     }
+}
+
+// When HEX_TEST_COUNTS_OUT is set, write a tiny JSON sidecar with per-suite
+// pass/fail counts so the test-status dashboard can sum tests across tiers.
+// The shape matches macos/scripts/update-test-dashboard.py's contract:
+// {"passed": N, "failed": N, "skipped": 0, "total": N}.
+void writeCountsSidecarIfRequested()
+{
+    const char *outPath = std::getenv("HEX_TEST_COUNTS_OUT");
+    if (!outPath || !*outPath) {
+        return;
+    }
+    const int total  = static_cast<int>(g_seenSuites.size());
+    const int failed = static_cast<int>(g_failedSuites.size());
+    const int passed = total - failed;
+    FILE *fp = std::fopen(outPath, "w");
+    if (!fp) {
+        std::fprintf(stderr, "warning: could not open HEX_TEST_COUNTS_OUT=%s for writing\n",
+                     outPath);
+        return;
+    }
+    std::fprintf(fp, "{\"passed\": %d, \"failed\": %d, \"skipped\": 0, \"total\": %d}\n",
+                 passed, failed, total);
+    std::fclose(fp);
 }
 
 #define HEX_EXPECT(cond) hexExpectImpl(static_cast<bool>(cond), #cond, __FILE__, __LINE__)
@@ -2059,10 +2095,15 @@ int main()
     testSpanByteSource();
     testWindowedScintillaByteSource();
 
+    writeCountsSidecarIfRequested();
+
     if (g_failures == 0) {
-        std::printf("PASS: %d assertions across 37 suites\n", g_assertions);
+        std::printf("PASS: %d assertions across %zu suites\n",
+                    g_assertions, g_seenSuites.size());
         return 0;
     }
-    std::printf("FAIL: %d/%d assertions failed\n", g_failures, g_assertions);
+    std::printf("FAIL: %d/%d assertions failed (%zu of %zu suites)\n",
+                g_failures, g_assertions,
+                g_failedSuites.size(), g_seenSuites.size());
     return 1;
 }

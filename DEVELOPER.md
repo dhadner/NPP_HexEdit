@@ -10,10 +10,10 @@ plugin. If you only want to *use* the plugin, see [README.md](README.md) instead
 #    — the build only requires they share a parent. Override the discovery path
 #    with -DNPP_MACOS_DIR= if you'd rather lay them out differently).
 git clone https://github.com/<your-fork>/NPP_HexEdit.git
-git clone https://github.com/notepad-plus-plus-macos/notepad-plus-plus-macos.git
+git clone https://github.com/nextpad-plus-plus/nextpad-plus-plus-macos.git nextpad-plus-plus
 
 # 2. Build the host (one-time; takes a few minutes).
-cd notepad-plus-plus-macos
+cd nextpad-plus-plus
 # follow the host's Build-Instructions.md to produce build/Notepad++.app
 
 # 3. Build, install, and smoke-test the plugin.
@@ -71,7 +71,7 @@ needed. Anything that could be expressed without touching macOS APIs lives in
 ## Sibling host checkout
 
 You need two things from
-[notepad-plus-plus-macos](https://github.com/notepad-plus-plus-macos):
+[nextpad-plus-plus](https://github.com/nextpad-plus-plus/nextpad-plus-plus-macos):
 
 | Need | Required for | Source |
 | --- | --- | --- |
@@ -80,17 +80,17 @@ You need two things from
 
 By default CMake looks for the host repo as a sibling directory of `NPP_HexEdit`
 — in other words, both repos share the same parent. The parent's name doesn't
-matter (`~/src/NPP_HexEdit` next to `~/src/notepad-plus-plus-macos`,
-`~/Documents/GitHub/NPP_HexEdit` next to `~/Documents/GitHub/notepad-plus-plus-macos`,
+matter (`~/src/NPP_HexEdit` next to `~/src/nextpad-plus-plus`,
+`~/Documents/GitHub/NPP_HexEdit` next to `~/Documents/GitHub/nextpad-plus-plus`,
 or anything else — only the relative position matters):
 
 ```text
 <any-parent>/
   NPP_HexEdit/
-  notepad-plus-plus-macos/
+  nextpad-plus-plus/
 ```
 
-If your layout is different, pass `-DNPP_MACOS_DIR=/abs/path/to/notepad-plus-plus-macos`
+If your layout is different, pass `-DNPP_MACOS_DIR=/abs/path/to/nextpad-plus-plus`
 on the first `cmake -S macos -B macos/build-universal …` invocation (the
 "configure" step that generates the build system; this is separate from
 `cmake --build`, which only compiles). Example:
@@ -98,7 +98,7 @@ on the first `cmake -S macos -B macos/build-universal …` invocation (the
 ```sh
 cmake -S macos -B macos/build-universal \
     -DCMAKE_BUILD_TYPE=Release \
-    -DNPP_MACOS_DIR=/Users/me/projects/notepad-plus-plus-macos
+    -DNPP_MACOS_DIR=/Users/me/projects/nextpad-plus-plus
 ```
 
 The path is cached in `macos/build-universal/CMakeCache.txt`, so you only need
@@ -280,7 +280,7 @@ about 30 minutes (mostly Xcode download time).
 
 3. **Share your host's GitHub directory into the guest.** In Parallels VM
    Settings → Sharing → Custom Folders, share the parent directory containing
-   both `NPP_HexEdit` and `notepad-plus-plus-macos`. The guest sees them under
+   both `NPP_HexEdit` and `nextpad-plus-plus`. The guest sees them under
    `/Volumes/My Shared Files/...`.
 
 4. **Run the bootstrap script** once in the guest (it auto-detects the shared

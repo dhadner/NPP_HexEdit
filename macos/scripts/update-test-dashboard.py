@@ -15,11 +15,15 @@ Inputs (via CLI):
                           Shape: see the writer in pre-commit-tests.sh.
     --ui-history PATH     run-history.json from the UI tier (optional;
                           only present after a UI run).
+    --logs-dir PATH       Per-run log directory; per-tier counts.json sidecars
+                          live here (one per tier that ran). Optional.
     --repo-root PATH      Repo root. Defaults to inferring from this script.
 
 Outputs:
     docs/test-status.md
     docs/test-status/state.json
+    docs/test-status/badge.svg     (static SVG for the README; relative path so each
+                                    branch's README shows its own branch's state)
     docs/test-status/screenshots/  (curated subset, copied if available)
 
 Schema for --tier-results JSON:
@@ -111,6 +115,8 @@ def parse_args() -> argparse.Namespace:
                     help="Path to the JSON written by pre-commit-tests.sh")
     ap.add_argument("--ui-history", default=None,
                     help="Optional UI run-history.json for per-test detail")
+    ap.add_argument("--logs-dir", default=None,
+                    help="Per-run log directory; reads <tier>-counts.json sidecars")
     ap.add_argument("--repo-root", default=None,
                     help="Repo root (default: two levels above this script)")
     return ap.parse_args()
@@ -140,6 +146,46 @@ def load_existing_state(state_path: Path) -> dict:
         return load_json(state_path)
     except (OSError, json.JSONDecodeError):
         return {}
+
+
+def load_tier_counts(logs_dir: Path | None, tier_key: str,
+                     ui_history: list[dict] | None) -> dict | None:
+    """Read this run's per-tier {passed, failed, skipped, total} counts.
+
+    Source per tier:
+      - unit / unit_asan / smoke / fuzz → <logs-dir>/<tier>-counts.json
+        (written by the test binary or pre-commit-tests.sh)
+      - ui → last entry in ui_history (the canonical XCTest record)
+
+    Returns None when no source is available; caller treats that as "no
+    fresh counts this run" and the merge step preserves prior values.
+    """
+    if tier_key == "ui":
+        if not ui_history:
+            return None
+        latest = ui_history[-1]
+        return {
+            "passed":  int(latest.get("passed",  0) or 0),
+            "failed":  int(latest.get("failed",  0) or 0),
+            "skipped": int(latest.get("skipped", 0) or 0),
+            "total":   int(latest.get("total",   0) or 0),
+        }
+    if logs_dir is None:
+        return None
+    path = logs_dir / f"{tier_key}-counts.json"
+    if not path.exists():
+        return None
+    try:
+        data = load_json(path)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"warning: could not read {path}: {exc}", file=sys.stderr)
+        return None
+    return {
+        "passed":  int(data.get("passed",  0) or 0),
+        "failed":  int(data.get("failed",  0) or 0),
+        "skipped": int(data.get("skipped", 0) or 0),
+        "total":   int(data.get("total",   0) or 0),
+    }
 
 
 def merge_tier_into_state(state: dict, tier_key: str, this_run: dict, run_started_at: str) -> dict:
@@ -192,26 +238,31 @@ def short_sha(sha: str | None) -> str:
 
 
 def tier_note(tier_key: str, tier_state: dict) -> str:
-    """One-line description of what the tier does + most useful detail."""
-    if tier_key == "unit":
-        return "HexCore C++ assertions"
-    if tier_key == "unit_asan":
-        return "Same suite, AddressSanitizer + UndefinedBehaviorSanitizer"
-    if tier_key == "smoke":
-        return "Plugin `dlopen` contract"
-    if tier_key == "fuzz":
-        harnesses = tier_state.get("harnesses") or []
-        if harnesses:
-            total_execs = sum(h.get("execs", 0) for h in harnesses)
-            return f"{len(harnesses)} libFuzzer harnesses, {total_execs:,} iterations this run"
-        return "8 libFuzzer harnesses × 30 s, ASan + UBSan"
-    if tier_key == "ui":
-        passed = tier_state.get("passed")
-        total  = tier_state.get("total")
-        if passed is not None and total is not None:
-            return f"{passed} / {total} passing on Parallels VM"
-        return "XCTest UI on Parallels VM"
-    return ""
+    """One-line description of what the tier does + most useful detail.
+
+    Each tier's count detail (when known) is appended after an em-dash so
+    the dashboard surfaces the same per-tier numbers that feed the README
+    badge total.
+    """
+    base = {
+        "unit":      "HexCore C++ assertions",
+        "unit_asan": "Same suite, AddressSanitizer + UndefinedBehaviorSanitizer",
+        "smoke":     "Plugin `dlopen` contract",
+        "fuzz":      "libFuzzer harnesses × 30 s, ASan + UBSan",
+        "ui":        "XCTest UI on Parallels VM",
+    }.get(tier_key, "")
+    passed  = tier_state.get("passed")
+    failed  = tier_state.get("failed")
+    skipped = tier_state.get("skipped")
+    total   = tier_state.get("total")
+    if total:
+        parts = [f"{passed}/{total} passing"]
+        if failed:
+            parts.append(f"{failed} failing")
+        if skipped:
+            parts.append(f"{skipped} skipped")
+        return f"{base} — {', '.join(parts)}" if base else ", ".join(parts)
+    return base
 
 
 # ---- Rendering -------------------------------------------------------------
@@ -409,6 +460,110 @@ def render_markdown(state: dict, ui_history: list[dict] | None,
     return "\n".join(lines)
 
 
+# ---- README badge ----------------------------------------------------------
+#
+# We render the badge as a static SVG committed to the repo and reference it
+# from the README via a *relative* path. GitHub resolves relative image URLs
+# against whichever branch is currently being viewed, so the same markdown
+# shows master's state on master and macos's state on macos — true
+# per-branch independence. The shields.io endpoint approach can't do that:
+# its URL hardcodes a single branch.
+#
+# To produce the SVG we hit shields.io's static-badge endpoint at generation
+# time and save the result. shields.io renders deterministically for the
+# same (label, message, color) inputs, so unchanged states produce
+# byte-identical SVGs and don't pollute the diff with cosmetic churn.
+
+BADGE_URL_BASE = "https://img.shields.io/badge"
+
+
+def build_badge_fields(state: dict) -> tuple[str, str, str]:
+    """Pick the (label, message, color) triple for the README badge.
+
+    The counts are summed across every tier: unit suites + ASan unit suites
+    + smoke contract + fuzz harnesses + UI XCTest methods. The state object
+    is the merged state — skipped tiers retain their last-known counts, so
+    the badge stays informative even after a partial run (--skip-ui etc.).
+
+      - any tier failed (ctest or counted)         → red,         "<n> of <total> failing"
+      - any tier's run was skipped (no fails)      → yellow,      "<pass>/<total> passing, <n> tier(s) skipped"
+      - some tests inside a passing tier skipped   → brightgreen, "<pass>/<total> passing, <n> skipped"
+      - all green and nothing skipped              → brightgreen, "<pass>/<total> passing"
+      - no counts available anywhere               → lightgrey,   "unknown"
+    """
+    tiers = state.get("tiers", {})
+    sum_pass  = sum(int(tiers.get(k, {}).get("passed",  0) or 0) for k, _ in TIER_ORDER)
+    sum_fail  = sum(int(tiers.get(k, {}).get("failed",  0) or 0) for k, _ in TIER_ORDER)
+    sum_skip  = sum(int(tiers.get(k, {}).get("skipped", 0) or 0) for k, _ in TIER_ORDER)
+    sum_total = sum(int(tiers.get(k, {}).get("total",   0) or 0) for k, _ in TIER_ORDER)
+
+    any_tier_failed     = any(tiers.get(k, {}).get("status") == "fail"    for k, _ in TIER_ORDER)
+    any_run_was_skipped = any(tiers.get(k, {}).get("status") == "skipped" for k, _ in TIER_ORDER)
+
+    if sum_total == 0 and not any_tier_failed:
+        return "tests", "unknown", "lightgrey"
+    if any_tier_failed or sum_fail > 0:
+        n_fail = max(sum_fail, 1)  # tier-level fail with no count detail still shows ≥1
+        return "tests", f"{n_fail} of {sum_total or n_fail} failing", "red"
+    if any_run_was_skipped:
+        n_skipped_tiers = sum(1 for k, _ in TIER_ORDER
+                              if tiers.get(k, {}).get("status") == "skipped")
+        suffix = "tier" if n_skipped_tiers == 1 else "tiers"
+        return ("tests",
+                f"{sum_pass}/{sum_total} passing, {n_skipped_tiers} {suffix} skipped",
+                "yellow")
+    if sum_skip > 0:
+        return "tests", f"{sum_pass}/{sum_total} passing, {sum_skip} skipped", "brightgreen"
+    return "tests", f"{sum_pass}/{sum_total} passing", "brightgreen"
+
+
+def shields_static_url(label: str, message: str, color: str) -> str:
+    """Build a shields.io static-badge URL.
+
+    Path format is /badge/<label>-<message>-<color>. shields.io's escape
+    rules: literal `-` doubles to `--`, literal `_` doubles to `__`, then
+    the whole segment is URL-encoded (spaces → %20). We must apply the
+    doubling before percent-encoding or `%2D` would itself contain a
+    hyphen and confuse shields.
+    """
+    from urllib.parse import quote
+
+    def shields_escape(s: str) -> str:
+        return s.replace("-", "--").replace("_", "__")
+
+    parts = "-".join(quote(shields_escape(p), safe="") for p in (label, message, color))
+    return f"{BADGE_URL_BASE}/{parts}"
+
+
+def write_badge_svg(state: dict, dst: Path) -> None:
+    """Fetch the SVG for `state` from shields.io and write it to `dst`.
+
+    Failures (network, non-SVG response) are non-fatal: the previous SVG
+    stays in place. Writes are skipped when the bytes match the existing
+    file so unchanged states don't show up as diffs in pre-commit runs.
+    """
+    from urllib.request import Request, urlopen
+    label, message, color = build_badge_fields(state)
+    url = shields_static_url(label, message, color)
+    # shields.io returns 403 to the default Python-urllib UA, so identify
+    # the requester with the dashboard tool's name.
+    req = Request(url, headers={"User-Agent": "npp-hexedit-dashboard/1.0"})
+    try:
+        with urlopen(req, timeout=10) as resp:
+            svg = resp.read()
+    except OSError as exc:
+        print(f"warning: could not fetch badge SVG from shields.io ({url}): {exc}",
+              file=sys.stderr)
+        return
+    if not (svg.lstrip().startswith(b"<svg") or svg.lstrip().startswith(b"<?xml")):
+        print(f"warning: shields.io returned non-SVG content for {url}", file=sys.stderr)
+        return
+    if dst.exists() and dst.read_bytes() == svg:
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_bytes(svg)
+
+
 # ---- Screenshot curation ---------------------------------------------------
 
 def shrink_screenshot(src: Path, dst: Path) -> bool:
@@ -472,6 +627,7 @@ def main() -> int:
 
     state_path = repo_root / "docs" / "test-status" / "state.json"
     md_path    = repo_root / "docs" / "test-status.md"
+    badge_path = repo_root / "docs" / "test-status" / "badge.svg"
 
     try:
         run_results = load_json(args.tier_results)
@@ -485,13 +641,6 @@ def main() -> int:
     state["commit_sha"]   = run_results.get("commit_sha", state.get("commit_sha"))
     state["last_kind"]    = run_results.get("kind", "unknown")
 
-    run_started_at = run_results.get("started_at") or state["generated_at"]
-    incoming_tiers = run_results.get("tiers", {}) or {}
-    state.setdefault("tiers", {})
-    for tier_key, _ in TIER_ORDER:
-        this_run = incoming_tiers.get(tier_key, {"status": "skipped"})
-        state["tiers"][tier_key] = merge_tier_into_state(state, tier_key, this_run, run_started_at)
-
     ui_history: list[dict] | None = None
     if args.ui_history and Path(args.ui_history).exists():
         try:
@@ -499,16 +648,34 @@ def main() -> int:
         except (OSError, json.JSONDecodeError) as exc:
             print(f"warning: could not read --ui-history {args.ui_history}: {exc}", file=sys.stderr)
 
+    logs_dir = Path(args.logs_dir) if args.logs_dir else None
+    run_started_at = run_results.get("started_at") or state["generated_at"]
+    incoming_tiers = run_results.get("tiers", {}) or {}
+    state.setdefault("tiers", {})
+    for tier_key, _ in TIER_ORDER:
+        this_run = dict(incoming_tiers.get(tier_key, {"status": "skipped"}))
+        # Layer in per-tier counts: from the dedicated sidecar for unit/asan/
+        # smoke/fuzz, from run-history.json's last entry for ui. Sidecars
+        # may be absent (early-fail before write) — that's fine, the merger
+        # preserves prior counts.
+        counts = load_tier_counts(logs_dir, tier_key, ui_history)
+        if counts:
+            this_run.update(counts)
+        state["tiers"][tier_key] = merge_tier_into_state(state, tier_key, this_run, run_started_at)
+
     screenshots = curate_screenshots(repo_root)
     md = render_markdown(state, ui_history, screenshots)
 
     save_json(state_path, state)
+    write_badge_svg(state, badge_path)
     md_path.parent.mkdir(parents=True, exist_ok=True)
     with open(md_path, "w", encoding="utf-8") as fp:
         fp.write(md)
 
     print(f"Dashboard updated: {md_path.relative_to(repo_root)}")
     print(f"State written:     {state_path.relative_to(repo_root)}")
+    if badge_path.exists():
+        print(f"Badge written:     {badge_path.relative_to(repo_root)}")
     if screenshots:
         print(f"Screenshots:       {len(screenshots)} representative image(s) in "
               f"{(repo_root / 'docs' / 'test-status' / 'screenshots').relative_to(repo_root)}/")

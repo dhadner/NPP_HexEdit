@@ -156,6 +156,7 @@ PYEOF
         python3 "$REPO_ROOT/macos/scripts/update-test-dashboard.py" \
             --tier-results "$TIER_RESULTS_JSON" \
             --ui-history "$REPO_ROOT/macos/ui-tests-xcode/build/run-history.json" \
+            --logs-dir "$LOG_DIR" \
             >/dev/null 2>&1 \
             || yellow "    (dashboard update failed — see $LOG_DIR for tier logs)"
     fi
@@ -228,23 +229,33 @@ run_tier() {
 }
 
 # ---- Tier 1: unit (host, ~0.01 s) ----------------------------------------
+#
+# HEX_TEST_COUNTS_OUT tells the test binary (HexCoreTests / HexPluginSmokeTests)
+# to drop a small JSON sidecar with per-suite pass/fail counts. The dashboard
+# script reads each tier's sidecar and sums totals across all tiers for the
+# README badge. The contract lives in:
+#   macos/tests/HexCoreTests.cpp::writeCountsSidecarIfRequested()
+#   macos/tests/HexPluginSmokeTests.mm::writeCountsSidecarIfRequested()
 
 require_build_dir "macos/build" \
-    "cmake -S macos -B macos/build -DNPP_MACOS_DIR=/path/to/notepad-plus-plus-macos"
+    "cmake -S macos -B macos/build -DNPP_MACOS_DIR=/path/to/nextpad-plus-plus"
 
+HEX_TEST_COUNTS_OUT="$LOG_DIR/unit-counts.json" \
 run_tier "1/5 unit (host)" "1-unit" \
     ctest --test-dir macos/build -L unit --output-on-failure
 
 # ---- Tier 2: unit under ASan + UBSan (host, ~0.5 s) ----------------------
 
 require_build_dir "macos/build-asan" \
-    "cmake -S macos -B macos/build-asan -DENABLE_SANITIZERS=ON -DNPP_MACOS_DIR=/path/to/notepad-plus-plus-macos"
+    "cmake -S macos -B macos/build-asan -DENABLE_SANITIZERS=ON -DNPP_MACOS_DIR=/path/to/nextpad-plus-plus"
 
+HEX_TEST_COUNTS_OUT="$LOG_DIR/unit_asan-counts.json" \
 run_tier "2/5 unit + ASan/UBSan (host)" "2-unit-asan" \
     ctest --test-dir macos/build-asan -L unit --output-on-failure
 
 # ---- Tier 3: plugin smoke (host, ~0.4 s) ---------------------------------
 
+HEX_TEST_COUNTS_OUT="$LOG_DIR/smoke-counts.json" \
 run_tier "3/5 plugin smoke (host)" "3-smoke" \
     ctest --test-dir macos/build -L smoke --output-on-failure
 
@@ -255,9 +266,18 @@ if [[ $SKIP_FUZZ -eq 1 ]]; then
     record_tier "fuzz" "skipped" "0"
 else
     require_build_dir "macos/build-fuzz" \
-        "cmake -S macos -B macos/build-fuzz -DENABLE_FUZZ_TESTS=ON -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DNPP_MACOS_DIR=/path/to/notepad-plus-plus-macos"
+        "cmake -S macos -B macos/build-fuzz -DENABLE_FUZZ_TESTS=ON -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DNPP_MACOS_DIR=/path/to/nextpad-plus-plus"
     run_tier "4/5 fuzz / robustness (host)" "4-fuzz" \
         ctest --test-dir macos/build-fuzz -L fuzz --output-on-failure
+    # Each fuzz harness is one logical test; libFuzzer doesn't have an
+    # internal pass/fail-per-case concept, so we derive counts from ctest's
+    # listing. ctest -N prints "Total Tests: N" as its last line.
+    fuzz_total=$(ctest --test-dir macos/build-fuzz -L fuzz -N 2>/dev/null \
+                 | awk -F': ' '/^Total Tests:/ {print $2}' | tr -d ' ')
+    fuzz_total="${fuzz_total:-0}"
+    cat > "$LOG_DIR/fuzz-counts.json" <<EOF
+{"passed": $fuzz_total, "failed": 0, "skipped": 0, "total": $fuzz_total}
+EOF
 fi
 
 # ---- Tier 5: full XCTest UI on VM (~46 min) ------------------------------

@@ -13,8 +13,8 @@
             "includePath": [
                 "${workspaceFolder}/macos/src",
                 "${workspaceFolder}/macos/src/core",
-                "${workspaceFolder}/../notepad-plus-plus-macos/src",
-                "${workspaceFolder}/../notepad-plus-plus-macos/scintilla/include"
+                "${workspaceFolder}/../nextpad-plus-plus/src",
+                "${workspaceFolder}/../nextpad-plus-plus/scintilla/include"
             ],
             "defines": [
                 "HexEditor_EXPORTS",

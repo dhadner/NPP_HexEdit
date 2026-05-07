@@ -17,7 +17,7 @@ The Xcode project is generated from `project.yml` by [XcodeGen](https://github.c
 
 - Xcode with command line tools selected
 - `xcodegen` (`brew install xcodegen`)
-- A built Notepad++ macOS app bundle (defaults to `../../../notepad-plus-plus-macos/build/Notepad++.app`)
+- A built Nextpad++ host app bundle (defaults to `../../../nextpad-plus-plus/build/Notepad++.app` — the .app filename is still `Notepad++.app` until upstream renames it)
 - The HexEditor plugin installed at `~/.notepad++/plugins/HexEditor/HexEditor.dylib` for the plugin-menu test
 
 ## Run

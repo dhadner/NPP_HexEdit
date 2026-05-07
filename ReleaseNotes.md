@@ -56,7 +56,7 @@ cmake --install macos/build-universal
 
 Restart Nextpad++. The plugin appears as **Plugins → HexEditor** with seven entries: View in HEX, Compare HEX, Clear Compare Result, Insert Columns, Pattern Replace, Options, and Help.
 
-The build expects a checkout of `notepad-plus-plus-macos` next to this repo; pass `-DNPP_MACOS_DIR=/path/to/notepad-plus-plus-macos` if it lives elsewhere.
+The build expects a checkout of `nextpad-plus-plus` next to this repo; pass `-DNPP_MACOS_DIR=/path/to/nextpad-plus-plus` if it lives elsewhere.
 
 See [CHANGELOG.md](CHANGELOG.md) for more detailed information on differences from the Windows version.
 

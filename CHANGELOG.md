@@ -4,6 +4,14 @@ This file lists what's changed in the macOS port of the HexEditor plugin. The
 original Windows version, kept untouched in [HexEditor/](HexEditor/), has its
 own history in [HexEditor/change.log](HexEditor/change.log).
 
+## Unreleased
+
+In-flight work that hasn't been cut into a release yet. At release time this
+heading gets renamed to the chosen version (1.1.1 for a patch, 1.2.0 for a
+minor bump, etc.) and a fresh `## Unreleased` is added above it. The CMake
+build's `HEX_PLUGIN_VERSION_STRING` (in `macos/CMakeLists.txt`) tracks the
+same state — it reads `1.1.x` while this section is open.
+
 ## v1.1.0 — first public release
 
 The macOS port of Jens Lorenz's HexEditor — the venerable Notepad++
