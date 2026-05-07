@@ -63,7 +63,7 @@ done
 # ---- Paths (constants — no env file needed) -------------------------------
 
 VM_HEXEDIT="$HOME/vm-local/NPP_HexEdit"
-VM_NPP_MACOS="$HOME/vm-local/notepad-plus-plus-macos"
+VM_NPP_MACOS="$HOME/vm-local/nextpad-plus-plus"
 VM_APP="$HOME/vm-local/Notepad++.app"
 if [[ $ASAN_BUILD -eq 1 ]]; then
     BUILD_DIR="$HOME/build-NPP_HexEdit-asan"

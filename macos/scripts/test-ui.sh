@@ -52,11 +52,11 @@ VM_HOST="npp-vm"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 HEXEDIT_SRC="$REPO_ROOT"
-NPP_MACOS_SRC="$(cd "$REPO_ROOT/../notepad-plus-plus-macos" && pwd)"
+NPP_MACOS_SRC="$(cd "$REPO_ROOT/../nextpad-plus-plus" && pwd)"
 NPP_APP_SRC="$NPP_MACOS_SRC/build/Notepad++.app"
 
 VM_HEXEDIT="\$HOME/vm-local/NPP_HexEdit"            # remote path (escaped for ssh)
-VM_NPP_MACOS="\$HOME/vm-local/notepad-plus-plus-macos"
+VM_NPP_MACOS="\$HOME/vm-local/nextpad-plus-plus"
 VM_APP="\$HOME/vm-local/Notepad++.app"
 
 DASHBOARD_HTML="$REPO_ROOT/macos/ui-tests-xcode/build/dashboard.html"
@@ -163,7 +163,7 @@ fi
 # delivered to the VM always reflect the latest host edits.
 
 cyan "==> Mirroring source tree to VM:~/vm-local/NPP_HexEdit"
-ssh "$VM_HOST" 'mkdir -p ~/vm-local/NPP_HexEdit ~/vm-local/Notepad++.app ~/vm-local/notepad-plus-plus-macos/src ~/vm-local/notepad-plus-plus-macos/scintilla/include'
+ssh "$VM_HOST" 'mkdir -p ~/vm-local/NPP_HexEdit ~/vm-local/Notepad++.app ~/vm-local/nextpad-plus-plus/src ~/vm-local/nextpad-plus-plus/scintilla/include'
 
 # --checksum: don't trust mtime across the ssh hop. --delete: prune removed files.
 # Excludes: build dirs (VM has its own), .git (large + unneeded), runner-local
@@ -187,10 +187,10 @@ rsync -a --delete --checksum -e ssh \
 cyan "==> Mirroring Notepad++ macOS headers (src/ + scintilla/include/)"
 rsync -a --delete --checksum -e ssh \
     "$NPP_MACOS_SRC/src/" \
-    "$VM_HOST:vm-local/notepad-plus-plus-macos/src/"
+    "$VM_HOST:vm-local/nextpad-plus-plus/src/"
 rsync -a --delete --checksum -e ssh \
     "$NPP_MACOS_SRC/scintilla/include/" \
-    "$VM_HOST:vm-local/notepad-plus-plus-macos/scintilla/include/"
+    "$VM_HOST:vm-local/nextpad-plus-plus/scintilla/include/"
 
 cyan "==> Mirroring Notepad++.app to VM:~/vm-local/Notepad++.app"
 rsync -a --delete --checksum -e ssh \
@@ -231,10 +231,13 @@ fi
 
 ONLY_TESTING=()
 for name in ${TEST_NAMES[@]+"${TEST_NAMES[@]}"}; do
-    # Route by name prefix: testLargeFile_* → HexEditorLargeFileUITests,
-    # everything else → HexEditorUITests. Keeps callers from having to
-    # know which class a test lives in.
+    # Route by name prefix: testLargeFile_* tests can live in either the
+    # routine HexEditorUITests class (smaller fixtures, e.g. 100 MB) or
+    # HexEditorLargeFileUITests (multi-GB), so we emit both paths and let
+    # xcodebuild's -only-testing match whichever class actually defines
+    # the test. Other names go straight to the routine class.
     if [[ "$name" == testLargeFile_* ]]; then
+        ONLY_TESTING+=("-only-testing:HexEditorUITests/HexEditorUITests/$name")
         ONLY_TESTING+=("-only-testing:HexEditorUITests/HexEditorLargeFileUITests/$name")
     else
         ONLY_TESTING+=("-only-testing:HexEditorUITests/HexEditorUITests/$name")

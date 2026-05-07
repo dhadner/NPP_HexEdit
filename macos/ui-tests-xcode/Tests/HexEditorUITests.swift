@@ -227,7 +227,7 @@ class HexEditorBaseUITests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let defaultURL = repoRoot
-            .appendingPathComponent("../notepad-plus-plus-macos/build/Notepad++.app")
+            .appendingPathComponent("../nextpad-plus-plus/build/Notepad++.app")
             .standardizedFileURL
 
         try XCTSkipUnless(FileManager.default.fileExists(atPath: defaultURL.path), "Set NPP_MACOS_APP=/path/to/Notepad++.app before running UI tests.")
@@ -4251,9 +4251,10 @@ func testContextMenuCommands() throws {
 
     func testAboutDialogShowsPluginVersion() throws {
         // The About body must surface the plugin version (injected via CMake's
-        // PROJECT_VERSION → HEX_PLUGIN_VERSION compile define). We assert on
-        // the "Version <semver>" shape rather than a fixed string so a CMake
-        // version bump doesn't churn this test.
+        // HEX_PLUGIN_VERSION_STRING → HEX_PLUGIN_VERSION compile define). We
+        // assert on the "Version <major>.<minor>.<patch>" shape — patch may be
+        // a digit run OR the literal "x" used as the in-development placeholder
+        // between releases (see CMakeLists.txt comment by HEX_PLUGIN_VERSION_STRING).
         let app = try launchNotepad(language: "en")
         defer { app.terminate() }
         try invokeHexEditorMenu(app: app, item: "Help...")
@@ -4261,10 +4262,10 @@ func testContextMenuCommands() throws {
         XCTAssertTrue(aboutDialog.waitForExistence(timeout: 5))
         let versionPredicate = NSPredicate(format:
             "value MATCHES %@ OR label MATCHES %@",
-            ".*Version \\d+\\.\\d+\\.\\d+.*",
-            ".*Version \\d+\\.\\d+\\.\\d+.*")
+            ".*Version \\d+\\.\\d+\\.(\\d+|x).*",
+            ".*Version \\d+\\.\\d+\\.(\\d+|x).*")
         XCTAssertTrue(aboutDialog.staticTexts.element(matching: versionPredicate).exists,
-                      "About dialog should show 'Version <semver>'.")
+                      "About dialog should show 'Version <semver>' (digits or 'x' patch).")
         aboutDialog.buttons["OK"].firstMatch.click()
     }
 
@@ -4938,27 +4939,35 @@ func testContextMenuCommands() throws {
     }
 
     func testLargeFile_HundredMBLoadsFully() throws {
-        // Skipped pending upstream fix in notepad-plus-plus-macos. NPP-Mac's
-        // main-thread file ingest is the bottleneck: ~150 s observed for a
-        // 100 MB file on the Parallels VM, with the UI thread blocked the
-        // entire time so menu clicks queue but the submenus never open inside
-        // the helper's 30 s wait. Even with a 180 s sleep upfront, the test
-        // still timed out at the menu interaction.
-        //
-        // For comparison: Notepad++ on Windows opens a 20 GB file in 46 s
-        // (~435 MB/s) with 11.8 MB total process memory — strongly suggests
-        // memory-mapped file I/O. NPP-Mac at ~700 KB/s and full read-into-RAM
-        // is ~600× slower per byte and grows linearly with file size; that's
-        // an architectural gap to close in the host repo.
-        //
-        // Plugin-side, Step 2c retired the 1 MB truncation cap (bytes are now
-        // read on demand via a page-cached lazy reader against Scintilla, so
-        // plugin RAM stays bounded regardless of file size). The test remains
-        // skipped only because the host's ingest blocks before our plugin
-        // gets to run. Re-enable once the upstream issue is resolved.
-        throw XCTSkip("100 MB ingest blocked by NPP-Mac main-thread file load. " +
-                      "Filed upstream as a memory-mapping / chunked-load request. " +
-                      "Re-enable when host ingest yields the run loop or finishes < 30 s.")
+        // 100 MB is above NPP-Mac's 50 MB large-file threshold (EditorView.mm
+        // kLargeFileThreshold), so it triggers the large-file warning dialog
+        // and the mmap'd ingest path (NSDataReadingMappedIfSafe). That mmap
+        // branch is what makes 300 MB and 1.5 GB tractable; 100 MB rides the
+        // same path. Earlier versions of this test predated the mmap branch
+        // and saw a ~150 s synchronous full-read; that's why this test was
+        // skipped with a now-stale comment about main-thread ingest.
+        let app = try launchNotepadWithFixture("100MB.bin")
+        defer { app.terminate() }
+
+        // Same dismiss-loop the 300 MB / 1.5 GB tests use: NPP-Mac requires
+        // two clicks to dismiss the large-file warning for files this size.
+        let dialog = app.dialogs.firstMatch
+        for _ in 0..<3 {
+            let warningButton = dialog.buttons.firstMatch
+            guard warningButton.waitForExistence(timeout: 30) else { break }
+            warningButton.click()
+            Thread.sleep(forTimeInterval: 1.0)
+        }
+        XCTAssertTrue(dialog.waitForNonExistence(timeout: 60),
+                      "Large-file warning should dismiss after the mmap'd Scintilla source-load.")
+
+        try invokeHexEditorMenu(app: app, item: "View in HEX")
+
+        let fullSize = "104857600"   // 100 * 1024 * 1024
+        XCTAssertTrue(waitForStatus(in: app, contains: fullSize, timeout: 30),
+                      "100 MB fixture should report the full byte count once hex view engages. Status: '\(currentStatusText(in: app))'")
+        XCTAssertFalse(waitForStatus(in: app, contains: "truncated", timeout: 1),
+                       "Truncation banner is retired post-Step-2d.")
     }
 
     /// Regression test for the >16 MB hex-text rendering cap added in Step 5.

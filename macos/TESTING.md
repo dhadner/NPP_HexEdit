@@ -110,17 +110,17 @@ After every run (full or partial, success or failure), the script regenerates th
 
 ```sh
 # Tier 1 + 3 (release build with unit + smoke targets)
-cmake -S macos -B macos/build -DNPP_MACOS_DIR=/path/to/notepad-plus-plus-macos
+cmake -S macos -B macos/build -DNPP_MACOS_DIR=/path/to/nextpad-plus-plus
 
 # Tier 2 (sanitized build)
 cmake -S macos -B macos/build-asan -DENABLE_SANITIZERS=ON \
-    -DNPP_MACOS_DIR=/path/to/notepad-plus-plus-macos
+    -DNPP_MACOS_DIR=/path/to/nextpad-plus-plus
 
 # Tier 4 (fuzz build — needs Homebrew LLVM, see macos/CMakeLists.txt)
 cmake -S macos -B macos/build-fuzz -DENABLE_FUZZ_TESTS=ON \
     -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ \
     -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang \
-    -DNPP_MACOS_DIR=/path/to/notepad-plus-plus-macos
+    -DNPP_MACOS_DIR=/path/to/nextpad-plus-plus
 ```
 
 After that, `pre-commit-tests.sh` keeps each build directory current via `cmake --build`; you don't need to rerun configure unless something changes the toolchain (Xcode upgrade, Homebrew LLVM bump, etc.).

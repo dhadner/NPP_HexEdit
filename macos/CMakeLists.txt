@@ -4,7 +4,15 @@ if(NOT DEFINED CMAKE_OSX_ARCHITECTURES)
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS architectures" FORCE)
 endif()
 
-project(HexEditorMac VERSION 1.1.0 LANGUAGES CXX OBJCXX)
+project(HexEditorMac LANGUAGES CXX OBJCXX)
+
+# Plugin version string — decoupled from CMake's project(VERSION) because we
+# want to allow a non-numeric placeholder like "1.1.x" between releases (CMake
+# project(VERSION) requires dotted-integer components only). Flows into the
+# About dialog (via HEX_PLUGIN_VERSION compile define) and the dist-zip
+# filename. At release time, replace this with a numeric value (e.g. "1.1.1"
+# or "1.2.0") and update CHANGELOG.md's `## Unreleased` heading to match.
+set(HEX_PLUGIN_VERSION_STRING "1.1.x")
 
 include(CTest)
 
@@ -20,7 +28,7 @@ set(CMAKE_OBJCXX_VISIBILITY_PRESET hidden)
 # diagnostics flood with fake "HexCore.h not found" / "no member named 'clamp'" errors.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(NPP_MACOS_DIR "${CMAKE_CURRENT_LIST_DIR}/../../notepad-plus-plus-macos" CACHE PATH "Path to notepad-plus-plus-macos checkout")
+set(NPP_MACOS_DIR "${CMAKE_CURRENT_LIST_DIR}/../../nextpad-plus-plus" CACHE PATH "Path to nextpad-plus-plus (Nextpad++ host source) checkout")
 set(NPP_PLUGIN_INCLUDE "${NPP_MACOS_DIR}/src")
 set(SCINTILLA_INCLUDE "${NPP_MACOS_DIR}/scintilla/include")
 
@@ -81,11 +89,11 @@ if(ENABLE_SANITIZERS)
 endif()
 
 if(NOT EXISTS "${NPP_PLUGIN_INCLUDE}/NppPluginInterfaceMac.h")
-    message(FATAL_ERROR "NppPluginInterfaceMac.h was not found. Set -DNPP_MACOS_DIR=/path/to/notepad-plus-plus-macos")
+    message(FATAL_ERROR "NppPluginInterfaceMac.h was not found. Set -DNPP_MACOS_DIR=/path/to/nextpad-plus-plus")
 endif()
 
 if(NOT EXISTS "${SCINTILLA_INCLUDE}/Scintilla.h")
-    message(FATAL_ERROR "Scintilla.h was not found. Set -DNPP_MACOS_DIR=/path/to/notepad-plus-plus-macos")
+    message(FATAL_ERROR "Scintilla.h was not found. Set -DNPP_MACOS_DIR=/path/to/nextpad-plus-plus")
 endif()
 
 add_library(HexEditor SHARED
@@ -104,7 +112,7 @@ target_link_libraries(HexEditor PRIVATE
 )
 
 target_compile_definitions(HexEditor PRIVATE
-    HEX_PLUGIN_VERSION="${PROJECT_VERSION}"
+    HEX_PLUGIN_VERSION="${HEX_PLUGIN_VERSION_STRING}"
 )
 
 set_target_properties(HexEditor PROPERTIES
@@ -171,7 +179,7 @@ add_custom_command(TARGET HexEditor POST_BUILD
 # Naming convention: nppHexEditorPlugin-x.y.z.zip per upstream NPP plugin
 # distribution conventions.
 set(HEX_DIST_STAGING "${CMAKE_BINARY_DIR}/dist-staging/HexEditor")
-set(HEX_DIST_ZIP "${CMAKE_BINARY_DIR}/nppHexEditorPlugin-${PROJECT_VERSION}.zip")
+set(HEX_DIST_ZIP "${CMAKE_BINARY_DIR}/nppHexEditorPlugin-${HEX_PLUGIN_VERSION_STRING}.zip")
 add_custom_command(TARGET HexEditor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E rm -rf "${HEX_DIST_STAGING}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${HEX_DIST_STAGING}"
@@ -183,7 +191,7 @@ add_custom_command(TARGET HexEditor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E rm -f "${HEX_DIST_ZIP}"
     COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_BINARY_DIR}/dist-staging"
         ${CMAKE_COMMAND} -E tar c "${HEX_DIST_ZIP}" --format=zip "HexEditor"
-    COMMENT "Packaging nppHexEditorPlugin-${PROJECT_VERSION}.zip"
+    COMMENT "Packaging nppHexEditorPlugin-${HEX_PLUGIN_VERSION_STRING}.zip"
     VERBATIM
 )
 

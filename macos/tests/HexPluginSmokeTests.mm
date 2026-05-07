@@ -31,6 +31,29 @@ void *resolve(void *handle, const char *symbol)
     return sym;
 }
 
+// When HEX_TEST_COUNTS_OUT is set, write a JSON sidecar so the test-status
+// dashboard can sum the smoke tier into its global test count. The smoke
+// binary tests one logical contract (the dlopen surface), so it counts as
+// 1 test that either passed or failed as a whole.
+void writeCountsSidecarIfRequested()
+{
+    const char *outPath = std::getenv("HEX_TEST_COUNTS_OUT");
+    if (!outPath || !*outPath) {
+        return;
+    }
+    const int passed = (g_failures == 0) ? 1 : 0;
+    const int failed = (g_failures == 0) ? 0 : 1;
+    FILE *fp = std::fopen(outPath, "w");
+    if (!fp) {
+        std::fprintf(stderr, "warning: could not open HEX_TEST_COUNTS_OUT=%s for writing\n",
+                     outPath);
+        return;
+    }
+    std::fprintf(fp, "{\"passed\": %d, \"failed\": %d, \"skipped\": 0, \"total\": 1}\n",
+                 passed, failed);
+    std::fclose(fp);
+}
+
 }
 
 int main(int argc, char **argv)
@@ -111,6 +134,8 @@ int main(int argc, char **argv)
     }
 
     dlclose(handle);
+
+    writeCountsSidecarIfRequested();
 
     if (g_failures == 0) {
         std::printf("PASS: HexEditor.dylib smoke test (%d assertions)\n", g_assertions);
