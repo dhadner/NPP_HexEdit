@@ -8083,6 +8083,24 @@ static void tryAutoEngageHexView()
 extern "C" NPP_EXPORT void beNotified(SCNotification *notifyCode)
 {
     const NppHandle notificationHandle = reinterpret_cast<NppHandle>(notifyCode->nmhdr.hwndFrom);
+
+    // NPPN_TBMODIFICATION fires once during host startup; the plugin uses
+    // it to register its toolbar icon. lParam = 0 → the host falls back to
+    // `<plugin dir>/toolbar.png` (+ `toolbar_dark.png` in dark mode), both
+    // of which CMake installs alongside the dylib. funcItem[0] is the
+    // "View in HEX" command (toggleHexPreview) — same primary action the
+    // toolbar button should fire on click.
+    if (notifyCode->nmhdr.code == NPPN_TBMODIFICATION) {
+        const int viewInHexCmdId = funcItem[0]._cmdID;
+        if (viewInHexCmdId != 0) {
+            nppData._sendMessage(nppData._nppHandle,
+                                 NPPM_ADDTOOLBARICON_FORDARKMODE,
+                                 static_cast<uintptr_t>(viewInHexCmdId),
+                                 /*lParam=*/0);
+        }
+        return;
+    }
+
     if (notifyCode->nmhdr.code == NPPN_FILEBEFORECLOSE || notifyCode->nmhdr.code == NPPN_FILECLOSED) {
         // The buffer being closed should drop its hex-view intent so a
         // freshly-opened file doesn't unexpectedly come up in hex view if
