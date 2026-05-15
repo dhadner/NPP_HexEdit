@@ -100,18 +100,26 @@ fi
 
 # ---- Check 3: the dylib inside the zip embeds the right version ---------
 
-# Extract just the dylib to a temp location and grep its symbol table /
-# string section for the literal version. HEX_PLUGIN_VERSION is a C string
-# defined via target_compile_definitions, so it lands in the dylib's
-# __cstring section verbatim. `strings -a` walks every section.
+# Extract the dylib to a temp file, dump its strings to another temp file,
+# then grep the dump. We DELIBERATELY don't pipe `strings | grep`: with
+# `set -o pipefail`, `grep -q` exits on the first match, `strings` then
+# gets SIGPIPE flushing remaining output, and the pipeline as a whole
+# reports failure — even though grep itself matched. The CI workflow's
+# first run failed exactly this way ("strings: failed to flush output").
+# Dumping to a file separates the producer from the consumer so the
+# match-then-exit shortcut in grep doesn't interact with strings's I/O.
+#
+# HEX_PLUGIN_VERSION is a C string defined via target_compile_definitions,
+# so it lands in the dylib's __cstring section verbatim. `strings -a`
+# walks every section. `grep -xF` matches the line exactly (no regex), so
+# we don't have to escape dots and "1.10.0" can't match "1.1.0".
 TMP_DYLIB=$(mktemp -t hex_release_check_dylib.XXXXXX)
-trap 'rm -f "$TMP_DYLIB"' EXIT
+TMP_STRINGS=$(mktemp -t hex_release_check_strings.XXXXXX)
+trap 'rm -f "$TMP_DYLIB" "$TMP_STRINGS"' EXIT
 unzip -p "$EXPECTED_ZIP" HexEditor/HexEditor.dylib > "$TMP_DYLIB"
+strings -a "$TMP_DYLIB" > "$TMP_STRINGS"
 
-# Escape dots in the version for the regex; anchor exactly so "1.10.0" can't
-# match "1.1.0".
-ESCAPED_VERSION="${SOURCE_VERSION//./\\.}"
-if ! strings -a "$TMP_DYLIB" | grep -qxE "$ESCAPED_VERSION"; then
+if ! grep -qxF "$SOURCE_VERSION" "$TMP_STRINGS"; then
     echo "error: dylib in ${EXPECTED_ZIP} does not embed HEX_PLUGIN_VERSION='${SOURCE_VERSION}'." >&2
     echo "       The compile define wasn't picked up. Most common cause: the .mm files" >&2
     echo "       weren't recompiled after a CMakeLists version bump because their mtime" >&2
