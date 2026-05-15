@@ -4929,6 +4929,25 @@ static bool pasteBytesFromPasteboard()
         return applyBytesPaste(static_cast<const std::uint8_t *>(raw.bytes), raw.length);
     }
 
+    // Fallback: pbs returned no `public.data` (it silently truncates payloads
+    // in the multi-100-MB range — the same root cause that the snapshot
+    // bypass above defends against). If we still hold a non-rect snapshot,
+    // the strict `currentlyOwnedHexSnapshot` check at the top must have
+    // rejected it due to an external `pasteboard.changeCount` bump — macOS
+    // Universal Clipboard / Continuity sync on macOS 26+ can advance the
+    // count without firing `pasteboardChangedOwner:`. `pasteboardChangedOwner:`
+    // is the authoritative ownership-loss signal: if it had fired, `_bytes`
+    // would be nil. Since `hasSnapshot` is YES, we still own and the bytes
+    // are authoritative.
+    if (g_hexClipboardOwner != nil && [g_hexClipboardOwner hasSnapshot] &&
+            ![g_hexClipboardOwner snapshotIsRect]) {
+        NSData *snapshot = [g_hexClipboardOwner snapshotBytes];
+        if (snapshot.length > 0) {
+            return applyBytesPaste(static_cast<const std::uint8_t *>(snapshot.bytes),
+                                   snapshot.length);
+        }
+    }
+
     NSString *text = [pasteboard stringForType:NSPasteboardTypeString];
     if (text && text.length > 0) {
         std::string utf8([text UTF8String]);

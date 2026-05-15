@@ -12,6 +12,62 @@ minor bump, etc.) and a fresh `## Unreleased` is added above it. The CMake
 build's `HEX_PLUGIN_VERSION_STRING` (in `macos/CMakeLists.txt`) tracks the
 same state — it reads `1.1.x` while this section is open.
 
+## v1.2.0 — toolbar icon registration + large-paste reliability
+
+Version jump from v1.1.0 → v1.2.0 skips 1.1.1: the upstream
+Nextpad++ host's plugin manager shipped the v1.0.0 binary under the
+v1.1.0 release tag in error, so users running through the manager have
+1.0.0 features but see "1.1.0" in About. Cutting v1.1.1 on top of that
+would deepen the confusion (same observed feature set, "1.1.1" label).
+v1.2.0 gives those users a clean version jump that matches the
+behaviour gap they'd actually see when they update.
+
+Two user-visible fixes on top of v1.1.0.
+
+- **Toolbar icon now appears in the host toolbar** (light + dark mode).
+  v1.1.0 shipped `toolbar.png` and `toolbar_dark.png` and installed them
+  next to the plugin dylib, but `beNotified()` didn't handle
+  `NPPN_TBMODIFICATION`, so the host never received the
+  `NPPM_ADDTOOLBARICON_FORDARKMODE` message and the toolbar slot stayed
+  empty. The plugin now registers `funcItem[0]` ("View in HEX" →
+  `toggleHexPreview`) on `NPPN_TBMODIFICATION` with `lParam = 0`, the
+  macOS-host convention for "fall back to `<plugin
+  dir>/toolbar.png` (+ `toolbar_dark.png` under `[data-theme=dark]`)".
+  No other behaviour changes; clicking the toolbar button dispatches to
+  the same handler as the menu entry.
+  Thanks to @aletik for the fix (PR #11).
+
+- **Hex→hex paste of large selections (>~100 MB) is now reliable on
+  macOS 26.** The in-process snapshot bypass in `pasteBytesFromPasteboard`
+  is what makes multi-100-MB paste work — it reads our cached bytes
+  directly instead of routing through `pbs` IPC, which silently
+  truncates `public.data` payloads above ~few-hundred-MB. The guard
+  controlling that bypass requires `pasteboard.changeCount` to exactly
+  match the value we stored at copy time, but macOS itself (Universal
+  Clipboard / Continuity sync, system services) can bump the changeCount
+  between our copy and paste without firing `pasteboardChangedOwner:`.
+  When that happened, the bypass rejected our own live snapshot, pbs
+  truncated the multi-100-MB payload, and the paste landed our 63-byte
+  "paste in HEX view to receive" placeholder text instead of bytes.
+  `pasteBytesFromPasteboard` now adds a recovery fallback: after the
+  strict bypass rejection AND the pbs read of `public.data` returning
+  nothing, if we still hold a non-rect snapshot (`pasteboardChangedOwner:`
+  is the authoritative ownership-loss signal — if it had fired, `_bytes`
+  would be nil), the snapshot bytes are pasted directly. The strict
+  guard is preserved so menu validation and the fast path are unchanged;
+  the fallback only fires on the failure-mode signature (pbs IPC drop
+  with a still-live snapshot). Discovered by
+  `testHexCopyPaste300MBAcrossTabsRoundTripsBytes` flaking only under
+  full-suite load on a freshly-booted macOS 26.4.1 VM.
+
+Test infrastructure changes accrued during the 1.1.x cycle but with no
+user-visible impact: a live shields.io README badge driven by
+`pre-commit-tests.sh`, per-tier passed/failed/skipped/total counts in
+the dashboard, and the previously-skipped 100 MB load test re-enabled
+(now passes via NPP-Mac's `NSDataReadingMappedIfSafe` branch). Sibling
+repo rename `notepad-plus-plus-macos` → `nextpad-plus-plus` was applied
+to docs / scripts / CMake paths to track the host's upstream rename.
+
 ## v1.1.0 — first public release
 
 The macOS port of Jens Lorenz's HexEditor — the venerable Notepad++

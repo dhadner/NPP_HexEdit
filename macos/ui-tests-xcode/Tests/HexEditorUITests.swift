@@ -4633,7 +4633,7 @@ func testContextMenuCommands() throws {
         ], timeout: 5)
     }
 
-    // MARK: - Pasteboard attack regression net (v1.1.1+)
+    // MARK: - Pasteboard attack regression net (v1.2.0+)
     //
     // These tests pipe deliberately malformed custom-UTI payloads through the
     // system pasteboard, then trigger Edit > Paste in the hex view, and verify
@@ -4698,7 +4698,7 @@ func testContextMenuCommands() throws {
         XCTAssertTrue(true, "Pasteboard attack '\(label)' did not crash the host or modify the buffer.")
     }
 
-    // MARK: - Cross-app paste from external hex tools (v1.1.1+)
+    // MARK: - Cross-app paste from external hex tools (v1.2.0+)
     //
     // Verifies that text on the system pasteboard formatted by common
     // debuggers / hex viewers (lldb, gdb, xxd, x64dbg, IDA, C-string escapes,

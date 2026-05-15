@@ -12,7 +12,7 @@ project(HexEditorMac LANGUAGES CXX OBJCXX)
 # About dialog (via HEX_PLUGIN_VERSION compile define) and the dist-zip
 # filename. At release time, replace this with a numeric value (e.g. "1.1.1"
 # or "1.2.0") and update CHANGELOG.md's `## Unreleased` heading to match.
-set(HEX_PLUGIN_VERSION_STRING "1.1.x")
+set(HEX_PLUGIN_VERSION_STRING "1.2.0")
 
 include(CTest)
 
