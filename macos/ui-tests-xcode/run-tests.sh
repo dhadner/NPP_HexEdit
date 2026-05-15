@@ -89,7 +89,7 @@ mkdir -p "$FIXTURES_DIR"
 # (or wrong size). Each byte cycles 0x20..0x7E (printable ASCII) — mirrors
 # macos/scripts/generate-test-fixture.py so the on-disk pattern matches the
 # checked-in smaller fixtures. Stays valid UTF-8 + free of \r/\n so
-# Notepad++ macOS loads the file byte-for-byte without re-encoding or
+# Nextpad++ loads the file byte-for-byte without re-encoding or
 # line-ending conversion. Idempotent: re-runs are a no-op once the file
 # exists, so the cost is paid only on a fresh checkout / VM bootstrap.
 ensure_fixture() {

@@ -19,7 +19,7 @@
 #     (test-ui.sh) ssh-rsyncs the source directly into ~/vm-local/, so
 #     there's no need to discover paths through the share.
 #   - Write a ~/.npp-hexedit-vm.env file. All paths in vm-test.sh are now
-#     constants (~/vm-local/NPP_HexEdit, ~/vm-local/Notepad++.app,
+#     constants (~/vm-local/NPP_HexEdit, /Applications/Nextpad++.app,
 #     ~/build-NPP_HexEdit) — no env file needed.
 #
 # Usage (run from the VM):

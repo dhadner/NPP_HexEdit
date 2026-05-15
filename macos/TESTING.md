@@ -45,7 +45,7 @@ The macOS port should use Scintilla as the source of truth for document bytes an
 
 3. Plugin smoke tests
 
-   `tests/HexPluginSmokeTests.cpp` `dlopen`s the built dylib and verifies the host contract without launching Notepad++. Runs as the `HexEditorPluginSmokeTests` CTest target (label `smoke`). 25 assertions, runs in milliseconds.
+   `tests/HexPluginSmokeTests.cpp` `dlopen`s the built dylib and verifies the host contract without launching Nextpad++. Runs as the `HexEditorPluginSmokeTests` CTest target (label `smoke`). 25 assertions, runs in milliseconds.
 
    ```sh
    ctest --test-dir macos/build-universal -L smoke --output-on-failure
@@ -63,7 +63,7 @@ The macOS port should use Scintilla as the source of truth for document bytes an
 
 4. Manual/integration test checklist
 
-   Some behavior depends on AppKit responder routing and the live Notepad++ macOS editor. Keep a short manual checklist until we have host-level UI automation.
+   Some behavior depends on AppKit responder routing and the live Nextpad++ editor. Keep a short manual checklist until we have host-level UI automation.
 
    Required scenarios:
 
@@ -197,7 +197,7 @@ macos/scripts/test-ui.sh --re-bootstrap           # repair a broken VM env
 macos/scripts/test-ui.sh --dashboard              # open dashboard.html in browser
 ```
 
-The wrapper SSHes to the VM (`npp-vm`), syncs the source tree and Notepad++.app to VM-local paths (Parallels' shared-folder protocol caches reads aggressively, so we work from a checksum-synced mirror), runs the tests, and copies the results back. After the run it also rebuilds + installs the host's `HexEditor.dylib` from the same source so your own Notepad++ matches whatever the VM just tested (restart Notepad++ to load the new dylib). If the host build directory hasn't been configured yet, that step is skipped with a hint to run `cmake -S macos -B macos/build` once.
+The wrapper SSHes to the VM (`npp-vm`), syncs the source tree to a VM-local path (Parallels' shared-folder protocol caches reads aggressively, so we work from a checksum-synced mirror), runs the tests, and copies the results back. Nextpad++ itself is **not** synced — both host and VM have it installed at `/Applications/Nextpad++.app`, and that's what tests launch directly. After the run the wrapper also rebuilds + installs the host's `HexEditor.dylib` from the same source so your own Nextpad++ matches whatever the VM just tested (restart Nextpad++ to load the new dylib). If the host build directory hasn't been configured yet, that step is skipped with a hint to run `cmake -S macos -B macos/build` once.
 
 `--asan` is the periodic safety-net run. The plugin is built under `-fsanitize=address,undefined`; the runtime is then injected into NPP at process launch via `DYLD_INSERT_LIBRARIES` (set in the XCUITest helper's `launchEnvironment`). Any heap-buffer-overflow / use-after-free / signed-overflow inside our runtime path aborts with a sanitizer stack trace and fails the test. Cost: ~15% slower than the regular UI suite on the Parallels VM (extrapolating from a 2026-05-02 run, expect ~53 min vs. ~46 min for the regular UI suite at the current ~109-test count). The host plugin is **not** auto-replaced on `--asan` runs (you keep your fast day-to-day plugin). Catches the bug class that the unit tier already protects against (via `hexedit::SciReader` + `FakeScintilla`) plus anything in the plugin's runtime path the unit tests don't reach (AppKit interaction, NSEvent handling, draw paths). Why DYLD injection: a dlopen-loaded ASan-instrumented dylib aborts NPP at "Interceptors are not working" because dyld brings up the plugin after the host's first malloc; injecting at launch sidesteps that. NPP-Mac is ad-hoc signed with no entitlements, so SIP doesn't strip the env var. After the run, three artefacts land at stable paths under [macos/ui-tests-xcode/build/](ui-tests-xcode/build/):
 
@@ -222,11 +222,11 @@ Conventions:
 | --- | --- |
 | `Cannot reach VM at host alias 'npp-vm'` | Start the VM in Parallels; verify `ssh npp-vm true` works manually. |
 | `error: env file references ephemeral path` | An old buggy bootstrap captured a `/dev/fd/N` path. Run `test-ui.sh --re-bootstrap`. |
-| `error: Notepad++.app not found` | Build Notepad++ macOS on the host first. The wrapper rsyncs the build product to the VM. |
+| `error: Nextpad++.app not found` | Install Nextpad++ at `/Applications/Nextpad++.app` on both host and VM (drag from the .dmg). |
 | Dashboard shows tests "—" (never run) | Those tests are in the source but haven't run since `run-history.json` was started. Run them once. |
 | Run hangs at "Timed out while enabling automation mode" | Runner's TCC Accessibility grant was revoked (e.g. by `--clean`). Re-grant on the VM: System Settings → Privacy & Security → Accessibility → enable `HexEditorUITests-Runner`. |
 | Stale-bytes problems (test asserts old behavior despite fresh source) | Should be impossible after the rsync change. If it happens, `test-ui.sh --clean` forces a from-scratch xcodebuild. |
-| Host's Notepad++ shows old plugin behavior after a code edit | Restart Notepad++ on the host. `test-ui.sh` rebuilds + installs the host plugin after every run, but macOS doesn't hot-reload dylibs in a running app. |
+| Host's Nextpad++ shows old plugin behavior after a code edit | Restart Nextpad++ on the host. `test-ui.sh` rebuilds + installs the host plugin after every run, but macOS doesn't hot-reload dylibs in a running app. |
 
 ### Direct invocation (rarely needed)
 
@@ -243,11 +243,11 @@ Or via CTest on the VM (label `xctest`):
 ssh npp-vm bash -lc 'ctest --test-dir ~/build-NPP_HexEdit -L xctest --output-on-failure'
 ```
 
-`NPP_MACOS_APP=/path/to/Notepad++.app` overrides the default app location if you're testing a specific host build outside the standard sibling layout.
+`NPP_MACOS_APP=/path/to/Nextpad++.app` overrides the default app location (`/Applications/Nextpad++.app`) if you're testing a specific dev build outside the installed location.
 
 ### Current XCTest coverage
 
-- `testHostApplicationLaunches` — launches Notepad++ macOS via `XCUIApplication(url:)` and waits for foreground.
+- `testHostApplicationLaunches` — launches Nextpad++ via `XCUIApplication(url:)` and waits for foreground.
 - `testHexEditorPluginMenuIsPresent` — asserts the `HexEditor` submenu under `Plugins`.
 - `testViewInHexToggle` — toggles `Plugins > HexEditor > View in HEX` on and off, asserting the hex table appears and disappears (queried by accessibility identifier `hex-editor.table`).
 - `testStatusLabelReportsByteCount` — seeds the buffer with a known string and asserts the status label reports the exact byte count.
@@ -268,7 +268,7 @@ See `macos/ui-tests-xcode/README.md` for signing, sandbox, and runner constraint
 
 ### Patterns the harness depends on
 
-1. **Disable session restore.** `XCUIApplication.launchArguments = ["-nosession"]` makes Notepad++ launch with a single fresh empty buffer. Without this, session restore loads documents from `~/.notepad++/session.plist` and the test runs against unpredictable content.
+1. **Disable session restore.** `XCUIApplication.launchArguments = ["-nosession"]` makes Nextpad++ launch with a single fresh empty buffer. Without this, session restore loads documents from `~/.nextpad++/session.plist` and the test runs against unpredictable content.
 
 2. **Seed buffers via clipboard + Edit > Paste.** `XCUIApplication.typeText(_:)` is silently dropped by Scintilla in this sandbox+runner configuration — synthetic key events do not reach Scintilla's input handler. Workaround: write the seed string to `NSPasteboard.general`, then click `Edit > Paste` via the menu bar. Menu-bar interactions go through XCUI's accessibility path and route correctly. Implemented in the `createBufferWithText` helper.
 
@@ -282,7 +282,7 @@ See `macos/ui-tests-xcode/README.md` for signing, sandbox, and runner constraint
 
 CTest runs a tiny assertion-based executable that links the same core sources as the plugin. No third-party test framework yet — see `tests/HexCoreTests.cpp` for the `HEX_EXPECT` / `HEX_EXPECT_EQ` runner.
 
-The plugin and the unit-test executable both compile `src/core/HexCore.cpp`. `HexEditor.mm` is the thin AppKit/Notepad++ adapter that constructs `hexedit::DocumentView`/`Selection`/`CursorState` from globals, calls a pure planning function, and applies the resulting `ByteEditOperation` to Scintilla inside one undo action.
+The plugin and the unit-test executable both compile `src/core/HexCore.cpp`. `HexEditor.mm` is the thin AppKit/Nextpad++ adapter that constructs `hexedit::DocumentView`/`Selection`/`CursorState` from globals, calls a pure planning function, and applies the resulting `ByteEditOperation` to Scintilla inside one undo action.
 
 ## Edit operation contract
 

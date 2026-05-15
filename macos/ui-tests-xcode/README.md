@@ -1,6 +1,6 @@
 # HexEditor XCTest UI tests
 
-Host-level XCTest UI automation against the Notepad++ macOS app with the HexEditor plugin installed.
+Host-level XCTest UI automation against the Nextpad++ macOS app with the HexEditor plugin installed.
 
 The Xcode project is generated from `project.yml` by [XcodeGen](https://github.com/yonaskolb/XcodeGen) — only the spec file and the test sources are checked into git.
 
@@ -17,8 +17,8 @@ The Xcode project is generated from `project.yml` by [XcodeGen](https://github.c
 
 - Xcode with command line tools selected
 - `xcodegen` (`brew install xcodegen`)
-- A built Nextpad++ host app bundle (defaults to `../../../nextpad-plus-plus/build/Notepad++.app` — the .app filename is still `Notepad++.app` until upstream renames it)
-- The HexEditor plugin installed at `~/.notepad++/plugins/HexEditor/HexEditor.dylib` for the plugin-menu test
+- Nextpad++ installed at `/Applications/Nextpad++.app` (the default; override with `NPP_MACOS_APP=/path/to/Nextpad++.app`)
+- The HexEditor plugin installed at `~/.nextpad++/plugins/HexEditor/HexEditor.dylib` for the plugin-menu test
 
 ## Run
 
@@ -29,7 +29,7 @@ The Xcode project is generated from `project.yml` by [XcodeGen](https://github.c
 With an explicit host app path:
 
 ```sh
-NPP_MACOS_APP=/path/to/Notepad++.app ./run-tests.sh
+NPP_MACOS_APP=/path/to/Nextpad++.app ./run-tests.sh
 ```
 
 Through CTest (after configuring CMake with testing enabled):
@@ -40,7 +40,7 @@ ctest --test-dir ../build-universal -L xctest --output-on-failure
 
 ## Current coverage
 
-- `testHostApplicationLaunches` — launches Notepad++ macOS via `XCUIApplication(url:)` and verifies it foregrounds.
+- `testHostApplicationLaunches` — launches Nextpad++ via `XCUIApplication(url:)` and verifies it foregrounds.
 - `testHexEditorPluginMenuIsPresent` — clicks the `Plugins` menu and verifies `HexEditor` is present.
 - `testViewInHexToggle` — toggles the hex overlay on/off and asserts the table appears/disappears.
 - `testStatusLabelReportsByteCount` — seeds buffer and asserts the status label reports the exact byte count.
@@ -61,9 +61,9 @@ Defined in `macos/src/HexEditor.mm` and mirrored in `Tests/HexEditorUITests.swif
 
 The status label exposes its text as the AX *value* (not label). Use `(element.value as? String) ?? element.label` to read.
 
-## Notepad++ launch arguments
+## Nextpad++ launch arguments
 
-The harness passes `-nosession` to suppress session restore on launch. Without it, Notepad++ macOS reopens documents from `~/.notepad++/session.plist`, making test buffer state non-deterministic.
+The harness passes `-nosession` to suppress session restore on launch. Without it, Nextpad++ reopens documents from `~/.nextpad++/session.plist`, making test buffer state non-deterministic.
 
 ## Buffer seeding
 
@@ -81,5 +81,5 @@ The harness passes `-nosession` to suppress session restore on launch. Without i
 ## Notes on the test runner
 
 - The runner uses ad-hoc code signing (`CODE_SIGN_IDENTITY = "-"`).
-- Xcode's UI test framework adds `com.apple.security.app-sandbox = true` to the runner — `~/.notepad++/` is therefore not readable by the test runner. File-system precondition checks against the user home directory should not be used; if the plugin is not installed the menu test will fail with a clear message instead.
+- Xcode's UI test framework adds `com.apple.security.app-sandbox = true` to the runner — `~/.nextpad++/` is therefore not readable by the test runner. File-system precondition checks against the user home directory should not be used; if the plugin is not installed the menu test will fail with a clear message instead.
 - `XCUIApplication(url:)` does not require Accessibility permission for `wait(for: .runningForeground)` or for clicking menu items; the test framework's temp-exception entitlements cover it.

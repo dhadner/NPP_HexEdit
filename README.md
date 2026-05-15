@@ -52,10 +52,8 @@ cmake --install macos/build-universal                                 # copy the
 The install step copies the plugin and its language files to:
 
 ```text
-~/.notepad++/plugins/HexEditor/
+~/.nextpad++/plugins/HexEditor/
 ```
-
-NOTE: The app name is expected to change as the rebranding from Notepad++ for macOS to Nextpad++ is completed.  The rebranding is not expected to affect this plugin as the name change has already been made throughout.
 
 Restart Nextpad++. You'll see a new **Plugins → HexEditor** submenu with seven entries:
 View in HEX, Compare HEX, Clear Compare Result, Insert Columns, Pattern Replace, Options, and Help.

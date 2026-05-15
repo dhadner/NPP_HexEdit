@@ -1,6 +1,6 @@
 # Developer guide
 
-How to build, test, and contribute to the macOS port of the Notepad++ HexEditor
+How to build, test, and contribute to the macOS port of the Nextpad++ HexEditor
 plugin. If you only want to *use* the plugin, see [README.md](README.md) instead.
 
 ## Quick start
@@ -12,9 +12,10 @@ plugin. If you only want to *use* the plugin, see [README.md](README.md) instead
 git clone https://github.com/<your-fork>/NPP_HexEdit.git
 git clone https://github.com/nextpad-plus-plus/nextpad-plus-plus-macos.git nextpad-plus-plus
 
-# 2. Build the host (one-time; takes a few minutes).
-cd nextpad-plus-plus
-# follow the host's Build-Instructions.md to produce build/Notepad++.app
+# 2. Install Nextpad++. Either drag the released .app to /Applications/, or
+#    build it from the host repo (follow its Build-Instructions.md).
+#    Tests look for /Applications/Nextpad++.app by default; override with
+#    NPP_MACOS_APP=/path/to/Nextpad++.app.
 
 # 3. Build, install, and smoke-test the plugin.
 cd ../NPP_HexEdit
@@ -50,11 +51,11 @@ NPP_HexEdit/
 ├── macos/                     — the macOS port
 │   ├── CMakeLists.txt         — describes how to build, install, and run tests
 │   ├── src/
-│   │   ├── HexEditor.mm       — the macOS-specific code: AppKit UI + Notepad++ glue
+│   │   ├── HexEditor.mm       — the macOS-specific code: AppKit UI + Nextpad++ glue
 │   │   └── core/HexCore.{h,cpp} — pure logic (no UI or editor calls), shared with unit tests
 │   ├── resources/             — Localizable.<lang>.strings text files
 │   ├── tests/                 — HexCoreTests (logic) + HexPluginSmokeTests (load check)
-│   ├── ui-tests-xcode/        — UI test suite that drives the real Notepad++ app
+│   ├── ui-tests-xcode/        — UI test suite that drives the real Nextpad++ app
 │   ├── scripts/               — VM helpers (vm-bootstrap.sh, vm-test.sh)
 │   ├── README.md              — port-specific notes
 │   └── TESTING.md             — per-tier test contract + manual checklist
@@ -76,7 +77,7 @@ You need two things from
 | Need | Required for | Source |
 | --- | --- | --- |
 | Headers (`NppPluginInterfaceMac.h`, Scintilla `.h`) | Compiling the plugin | Repo source — must be present at `NPP_MACOS_DIR` |
-| `Notepad++.app` binary | XCTest UI tier launches it | Either build from source *or* install any compatible binary |
+| `Nextpad++.app` binary | XCTest UI tier launches it | Install via the host's release `.dmg`, or build from source |
 
 By default CMake looks for the host repo as a sibling directory of `NPP_HexEdit`
 — in other words, both repos share the same parent. The parent's name doesn't
@@ -104,21 +105,20 @@ cmake -S macos -B macos/build-universal \
 The path is cached in `macos/build-universal/CMakeCache.txt`, so you only need
 to pass it once. Subsequent `cmake --build` runs reuse it.
 
-For the binary, the XCTest tier reads `NPP_MACOS_APP=/abs/path/to/Notepad++.app`
-to locate the host. If unset, it defaults to `<NPP_MACOS_DIR>/build/Notepad++.app`
-(the build output of the source repo).
+For the binary, the XCTest tier reads `NPP_MACOS_APP=/abs/path/to/Nextpad++.app`
+to locate the host. If unset, it defaults to `/Applications/Nextpad++.app`
+(the standard installed location, present on both host and any test VM).
+
+**Using the installed `/Applications/Nextpad++.app`** is the default and what
+this repo's pre-commit suite assumes. The bundle identifier is
+`org.nextpadplusplus.mac`.
 
 **Building the host from source** gives you a guaranteed-compatible binary
 matched to the headers your plugin compiled against. Multi-minute build, run
-once per host-repo update.
-
-**Using an already-installed `Notepad++.app`** (App Store, GitHub release,
-`.dmg`, your own `/Applications/`) is also fine and avoids the host build.
-The bundle identifier just needs to be `org.notepadplusplus.mac`. Point the
-tests at it:
+once per host-repo update. Point the tests at it:
 
 ```sh
-NPP_MACOS_APP=/Applications/Notepad++.app macos/ui-tests-xcode/run-tests.sh
+NPP_MACOS_APP=/path/to/your-build/Nextpad++.app macos/ui-tests-xcode/run-tests.sh
 ```
 
 The risk: if the installed binary was built against a different version of
@@ -138,7 +138,7 @@ Either way, the plugin itself rebuilds in seconds every time you change a
 cmake -S macos -B macos/build-universal -DCMAKE_BUILD_TYPE=Release
 cmake --build macos/build-universal
 
-# Install to ~/.notepad++/plugins/HexEditor/ (also copies the .strings files + toolbar icons).
+# Install to ~/.nextpad++/plugins/HexEditor/ (also copies the .strings files + toolbar icons).
 cmake --install macos/build-universal
 ```
 
@@ -149,7 +149,7 @@ cmake -S macos -B macos/build-arm64 -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUIL
 cmake --build macos/build-arm64
 ```
 
-After install, restart Notepad++ macOS — plugins load on startup.
+After install, restart Nextpad++ — plugins load on startup.
 
 ## Tests
 
@@ -173,7 +173,7 @@ diff, search) belongs here.
 A "does the plugin even load?" test. It dynamically loads the built `.dylib`
 file and checks that:
 
-- the five functions Notepad++ expects to find are all there
+- the five functions Nextpad++ expects to find are all there
 - `getName()` returns `"HexEditor"`
 - the right number of menu items are registered, with the expected English titles
 
@@ -186,7 +186,7 @@ ctest --test-dir macos/build-universal -L smoke --output-on-failure
 
 ### Tier 3 — XCTest UI (~14 min for full suite, ~30s per single test)
 
-The full end-to-end test: launches the real Notepad++ app with the plugin
+The full end-to-end test: launches the real Nextpad++ app with the plugin
 installed and drives it through clicks and keystrokes. Catches the kinds of
 bugs the first two tiers can't see — menu items not lighting up, dialogs
 showing the wrong text, hex rows clipping at the top of the view, etc.
@@ -211,8 +211,8 @@ happened — no need to scroll xcodebuild output.
 **Pre-flight for UI tests:**
 
 1. Plugin must be installed: `cmake --install macos/build-universal`.
-2. Quit any other running `Notepad++.app` (the suite skips itself if a
-   different bundle at `org.notepadplusplus.mac` is already running, since
+2. Quit any other running `Nextpad++.app` (the suite skips itself if a
+   different bundle at `org.nextpadplusplus.mac` is already running, since
    `XCUIApplication(url:)` cannot launch a second instance under the same
    bundle ID).
 3. Grant Accessibility permission to Xcode in
@@ -376,12 +376,12 @@ the test's chosen language wins regardless of system settings. Two
 "obvious" alternatives don't work — keep them in mind if you write similar
 infrastructure:
 
-- **`defaults write org.notepadplusplus.mac AppleLanguages`** from inside the
+- **`defaults write org.nextpadplusplus.mac AppleLanguages`** from inside the
   XCUI runner gets silently redirected into the runner's sandbox container.
-  Notepad++ launches outside the sandbox and reads the *real* prefs (which
+  Nextpad++ launches outside the sandbox and reads the *real* prefs (which
   don't have your override).
 - **`-AppleLanguages '(de)'` on the command line** sets the locale fine, but
-  Notepad++ also tries to open `(de)` as if it were a file path. That fails
+  Nextpad++ also tries to open `(de)` as if it were a file path. That fails
   loudly and prevents the normal "open with one empty buffer" startup.
 
 The env var sidesteps both problems.
@@ -403,7 +403,7 @@ recognise the same shape of bug if it shows up somewhere new.
 
 2. **`[NSLocale preferredLanguages]` lies if the host doesn't ship your
    language.** macOS filters that API against the host's installed
-   localization folders (`.lproj`). Notepad++ ships only `en.lproj`, so
+   localization folders (`.lproj`). Nextpad++ ships only `en.lproj`, so
    `NSLocale` silently drops user preferences for `de`, `en-GB`, anything
    else. Read the raw user list with `CFPreferencesCopyAppValue` instead.
 
@@ -435,7 +435,7 @@ recognise the same shape of bug if it shows up somewhere new.
    The runner is sandboxed; any prefs write (whether via shelling out to
    `/usr/bin/defaults` or via NSUserDefaults APIs) gets redirected into
    `~/Library/Containers/<runner-bundle-id>/Data/Library/Preferences/`.
-   Notepad++ launches *outside* that sandbox and reads the real prefs file,
+   Nextpad++ launches *outside* that sandbox and reads the real prefs file,
    so the override never lands. For any per-test setting, use
    `XCUIApplication.launchEnvironment` (an env var) instead.
 
@@ -445,7 +445,7 @@ The plugin is two files plus a header: an Objective-C++ adapter
 ([macos/src/HexEditor.mm](macos/src/HexEditor.mm)) and a pure-logic core
 ([macos/src/core/](macos/src/core/)). Where to put new code:
 
-- **Logic that doesn't need macOS or Notepad++ APIs** → write it in `HexCore`
+- **Logic that doesn't need macOS or Nextpad++ APIs** → write it in `HexCore`
   and add a unit test in `HexCoreTests.cpp`. The adapter calls your new
   function, takes the `ByteEditOperation` it returns, and applies the change
   to the underlying editor as a single undo step.

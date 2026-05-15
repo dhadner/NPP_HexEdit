@@ -4,7 +4,7 @@
 Each byte at offset N has value 0x20 + (N mod 95) — i.e. cycles through
 the 95 printable ASCII characters from space (0x20) to tilde (0x7E).
 The fixture is therefore valid UTF-8 and contains no `\n`, `\r`, or
-high-bit bytes, so Notepad++ macOS doesn't re-encode the file when it
+high-bit bytes, so Nextpad++ doesn't re-encode the file when it
 loads (which it does for any byte above 0x7F, inflating the buffer by
 ~50%) and doesn't normalise line endings (which would change the byte
 count). This means the file's on-disk size matches the in-buffer size

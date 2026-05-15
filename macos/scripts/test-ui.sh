@@ -2,15 +2,23 @@
 # One-command UI test runner — runs the XCUITest suite on the Parallels VM.
 #
 # This is the host-side entry point. It:
-#   1. SSH-rsyncs the NPP_HexEdit source tree and Notepad++.app from the
-#      host's actual filesystem to a VM-local mirror at ~/vm-local/.
-#   2. SSH-invokes the VM-local copy of vm-test.sh, which reads only from
-#      that mirror — never from the Parallels shared folder.
+#   1. SSH-rsyncs the NPP_HexEdit source tree from the host's actual
+#      filesystem to a VM-local mirror at ~/vm-local/.
+#   2. SSH-invokes the VM-local copy of vm-test.sh, which reads source
+#      from the mirror and launches the host-installed Nextpad++.app
+#      (at /Applications/Nextpad++.app on both machines) — never reads
+#      anything from the Parallels shared folder.
 #
 # Why the redesign: Parallels' shared-folder driver caches reads
 # aggressively, so any read of a freshly-edited file through the share may
 # return stale bytes. ssh-rsync from the host's filesystem to the VM
 # bypasses the share entirely. ~1s cold per run, <1s warm — verified.
+#
+# Nextpad++.app itself is no longer rsync'd: both host and VM have it
+# installed at /Applications/Nextpad++.app, so we just launch it in
+# place. (The earlier workflow rsync'd a dev-built Notepad++.app from
+# the sibling repo, which made dev builds drift from what users actually
+# run.)
 #
 # Required: SSH alias `npp-vm` must be configured (see DEVELOPER.md, "VM SSH").
 #
@@ -53,11 +61,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 HEXEDIT_SRC="$REPO_ROOT"
 NPP_MACOS_SRC="$(cd "$REPO_ROOT/../nextpad-plus-plus" && pwd)"
-NPP_APP_SRC="$NPP_MACOS_SRC/build/Notepad++.app"
+
+# Nextpad++.app is the installed host application — present at the same
+# absolute path on both host and VM. No longer rsync'd from the sibling
+# repo's build dir, so dev builds don't compete with the user-installed
+# version users will actually run.
+NPP_APP_PATH="/Applications/Nextpad++.app"
 
 VM_HEXEDIT="\$HOME/vm-local/NPP_HexEdit"            # remote path (escaped for ssh)
 VM_NPP_MACOS="\$HOME/vm-local/nextpad-plus-plus"
-VM_APP="\$HOME/vm-local/Notepad++.app"
+VM_APP="$NPP_APP_PATH"
 
 DASHBOARD_HTML="$REPO_ROOT/macos/ui-tests-xcode/build/dashboard.html"
 DASHBOARD_MD="$REPO_ROOT/macos/ui-tests-xcode/build/dashboard.md"
@@ -124,13 +137,13 @@ if [[ ! -f "$HEXEDIT_SRC/macos/CMakeLists.txt" ]]; then
     exit 2
 fi
 if [[ ! -f "$NPP_MACOS_SRC/src/NppPluginInterfaceMac.h" ]]; then
-    red "Notepad++ macOS source tree missing at $NPP_MACOS_SRC"
+    red "Nextpad++ macOS source tree missing at $NPP_MACOS_SRC"
     red "Expected sibling checkout next to NPP_HexEdit/."
     exit 2
 fi
-if [[ ! -d "$NPP_APP_SRC" ]]; then
-    red "Notepad++.app not found at $NPP_APP_SRC"
-    red "Build it on the host first (see DEVELOPER.md), then re-run."
+if [[ ! -d "$NPP_APP_PATH" ]]; then
+    red "Nextpad++.app not found at $NPP_APP_PATH"
+    red "Install Nextpad++ on the host (and on the VM), then re-run."
     exit 2
 fi
 
@@ -156,14 +169,17 @@ if [[ $DO_REBOOTSTRAP -eq 1 ]]; then
     exit 0
 fi
 
-# ---- Mirror source tree + app to VM-local via ssh-rsync --------------------
+# ---- Mirror source tree to VM-local via ssh-rsync -------------------------
 #
 # This is the bypass for Parallels shared-folder caching. Rsync over ssh
 # reads from the host's actual filesystem — not the share — so the bytes
 # delivered to the VM always reflect the latest host edits.
+#
+# Nextpad++.app itself is NOT rsync'd anymore: both host and VM have it
+# installed at /Applications/Nextpad++.app, and that's what tests launch.
 
 cyan "==> Mirroring source tree to VM:~/vm-local/NPP_HexEdit"
-ssh "$VM_HOST" 'mkdir -p ~/vm-local/NPP_HexEdit ~/vm-local/Notepad++.app ~/vm-local/nextpad-plus-plus/src ~/vm-local/nextpad-plus-plus/scintilla/include'
+ssh "$VM_HOST" 'mkdir -p ~/vm-local/NPP_HexEdit ~/vm-local/nextpad-plus-plus/src ~/vm-local/nextpad-plus-plus/scintilla/include'
 
 # --checksum: don't trust mtime across the ssh hop. --delete: prune removed files.
 # Excludes: build dirs (VM has its own), .git (large + unneeded), runner-local
@@ -184,18 +200,13 @@ rsync -a --delete --checksum -e ssh \
 # Mirror only the two header subtrees CMake actually consumes — see
 # macos/CMakeLists.txt:23-25 for the path layout. Pushing all of NPP macOS
 # would be 200+ MB of build dirs and source we don't need.
-cyan "==> Mirroring Notepad++ macOS headers (src/ + scintilla/include/)"
+cyan "==> Mirroring Nextpad++ macOS headers (src/ + scintilla/include/)"
 rsync -a --delete --checksum -e ssh \
     "$NPP_MACOS_SRC/src/" \
     "$VM_HOST:vm-local/nextpad-plus-plus/src/"
 rsync -a --delete --checksum -e ssh \
     "$NPP_MACOS_SRC/scintilla/include/" \
     "$VM_HOST:vm-local/nextpad-plus-plus/scintilla/include/"
-
-cyan "==> Mirroring Notepad++.app to VM:~/vm-local/Notepad++.app"
-rsync -a --delete --checksum -e ssh \
-    "$NPP_APP_SRC/" \
-    "$VM_HOST:vm-local/Notepad++.app/"
 
 # ---- --list short-circuit (no test run, just enumerate) -------------------
 
@@ -286,11 +297,11 @@ rsync -a --delete -e ssh \
 
 # ---- Sync host plugin to match the version we just tested ------------------
 #
-# Without this step, the host's Notepad++ keeps loading whichever HexEditor.dylib
+# Without this step, the host's Nextpad++ keeps loading whichever HexEditor.dylib
 # was last installed on the host. After a host source edit, the VM gets the new
 # code (via ssh-rsync) but the host plugin stays stale until manually rebuilt.
 # Rebuild + install on the host so that what the user sees in their own
-# Notepad++ matches what the VM just tested. ~3-5s on an incremental build.
+# Nextpad++ matches what the VM just tested. ~3-5s on an incremental build.
 HOST_BUILD_DIR="$REPO_ROOT/macos/build"
 if [[ $ASAN_BUILD -eq 1 ]]; then
     # Skip host install for ASan runs — we don't want to replace the user's
@@ -301,7 +312,7 @@ elif [[ -f "$HOST_BUILD_DIR/CMakeCache.txt" ]]; then
     cyan "==> Syncing host plugin to match tested version"
     if cmake --build "$HOST_BUILD_DIR" --target HexEditor >/tmp/test-ui-host-build.log 2>&1 \
        && cmake --install "$HOST_BUILD_DIR" >>/tmp/test-ui-host-build.log 2>&1; then
-        cyan "    Host plugin updated. Restart Notepad++ on the host to load it."
+        cyan "    Host plugin updated. Restart Nextpad++ on the host to load it."
     else
         yellow "    Host plugin sync failed; see /tmp/test-ui-host-build.log"
     fi

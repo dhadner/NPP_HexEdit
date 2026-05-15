@@ -2,10 +2,13 @@
 # Run the XCUITest UI suite on the VM, consuming a host-pushed VM-local mirror.
 #
 # Invariant: this script READS NOTHING from /Volumes/My Shared Files/. The host
-# wrapper (test-ui.sh) ssh-rsyncs the source tree and Notepad++.app into
-# ~/vm-local/ first; this script consumes that mirror exclusively. That sidesteps
-# Parallels' shared-folder read caching, which has historically served stale
-# bytes after host edits.
+# wrapper (test-ui.sh) ssh-rsyncs the source tree into ~/vm-local/ first; this
+# script consumes that mirror exclusively. That sidesteps Parallels' shared-folder
+# read caching, which has historically served stale bytes after host edits.
+#
+# Nextpad++.app itself is NOT mirrored: it's installed at
+# /Applications/Nextpad++.app on both host and VM (1.0.6+, post-rename
+# from Notepad++.app), and tests launch the installed copy directly.
 #
 # Self-healing guards (run at startup):
 #   1. Verify ~/vm-local/NPP_HexEdit/macos/CMakeLists.txt exists. If not,
@@ -64,7 +67,7 @@ done
 
 VM_HEXEDIT="$HOME/vm-local/NPP_HexEdit"
 VM_NPP_MACOS="$HOME/vm-local/nextpad-plus-plus"
-VM_APP="$HOME/vm-local/Notepad++.app"
+VM_APP="/Applications/Nextpad++.app"
 if [[ $ASAN_BUILD -eq 1 ]]; then
     BUILD_DIR="$HOME/build-NPP_HexEdit-asan"
 else
@@ -85,7 +88,7 @@ if [[ ! -f "$VM_NPP_MACOS/src/NppPluginInterfaceMac.h" ]]; then
 fi
 if [[ ! -d "$VM_APP" ]]; then
     echo "error: $VM_APP missing" >&2
-    echo "       Run test-ui.sh from the host first — it ssh-rsyncs Notepad++.app here." >&2
+    echo "       Install Nextpad++ on the VM (drag to /Applications/), then re-run." >&2
     exit 2
 fi
 
@@ -187,7 +190,7 @@ else
 fi
 cmake --build "$BUILD_DIR"
 
-echo "==> Reinstalling to ~/.notepad++/plugins/HexEditor/"
+echo "==> Reinstalling to ~/.nextpad++/plugins/HexEditor/"
 cmake --install "$BUILD_DIR" >/dev/null
 
 DERIVED="$HOME/Library/Developer/Xcode/DerivedData"

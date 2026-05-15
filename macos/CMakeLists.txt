@@ -121,12 +121,12 @@ set_target_properties(HexEditor PROPERTIES
     # OUTPUT_NAME is the on-disk file name; the CMake target name (HexEditor)
     # stays unchanged to keep cross-references stable. The shipped artifact is
     # HexEditor.dylib because that's the directory + binary name the upstream
-    # Notepad++ plugin registry expects (must match the directory name under
-    # ~/.notepad++/plugins/, see PLUGIN_INSTALL_DIR below).
+    # Nextpad++ plugin registry expects (must match the directory name under
+    # ~/.nextpad++/plugins/, see PLUGIN_INSTALL_DIR below).
     OUTPUT_NAME "HexEditor"
 )
 
-set(PLUGIN_INSTALL_DIR "$ENV{HOME}/.notepad++/plugins/HexEditor")
+set(PLUGIN_INSTALL_DIR "$ENV{HOME}/.nextpad++/plugins/HexEditor")
 install(TARGETS HexEditor DESTINATION "${PLUGIN_INSTALL_DIR}")
 
 # Localizable.<lang>.strings — the plugin reads these at runtime from the install
@@ -173,7 +173,7 @@ add_custom_command(TARGET HexEditor POST_BUILD
 
 # Distribution zip: package the dylib + .strings + icons in a flat layout under a
 # top-level "HexEditor/" directory inside the archive, so unzipping into
-# ~/.notepad++/plugins/ produces the expected ~/.notepad++/plugins/HexEditor/
+# ~/.nextpad++/plugins/ produces the expected ~/.nextpad++/plugins/HexEditor/
 # layout. Built as a POST_BUILD step on the dylib target so every build produces
 # the artifact ready for upload to a GitHub Release; the .zip itself is gitignored.
 # Naming convention: nppHexEditorPlugin-x.y.z.zip per upstream NPP plugin
@@ -233,7 +233,7 @@ if(BUILD_TESTING AND XCODEGEN_EXECUTABLE AND XCODEBUILD_EXECUTABLE)
     )
     set_tests_properties(HexEditorXCTestUI PROPERTIES
         LABELS "ui;xctest"
-        ENVIRONMENT "NPP_MACOS_APP=${NPP_MACOS_DIR}/build/Notepad++.app"
+        ENVIRONMENT "NPP_MACOS_APP=/Applications/Nextpad++.app"
     )
 endif()
 

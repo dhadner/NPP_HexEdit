@@ -220,17 +220,12 @@ class HexEditorBaseUITests: XCTestCase {
             return explicitURL
         }
 
-        // #filePath: <repo>/macos/ui-tests-xcode/Tests/HexEditorUITests.swift
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let defaultURL = repoRoot
-            .appendingPathComponent("../nextpad-plus-plus/build/Notepad++.app")
-            .standardizedFileURL
+        // Default: the installed Nextpad++ at /Applications/Nextpad++.app.
+        // Both host and Parallels VM have it installed there, so tests don't
+        // need to know about the sibling repo's dev-build dir.
+        let defaultURL = URL(fileURLWithPath: "/Applications/Nextpad++.app")
 
-        try XCTSkipUnless(FileManager.default.fileExists(atPath: defaultURL.path), "Set NPP_MACOS_APP=/path/to/Notepad++.app before running UI tests.")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: defaultURL.path), "Install Nextpad++ at /Applications/Nextpad++.app, or set NPP_MACOS_APP=/path/to/Nextpad++.app before running UI tests.")
         return defaultURL
     }
 

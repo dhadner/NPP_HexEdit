@@ -1,8 +1,8 @@
 # HexEditor macOS port scaffold
 
-This directory contains the initial native plugin target for the Notepad++ macOS port. It builds `HexEditor.dylib` with the macOS plugin ABI from `NppPluginInterfaceMac.h`.
+This directory contains the initial native plugin target for the Nextpad++ macOS port. It builds `HexEditor.dylib` with the macOS plugin ABI from `NppPluginInterfaceMac.h`.
 
-The current milestone is intentionally small: it loads in Notepad++ for macOS, adds plugin menu commands, reads the active Scintilla buffer, and toggles the active editor between the original Scintilla text view and an inline hex table with offset, byte, and ASCII columns. The table supports direct byte overwrite/append editing from the hex and ASCII columns, and can copy a traditional text dump to the clipboard. The original Windows project remains unchanged.
+The current milestone is intentionally small: it loads in Nextpad++, adds plugin menu commands, reads the active Scintilla buffer, and toggles the active editor between the original Scintilla text view and an inline hex table with offset, byte, and ASCII columns. The table supports direct byte overwrite/append editing from the hex and ASCII columns, and can copy a traditional text dump to the clipboard. The original Windows project remains unchanged.
 
 ## Prerequisites
 
@@ -45,10 +45,10 @@ cmake --install macos/build
 The install target copies the plugin to:
 
 ```text
-~/.notepad++/plugins/HexEditor/HexEditor.dylib
+~/.nextpad++/plugins/HexEditor/HexEditor.dylib
 ```
 
-Restart Notepad++ for macOS after installing the plugin.
+Restart Nextpad++ after installing the plugin.
 
 ## Next porting steps
 
