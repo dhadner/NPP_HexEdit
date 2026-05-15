@@ -1,0 +1,129 @@
+# Build the macOS HexEditor plugin zip on tag push and attach it to the
+# corresponding GitHub Release.
+#
+# Why this exists: prior macOS releases were built manually on a developer
+# Mac and uploaded by hand. That process produced the v1.1.0 incident
+# (May 6 tag shipped a May-1 stale zip with 4 of the eventual 15 locales
+# and the May-1 dylib). This workflow eliminates the human step: developer
+# creates a tag like `v1.2.0`, CI builds from that exact commit, runs the
+# same verification gates as macos/scripts/package.sh, and uploads the zip
+# as a release asset. The release can be created manually first (so the
+# developer can write the release notes) or by this workflow on first run.
+#
+# Trigger: any tag matching `v*`. Manual re-run is also available via
+# workflow_dispatch (e.g. to re-package after fixing a CI flake).
+#
+# Dependencies:
+#   - The Nextpad++ host source tree is checked out as a second repo at
+#     ${{ github.workspace }}/nextpad-plus-plus. Only the headers under
+#     src/ and scintilla/include/ are consumed by the build; we do NOT
+#     build the host itself or download a .app — the plugin only #includes
+#     NppPluginInterfaceMac.h and Scintilla headers.
+#   - CMake (preinstalled on macos-latest runners).
+#   - The GITHUB_TOKEN provided by the runtime; `contents: write` permission
+#     is granted at the job level so action-gh-release can upload assets.
+
+name: macOS release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to re-build (e.g. v1.2.0)"
+        required: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    permissions:
+      contents: write   # required by action-gh-release to upload assets
+
+    steps:
+      - name: Resolve target ref
+        id: ref
+        run: |
+          # Manual runs pass the tag as an input; tag-push runs use GITHUB_REF_NAME.
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ github.event.inputs.tag }}"
+          else
+            tag="${{ github.ref_name }}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          # Expected version is the tag minus the leading "v".
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout plugin source at tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.tag }}
+          fetch-depth: 0   # so describe-from-tag works if the release script wants it
+
+      - name: Checkout Nextpad++ host headers
+        uses: actions/checkout@v4
+        with:
+          repository: nextpad-plus-plus/nextpad-plus-plus-macos
+          # No `ref:` pinning — uses the host's default branch. The plugin
+          # consumes only the stable NppPluginInterfaceMac.h ABI and
+          # Scintilla's vendored headers, neither of which change in a way
+          # that breaks compilation across patch releases of the host. If a
+          # future host change DOES break us, pin this to a known-good
+          # commit/tag (and add a follow-up to track the host's ABI).
+          path: nextpad-plus-plus
+
+      - name: Verify CMakeLists version matches tag
+        run: |
+          source_version=$(grep -E '^set\(HEX_PLUGIN_VERSION_STRING' macos/CMakeLists.txt \
+                           | sed -E 's/.*"([^"]+)".*/\1/')
+          expected="${{ steps.ref.outputs.version }}"
+          if [[ "$source_version" != "$expected" ]]; then
+            echo "::error::CMakeLists.txt HEX_PLUGIN_VERSION_STRING ('$source_version') does not match tag ('$expected')."
+            echo "The tag should be cut on a commit where the version string matches."
+            exit 1
+          fi
+          # Also reject the dev-only "x.y.x" placeholder, just in case.
+          if [[ ! "$source_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::HEX_PLUGIN_VERSION_STRING='$source_version' is not a numeric x.y.z."
+            exit 1
+          fi
+          echo "Source version: $source_version"
+
+      - name: Configure CMake (Release, universal)
+        run: |
+          cmake -S macos -B macos/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DNPP_MACOS_DIR="${{ github.workspace }}/nextpad-plus-plus"
+
+      - name: Build + verify release zip via package.sh
+        run: bash macos/scripts/package.sh
+        # package.sh runs `cmake --build --clean-first` internally, then
+        # verifies: version match, fresh mtime, dylib embeds the version,
+        # expected locale count. It is the single source of truth for
+        # "ready to ship" checks — sharing the script between dev and CI
+        # means a release that passes locally also passes here.
+
+      - name: Compute artifact path
+        id: artifact
+        run: |
+          version="${{ steps.ref.outputs.version }}"
+          path="macos/build/nppHexEditorPlugin-${version}.zip"
+          if [[ ! -f "$path" ]]; then
+            echo "::error::Expected artifact not found: $path"
+            exit 1
+          fi
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+          # Surface SHA-256 in the workflow log so the developer can
+          # cross-check the asset on the release page.
+          shasum -a 256 "$path"
+
+      - name: Upload zip to the GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.ref.outputs.tag }}
+          files: ${{ steps.artifact.outputs.path }}
+          # fail_on_unmatched_files defaults to true, which is what we want:
+          # if the artifact path is wrong, fail loud rather than silently
+          # uploading nothing.
+          fail_on_unmatched_files: true
