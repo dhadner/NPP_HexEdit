@@ -118,11 +118,26 @@ jobs:
           # cross-check the asset on the release page.
           shasum -a 256 "$path"
 
+      - name: Extract CHANGELOG section for release body
+        id: notes
+        run: |
+          version="${{ steps.ref.outputs.version }}"
+          body_file="$RUNNER_TEMP/release-body.md"
+          bash macos/scripts/extract-changelog-section.sh "$version" > "$body_file"
+          # Pass the body via a file path rather than inline output, since
+          # multi-line markdown with backticks doesn't survive the
+          # GITHUB_OUTPUT format cleanly.
+          echo "body_path=$body_file" >> "$GITHUB_OUTPUT"
+          echo "--- Release body preview ---"
+          cat "$body_file"
+          echo "--- End preview ---"
+
       - name: Upload zip to the GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.ref.outputs.tag }}
           files: ${{ steps.artifact.outputs.path }}
+          body_path: ${{ steps.notes.outputs.body_path }}
           # fail_on_unmatched_files defaults to true, which is what we want:
           # if the artifact path is wrong, fail loud rather than silently
           # uploading nothing.
