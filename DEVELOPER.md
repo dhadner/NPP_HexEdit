@@ -511,12 +511,84 @@ reads these into `HexCursorState` for assertion.
 
 ## Releasing
 
-See [CHANGELOG.md](CHANGELOG.md) for the release-notes structure (current
-shape: a v1.x.x heading, sub-sections for "What's new" / tests added /
-divergence updates). Each release entry documents shipped behavior,
-divergences from the Windows baseline, and the test tiers' state at release
-time. Bump `project(... VERSION x.y.z ...)` in
-[macos/CMakeLists.txt](macos/CMakeLists.txt) before tagging.
+Releases are cut by pushing a `v*` tag; the
+[macos-release.yml](.github/workflows/macos-release.yml) workflow then
+builds from that tag, runs verification gates, and uploads the zip to a
+GitHub Release whose body is auto-extracted from the matching
+`## v<version>` section of [CHANGELOG.md](CHANGELOG.md). No human
+hand-uploads.
+
+### Step-by-step
+
+1. **Add a `## v<version>` section to [CHANGELOG.md](CHANGELOG.md)**
+   describing what changed. The release workflow extracts this section
+   verbatim and posts it as the GitHub Release body, so write it like
+   release notes: user-visible behavior, divergences, anything an end
+   user (or the host plugin manager's reviewer) needs to know.
+2. **Bump `HEX_PLUGIN_VERSION_STRING`** in
+   [macos/CMakeLists.txt:15](macos/CMakeLists.txt#L15) from the
+   in-development placeholder (e.g. `1.2.x`) to the release value
+   (e.g. `1.2.0`). The same value flows into the dylib's About-dialog
+   version via the `HEX_PLUGIN_VERSION` compile define, and into the
+   zip's filename via `${HEX_PLUGIN_VERSION_STRING}`.
+3. **Run the full pre-commit suite**
+   (`bash macos/scripts/pre-commit-tests.sh`) and confirm 5/5 tiers
+   green. The dashboard at [docs/test-status.md](docs/test-status.md)
+   reflects the run.
+4. **Dry-run the release packaging** locally:
+   `bash macos/scripts/package.sh`. This builds, runs the same four
+   verification gates the CI workflow uses, and prints the zip's
+   SHA-256. If anything's off — version mismatch, stale build, wrong
+   locale count — the script aborts with a specific error message.
+5. **Preview the release notes**:
+   `bash macos/scripts/extract-changelog-section.sh <version>` prints
+   exactly what the GitHub Release page will show. If it errors with
+   "no section found", you missed step 1.
+6. **Commit and push** the CHANGELOG + version-bump changes.
+7. **Tag and push**: `git tag v<version> && git push origin v<version>`.
+   The tag push triggers `macos-release.yml`, which checks out the
+   tag, builds from scratch, runs `package.sh`, and uploads the asset.
+   Watch via `gh run watch --repo dhadner/NPP_HexEdit`.
+
+### Release zip is immutable once published
+
+**Treat a published release asset as write-once.** Do not replace it
+with `gh release upload --clobber`, do not delete and re-upload, and
+do not let `--force`-pushed tags overwrite an asset that the host
+plugin manager has already consumed.
+
+The Nextpad++ host's plugin-manager manifest pins each plugin
+release's **dylib bundle identifier and the zip's SHA-256**. Replacing
+the asset breaks SHA verification on every machine whose host has
+already seen the manifest entry — the plugin manager refuses to
+install or update.
+
+If a published release contains bad content (the v1.1.0 incident:
+stale May-1 zip with 4 of the eventual 15 locales and an empty
+`HEX_PLUGIN_VERSION` compile define), the recovery path is to **fix
+forward**: cut a new version, write a CHANGELOG explaining the
+behaviour gap users will see when they update, and coordinate with
+the host developer to point the manifest at the new version. Users
+remain on the bad release until the manifest update propagates —
+there's no in-place fix.
+
+The four verification gates in
+[macos/scripts/package.sh](macos/scripts/package.sh) — source/zip
+version match, fresh mtime, dylib-embedded version match, expected
+locale count — exist precisely so a release that would have shipped
+broken content fails CI before the zip ever uploads. They are the
+last line of defence against discovering an immutable bad asset.
+
+### What about an in-development version?
+
+While work is underway on the next release, leave
+`HEX_PLUGIN_VERSION_STRING` set to a placeholder of the form
+`<major>.<minor>.x` (e.g. `1.2.x`) so the About dialog and any local
+dist-zip make it obvious the binary is pre-release. The `x` placeholder
+is intentionally rejected by `package.sh`'s numeric-version gate —
+you cannot accidentally ship a release with the dev placeholder.
+[CHANGELOG.md](CHANGELOG.md) carries an `## Unreleased` heading for
+the same purpose; rename it to `## v<version>` as step 1 of the cut.
 
 ## License
 
