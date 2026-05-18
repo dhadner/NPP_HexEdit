@@ -72,20 +72,31 @@ def walk_test_cases(node, out: list[dict]) -> None:
 
 
 def parse_duration_seconds(value) -> float | None:
-    """xcresulttool returns durations as either floats (seconds) or strings."""
+    """xcresulttool returns durations as either floats (seconds), bare-number
+    strings, or human-formatted strings like "13s", "1m 26s", "1h 5m 12s".
+    Sum every <number><unit> pair so we handle all three shapes uniformly —
+    a naive leading-number regex turns "4m 22s" into 4.0, which is the
+    bug this function is replacing.
+    """
     if value is None or value == "":
         return None
-    try:
+    if isinstance(value, (int, float)):
         return float(value)
-    except (TypeError, ValueError):
-        # Strings like "1.234s" — strip non-numeric tail.
-        m = re.match(r"^([\d.]+)", str(value))
-        if m:
-            try:
-                return float(m.group(1))
-            except ValueError:
-                return None
-    return None
+    text = str(value).strip()
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    total = 0.0
+    found = False
+    for num, unit in re.findall(r"([\d.]+)\s*([hms])", text):
+        try:
+            n = float(num)
+        except ValueError:
+            continue
+        total += n * {"h": 3600.0, "m": 60.0, "s": 1.0}[unit]
+        found = True
+    return total if found else None
 
 
 # ---- Source parsing --------------------------------------------------------
@@ -582,12 +593,17 @@ def main() -> int:
 
     # Tests that exist in history but are no longer in source go to a tail
     # section so we can spot stale entries (e.g. renamed tests) without
-    # losing their history.
+    # losing their history. Filter to real Swift test-method shapes so
+    # xcresult runner-error pseudo-names like "HexEditorUITests-Runner
+    # (1744) encountered an error" don't get promoted as test rows.
     seen_in_source = set(all_tests)
+    test_name_shape = re.compile(r"^test[A-Za-z0-9_]+$")
     extra_names: list[str] = []
     for entry in history:
         for name in (entry.get("tests") or {}).keys():
-            if name not in seen_in_source and name not in extra_names:
+            if (name not in seen_in_source
+                    and name not in extra_names
+                    and test_name_shape.match(name)):
                 extra_names.append(name)
     per_test += per_test_aggregate(history, extra_names)
 
